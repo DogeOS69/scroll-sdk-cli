@@ -31,6 +31,7 @@ import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {verifyDstackAcmCertificate} from '../../utils/dstack-internal-tls.js'
 import {type EthereumDaRuntimeConfig, ethereumDaRuntimeEnv} from '../../utils/ethereum-da-runtime.js'
 import {ETHEREUM_RPC_KEYS, proofCoordinatorRpcKeys, readEthereumRpcSecretStore, reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
+import {projectExistingAlbDirectory, readExistingAlbSpec, suppressExistingAlbIngress, validateExistingAlb} from '../../utils/existing-alb.js'
 import {frontendDepositEnv, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
@@ -1271,6 +1272,8 @@ export default class SetupPrepCharts extends Command {
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files; must be inside the deployment root for transactional generation' }),
   }
 
+  private albSpec?: ReturnType<typeof readExistingAlbSpec>
+
   private bridgeConfig: any = {}
 
   private configData: any = {}
@@ -1314,6 +1317,8 @@ export default class SetupPrepCharts extends Command {
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPrepCharts)
     this.flags = flags
+    this.albSpec = readExistingAlbSpec(process.cwd(), flags.spec)
+    if (this.albSpec) validateExistingAlb(this.albSpec)
 
     // Setup non-interactive/JSON mode
     this.nonInteractive = flags['non-interactive']
@@ -1334,6 +1339,7 @@ export default class SetupPrepCharts extends Command {
       const transaction = GenerationTransaction.begin(root)
       try {
         const generation = await this.processDstackControllerValues(transaction.toStagingPath(valuesDir))
+        if (this.albSpec) projectExistingAlbDirectory(transaction.toStagingPath(valuesDir), this.albSpec, true)
         const {changedFiles} = transaction.commit()
         if (this.jsonMode) this.jsonCtx.success({changedFiles, ...generation, valuesDir})
       } catch (error) {
@@ -1395,6 +1401,7 @@ export default class SetupPrepCharts extends Command {
       process.chdir(transaction.stagingRoot)
       if (!this.flags['proof-preparation']) reconcileTsoAlbEdge(transaction.stagingRoot, undefined, path.relative(transaction.stagingRoot, stagedValuesDir))
       generation = await this.generateCharts(stagedValuesDir)
+      if (this.albSpec) projectExistingAlbDirectory(stagedValuesDir, this.albSpec, !this.flags['proof-preparation'])
       if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
       process.chdir(deploymentRoot)
       changedFiles = transaction.commit().changedFiles
@@ -1857,6 +1864,7 @@ export default class SetupPrepCharts extends Command {
       const changes = this.reconcileDogecoinValues(productionYaml)
       const apply = changes.length > 0 && (this.nonInteractive || await confirm({message: `Apply Dogecoin configuration changes to ${filename}?`}))
       if (apply) fs.writeFileSync(target, yaml.dump(productionYaml, YAML_DUMP_OPTIONS))
+      if (this.albSpec) projectExistingAlbDirectory(transaction.toStagingPath(valuesDir), this.albSpec, true)
       const {changedFiles} = transaction.commit()
       this.jsonCtx.logSuccess(apply ? `Updated ${filename}` : `No changes applied to ${filename}`)
       if (this.jsonMode) this.jsonCtx.success({
@@ -2052,6 +2060,7 @@ export default class SetupPrepCharts extends Command {
           values.ingress.className = existing.ingress.className ?? values.ingress.className
         }
 
+        suppressExistingAlbIngress(values, DSTACK_CONTROLLER_VALUES_FILE, this.albSpec)
         reconcileDeploymentIngresses(values, 'dstack-controller', !this.flags['proof-preparation'])
         // Keep the generated header and byte stability when no operator overlay applies.
         if (!isDeepStrictEqual(values, yaml.load(content))) content = yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})
@@ -3308,6 +3317,7 @@ export default class SetupPrepCharts extends Command {
 
       {
         const previous = JSON.stringify(productionYaml)
+        suppressExistingAlbIngress(productionYaml, `${chartName}-production.yaml`, this.albSpec)
         reconcileDeploymentIngresses(productionYaml, chartName, !this.flags['proof-preparation'])
         validateServiceNetworkPolicy(productionYaml, chartName, this.flags['proof-preparation'])
         if (previous !== JSON.stringify(productionYaml)) {
@@ -3464,6 +3474,7 @@ export default class SetupPrepCharts extends Command {
   private reconcileDogecoinValues(productionYaml: any): Array<{key: string; newValue: string; oldValue: string}> {
     const changes: Array<{key: string; newValue: string; oldValue: string}> = []
     const oldIngress = JSON.stringify(productionYaml.ingress)
+    suppressExistingAlbIngress(productionYaml, 'dogecoin-production.yaml', this.albSpec)
     reconcileDeploymentIngresses(productionYaml, 'dogecoin', !this.flags['proof-preparation'])
     if (oldIngress !== JSON.stringify(productionYaml.ingress)) changes.push({key: 'ingress', newValue: 'ALB', oldValue: 'previous controller settings'})
     const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)

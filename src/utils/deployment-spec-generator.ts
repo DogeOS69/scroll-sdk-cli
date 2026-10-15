@@ -1,4 +1,5 @@
 import {validateBootnodePublicP2p} from './bootnode-public-p2p.js'
+import {validateExistingAlb} from './existing-alb.js'
 import {validateMonitoring} from './monitoring-slack.js'
 import {specDstackController} from './spec-kubernetes-target.js'
 /**
@@ -526,6 +527,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   const spec = normalizeDeploymentSpec(rawSpec)
   const errors: ValidationError[] = []
+  try {validateExistingAlb(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'infrastructure.aws.alb'})}
   try {validateBootnodePublicP2p(spec.bootnodePublicP2p, Array.from({length: spec.infrastructure?.bootnodeCount ?? 0}, (_, index) => index), spec.infrastructure?.provider)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'bootnodePublicP2p'})}
   const warnings: ValidationWarning[] = []
   try {specAwsSecretPrefix(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'preparation.secretUpload.awsPrefix'})}

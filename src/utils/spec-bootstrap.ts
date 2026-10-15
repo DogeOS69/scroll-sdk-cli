@@ -76,6 +76,11 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
 
   if (errors.length > 0) throw new Error(`Bootstrap inputs are incomplete:\n- ${errors.join('\n- ')}`)
   const {files, hashes, revision} = loadSdkTemplateFiles(sdkDirectory!, spec.templates?.sdkRevision)
+  if (!spec.infrastructure.aws?.alb) {
+    delete files['values/alb-bindings-production.yaml']
+    delete hashes['values/alb-bindings-production.yaml']
+  }
+
   if (spec.ethereumDa?.chain !== 'devnet') {
     delete files['values/l1-devnet-production.yaml']
     delete hashes['values/l1-devnet-production.yaml']

@@ -1,5 +1,9 @@
 # Prepare a deployment in explicit stages
 
+For AWS HTTP ingress, select [existing ALB references](existing-alb.md) in
+`infrastructure.aws.alb`. Final preparation requires bindings for exposed
+endpoints; Helm installs bindings without owning the ALB lifecycle.
+
 `setup plan` saves a fresh deployment plan. Six stage commands execute only their
 selected stage, persist completed steps and stop for external inputs. Run the
 commands from the private working directory containing your spec and environment

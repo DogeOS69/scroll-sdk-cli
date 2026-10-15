@@ -5,15 +5,21 @@ import terminalLink from 'terminal-link'
 // eslint-disable-next-line import/no-named-as-default -- ws uses default export pattern
 import WebSocket from 'ws'
 
+import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { parseTomlConfig } from '../../utils/config-parser.js'
+import {readExistingAlbSpec, verifyExistingAlbTargetHealth} from '../../utils/existing-alb.js'
+import Alb from '../setup/alb.js'
 
 export default class TestIngress extends Command {
   static override description = 'Check for required ingress hosts and validate frontend URLs'
 
   static override flags = {
+    'aws-profile': Flags.string({description: 'AWS profile for existing ALB checks'}),
     config: Flags.string({ char: 'c', description: 'Path to config.toml file' }),
     dev: Flags.boolean({ char: 'd', description: 'Include development ingresses' }),
-    namespace: Flags.string({ char: 'n', default: 'default', description: 'Kubernetes namespace' }),
+    namespace: Flags.string({ char: 'n', description: 'Kubernetes namespace (existing ALB: must match spec)' }),
+    spec: Flags.string({description: 'Existing ALB deployment spec; defaults to saved intent or deployment-spec.yaml'}),
+    'values-dir': Flags.string({default: 'values'}),
   }
 
   private configValues: Record<string, string> = {}
@@ -25,6 +31,17 @@ export default class TestIngress extends Command {
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(TestIngress)
+    const spec = readExistingAlbSpec(process.cwd(), flags.spec)
+    if (spec?.infrastructure.aws?.alb) {
+      const args = ['--values-dir', flags['values-dir'], '--require-services']
+      if (flags.spec) args.push('--spec', flags.spec)
+      if (flags.namespace) args.push('--namespace', flags.namespace)
+      if (flags['aws-profile']) args.push('--aws-profile', flags['aws-profile'])
+      await Alb.run(args, this.config)
+      const healthy = verifyExistingAlbTargetHealth(spec, new AwsCliRunner(flags['aws-profile']))
+      this.log(`Existing ALB targets healthy: ${healthy.join(', ')}. No Kubernetes Ingress objects are expected.`)
+      return
+    }
 
     if (flags.config) {
       this.loadConfig(flags.config)
@@ -43,9 +60,9 @@ export default class TestIngress extends Command {
     }
 
     try {
-      const actualIngresses = await this.getIngresses(flags.namespace)
+      const actualIngresses = await this.getIngresses(flags.namespace ?? 'default')
 
-      this.log(chalk.cyan(`List of SDK ingresses found in ${flags.namespace} namespace:`))
+      this.log(chalk.cyan(`List of SDK ingresses found in ${flags.namespace ?? 'default'} namespace:`))
       for (const [name, host] of Object.entries(actualIngresses)) {
         this.log(`- ${chalk.green(name)}: ${terminalLink(host, `http://${host}`)}`)
       }

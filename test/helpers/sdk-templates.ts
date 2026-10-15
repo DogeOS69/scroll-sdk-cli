@@ -6,6 +6,7 @@ import path from 'node:path'
 /** Disposable committed SDK: deliberately distinctive policies catch lost merges. */
 export function createSdkFixture(directory: string): string {
   const templates: Record<string, unknown> = {
+    'alb-bindings-production.yaml': {bindings: {}},
     'eth-da-submitter-production.yaml': {configMaps: {env: {data: {
       DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_OPEN_L2_TIME: '2h',
       DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE: '123011',

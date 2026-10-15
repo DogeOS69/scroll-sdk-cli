@@ -14,6 +14,7 @@ import {
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
 import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
+import {ALB_BINDINGS_FILE, ALB_SERVICES, projectExistingAlb} from '../../utils/existing-alb.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {loadPreparationEnv} from '../../utils/preparation-io.js'
@@ -232,6 +233,7 @@ export default class GenerateFromSpec extends Command {
     const generateValues = flags.bootstrap || flags['with-values'] || flags['values-only']
     const bootstrapFiles = flags.bootstrap ? planSpecBootstrap(spec, flags['sdk-dir'] ?? DEFAULT_SDK) : {}
     const templateFiles = flags.bootstrap ? bootstrapFiles : generateValues ? loadSdkTemplateFiles(flags['sdk-dir'] ?? DEFAULT_SDK, spec.templates?.sdkRevision).files : {}
+    if (spec.infrastructure.aws?.alb && generateValues && !templateFiles[`values/${ALB_BINDINGS_FILE}`]) throw new Error('Selected SDK revision lacks existing ALB bindings; select the paired SDK release')
 
     let configs: GeneratedConfigs | null = null
     if (spec.capacityManager && generateValues && !templateFiles['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use the paired capacity-manager SDK branch')
@@ -324,6 +326,17 @@ export default class GenerateFromSpec extends Command {
         const existing = existingValues(file.slice('values/'.length))
         if (existing !== undefined) bootstrapFiles[file] = mergeBootstrapValues(template, '{}', existing)
       }
+
+      const allValues = {...Object.fromEntries(Object.entries(bootstrapFiles).filter(([file]) => file.startsWith('values/') && file.endsWith('.yaml')).map(([file, content]) => [file.slice('values/'.length), content])), ...valuesFiles}
+      // Some selected edges (for example the native proof coordinator) are
+      // populated later by preparation and initially come only from SDK defaults.
+      for (const name of Object.keys(spec.infrastructure.aws?.alb?.bindings ?? {})) {
+        const file = ALB_SERVICES[name]?.file
+        if (file && !allValues[file] && templateFiles[`values/${file}`]) allValues[file] = mergeBootstrapValues(templateFiles[`values/${file}`], '{}', existingValues(file))
+      }
+
+      projectExistingAlb(allValues, spec)
+      Object.assign(valuesFiles, allValues)
     }
 
     // Dry run - just show what would be generated

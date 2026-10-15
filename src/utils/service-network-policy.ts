@@ -9,7 +9,7 @@ export function validateServiceNetworkPolicy(values: Record<string, any>, servic
   const groups = policy.allowFrom
   if (!groups || typeof groups !== 'object') fail('allowFrom is required')
   const required = service === 'tso-service' ? ['withdrawalProcessor', 'signers'] : ['tso']
-  if (service === 'tso-service' && values.ingress?.main?.enabled !== false && !deferIngressValidation) required.push('edge')
+  if (service === 'tso-service' && (values.ingress?.main?.enabled !== false || values.ingress?.main?.existingAlbBinding) && !deferIngressValidation) required.push('edge')
   if (service === 'withdrawal-processor' && values.service?.main?.ports?.['proof-work']?.enabled) required.push('proofCoordinator')
   for (const group of required) if (!Array.isArray(groups[group]) || groups[group].length === 0) fail(`allowFrom.${group} must identify the required callers`)
   for (const [group, peers] of Object.entries(groups)) {

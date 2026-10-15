@@ -7,8 +7,19 @@ on:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
+    env:
+      SDK_ALB_CHART: ${{ github.workspace }}/.test-sdk/charts/alb-bindings
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DogeOS69/scroll-sdk
+          ref: 3bdb1ba2facc66a38b023492349eff531a35a235
+          path: .test-sdk
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.3
+      - run: helm dependency build .test-sdk/charts/tso-service --skip-refresh
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*

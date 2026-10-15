@@ -12,6 +12,7 @@ import sinon from 'sinon'
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
 import Generate from '../../src/commands/setup/generate-from-spec.js'
+import {ALB_SERVICES} from '../../src/utils/existing-alb.js'
 import {reconcileDeploymentIngresses} from '../../src/utils/public-service-ingress.js'
 import {mergeBootstrapValues} from '../../src/utils/spec-bootstrap.js'
 import {createSdkFixture} from '../helpers/sdk-templates.js'
@@ -91,6 +92,39 @@ describe('spec values runtime policy across entry points', () => {
     try {await run('--bootstrap', directory, '--sdk-dir', sdk)} catch (error_) {error = error_}
     expect(String(error)).to.include('Policy input requires a pinned SHA-256')
     expect(fs.existsSync(directory)).to.equal(false)
+  })
+
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects existing ALB bindings through ${mode} without re-enabling ingress on regeneration`, async () => {
+    spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture', region: 'us-east-1'}, provider: 'aws'}
+    const directory = path.join(root, 'deployment')
+    await run(mode, directory, '--sdk-dir', sdk)
+    const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
+    spec.infrastructure.aws!.alb = {bindings: {}, endpoints: {public: {listenerArn: `${prefix}listener/app/example/0000000000000000/1111111111111111`, loadBalancerArn: `${prefix}loadbalancer/app/example/0000000000000000`}}, mode: 'existing'}
+    let index = 0
+    for (const [name, entry] of Object.entries(ALB_SERVICES)) {
+      const file = path.join(directory, 'values', entry.file)
+      if (!fs.existsSync(file)) continue
+      const document = yaml.load(fs.readFileSync(file, 'utf8')) as any
+      const ingress = entry.ingress.reduce((value, key) => value?.[key], document)
+      if (!ingress || ingress.enabled === false) continue
+      spec.infrastructure.aws!.alb.bindings[name] = {endpoint: 'public', serviceRef: {name: `service-${index}`, port: 3000}, targetGroupArn: `${prefix}targetgroup/example-${index}/${String(++index).padStart(16, '0')}`}
+    }
+
+    // Native proof topology uses an SDK template before its later chart
+    // preparation stage; direct values generation must include that template.
+    spec.infrastructure.aws!.alb.endpoints.proof = {listenerArn: `${prefix}listener/app/proof/3333333333333333/4444444444444444`, loadBalancerArn: `${prefix}loadbalancer/app/proof/3333333333333333`}
+    spec.infrastructure.aws!.alb.bindings['proof-coordinator'] = {endpoint: 'proof', serviceRef: {name: 'proof-coordinator', port: 7788}, targetGroupArn: `${prefix}targetgroup/proof/${String(++index).padStart(16, '0')}`}
+
+    for (let repeat = 0; repeat < 2; repeat++) {
+      await run(mode, directory, '--sdk-dir', sdk, '--force')
+      const {bindings} = read(directory, 'alb-bindings')
+      expect(Object.keys(bindings)).to.have.length(index)
+      for (const name of Object.keys(spec.infrastructure.aws!.alb.bindings)) {
+        const entry = ALB_SERVICES[name]
+        const document = yaml.load(fs.readFileSync(path.join(directory, 'values', entry.file), 'utf8')) as any
+        expect(entry.ingress.reduce((value, key) => value[key], document)).to.include({enabled: false, existingAlbBinding: name})
+      }
+    }
   })
 
   for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects bootnode source restrictions through ${mode} and retains them on regeneration`, async () => {

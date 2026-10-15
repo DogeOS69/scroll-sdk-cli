@@ -4,6 +4,12 @@ import {validateServiceNetworkPolicy} from '../../src/utils/service-network-poli
 const pod = {podSelector: {matchLabels: {app: 'expected'}}}
 const tso = () => ({ingress: {main: {enabled: true}}, networkPolicy: {allowFrom: {edge: [{ipBlock: {cidr: '10.0.1.0/24'}}], signers: [pod], withdrawalProcessor: [pod]}, enabled: true}})
 describe('production bridge network policy validation', () => {
+  it('requires ALB edge peers even when existing bindings disable the managed Ingress', () => {
+    const values = tso()
+    Object.assign(values.ingress.main, {enabled: false, existingAlbBinding: 'tso-service'})
+    values.networkPolicy.allowFrom.edge = []
+    expect(() => validateServiceNetworkPolicy(values, 'tso-service')).to.throw('allowFrom.edge')
+  })
   it('defers only TSO edge peers during proof preparation and requires them at final render', () => {
     const values = tso()
     values.networkPolicy.allowFrom.edge[0].ipBlock.cidr = '<TODO>'

@@ -2,6 +2,7 @@ import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils
 import type {MonitoringConfig} from '../utils/monitoring-slack.js'
 import type {CapacityManagerConfig} from './capacity-manager.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
+import type {ExistingAlbConfig} from './existing-alb.js'
 import type {PreparationConfig} from './preparation.js'
 import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
 import type {ProofWorkersConfig} from './proof-workers.js'
@@ -190,6 +191,8 @@ export interface InfrastructureConfig {
   /** AWS-specific configuration */
   aws?: {
     accountId: string
+    /** Bind services to existing ALBs; application Helm releases never own AWS edges. */
+    alb?: ExistingAlbConfig
     eksClusterName: string
     region: string
     /** Secrets Manager prefix */
