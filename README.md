@@ -2507,7 +2507,7 @@ _See code: [src/commands/signer/preflight.ts](https://github.com/dogeos69/scroll
 
 ## `scrollsdk test contracts`
 
-Test contracts by checking deployment and initialization
+Test L2 contracts and preinstalls by checking deployment, initialization and ownership
 
 ```
 USAGE
@@ -2515,12 +2515,35 @@ USAGE
 
 FLAGS
   -c, --config=<value>     [default: ./config.toml] Path to config.toml file
-  -n, --contracts=<value>  [default: ./config-contracts.toml] Path to configs-contracts.toml file
+  -n, --contracts=<value>  [default: ./config-contracts.toml] Path to config-contracts.toml file
   -p, --pod                Run inside Kubernetes pod
 
 DESCRIPTION
-  Test contracts by checking deployment and initialization
+  Test L2 contracts and preinstalls by checking deployment, initialization and ownership
 ```
+
+Progress, contract results, and pass/fail/optional-absent counts are grouped by
+repository (`scroll-contracts` and `dogeos-preinstalls`), followed by an overall
+summary. A failed contract check in one group does not skip the other group.
+
+Checks the 14 L2 contracts deployed by `scroll-contracts`' Docker `deploy.sh`,
+using addresses from `config-contracts.toml`. Legacy L1 contracts and retired
+Gateway/Bascule entries are ignored. L1 RPC configuration is not required.
+
+Also checks the 21 required canonical addresses from `dogeos-preinstalls`,
+including Multicall3, CreateX, Arachnid, Permit2, nine canonical Safe v1.3.0
+contracts, and EntryPoint/SenderCreator v0.6–v0.9. These fixed addresses do not
+need entries in `config-contracts.toml`. Safe Singleton Factory is optional;
+once deployed, its six Safe eip155 contracts become required.
+
+Deployment checks require nonempty runtime code. Initialization checks inspect
+proxy initialization flags and the queue messenger, oracle whitelist, and fee
+vault adapter references. Ownership checks apply to the eight owned core
+contracts. Missing required addresses/code, failed checks, and unreadable
+initialization/ownership cause exit status 1. Optional missing preinstalls are
+reported separately. Preinstall runtime codehash verification is available via
+`make verify RPC_URL=<l2-rpc>` in `dogeos-preinstalls`; this CLI checks their
+presence only. It does not verify every deployment parameter or proxy upgrade.
 
 _See code: [src/commands/test/contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/contracts.ts)_
 

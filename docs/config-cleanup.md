@@ -54,7 +54,7 @@ configured index-0 Reth signer. See [Pure Reth configuration](reth-only-peers.md
 The shared template has no `[gas-token]` section. Current contracts do not read
 `ALTERNATIVE_GAS_TOKEN_ENABLED`, and new DeploymentSpec generation no longer emits
 alternative-token settings. Saving old configurations removes that section.
-Legacy `helper fund-accounts`, `test contracts` and `test e2e` still understand
+Legacy `helper fund-accounts` and `test e2e` still understand
 old manually supplied alternative-token settings; they default to false when the
 section is absent. This compatibility does not enable alternative tokens in the
 current DogeOS contract deployment.
