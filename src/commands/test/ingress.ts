@@ -7,7 +7,8 @@ import WebSocket from 'ws'
 
 import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { parseTomlConfig } from '../../utils/config-parser.js'
-import {readExistingAlbSpec, verifyExistingAlbTargetHealth} from '../../utils/existing-alb.js'
+import {readExistingAlbSpec} from '../../utils/existing-alb.js'
+import {verifyExistingAlbTargetHealth} from '../../utils/existing-alb-runtime.js'
 import Alb from '../setup/alb.js'
 
 export default class TestIngress extends Command {

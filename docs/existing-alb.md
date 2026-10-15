@@ -76,7 +76,7 @@ make install-tso
 # After installing all selected applications, check Services/CRD/context.
 scrollsdk setup alb --require-services
 
-# Checks existing references, installed Services and healthy TG targets;
+# Checks references, installed bindings, Services and matching healthy TG targets;
 # does not incorrectly require Kubernetes Ingress objects in this mode.
 scrollsdk test ingress
 
@@ -89,9 +89,21 @@ target type, health checks and explicit host/path coverage. It rejects wider
 routes to a selected target group and forwarding from another listener. The
 Service check also requires the spec's explicit kubeContext to resolve to the
 selected EKS cluster. AWS failure details are omitted from normal diagnostics.
+Overlapping paths between selected bindings must put the narrower route first;
+for example, Blockscout `/api` and `/api/*` must precede the frontend `/*` rule.
 These checks do not establish live DNS/TLS/application behavior or exhaustively
 analyze priority interactions with unrelated listener rules; validate real
 HTTPS requests, denied TSO paths and target health after installation.
+
+`test ingress` additionally requires one live IP TargetGroupBinding per selected
+target group with the configured Service name and port. Registered targets must
+exactly match the current Service's ready, nonterminating EndpointSlice addresses
+and backend ports for the target group's IP family, and all targets must be healthy.
+It rejects stale/manual targets, missing registrations and bindings being deleted.
+During a rollout, rerun after controller reconciliation and target draining finish.
+This requires read access to TargetGroupBindings, Services and EndpointSlices in
+the spec namespace. `setup alb --require-services` remains an installation
+preflight and does not require the bindings to exist yet.
 
 The controller and CRD must be installed separately. Target groups are exclusive
 to one binding; this mode does not support shared groups or manual targets.

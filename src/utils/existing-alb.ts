@@ -168,21 +168,6 @@ function routes(ingress: any): Array<{host: string; paths: string[]}> {
 
 const actionGroups = (actions: any[]): string[] => actions.flatMap(action => action.Type === 'forward' ? action.TargetGroupArn ? [action.TargetGroupArn] : (action.ForwardConfig?.TargetGroups ?? []).map((group: any) => group.TargetGroupArn) : [])
 
-/** Runtime target readiness is separate from validating infrastructure references. */
-export function verifyExistingAlbTargetHealth(spec: DeploymentSpec, aws: Pick<AwsCliRunner, 'json'> = new AwsCliRunner()): string[] {
-  validateExistingAlb(spec)
-  if (!spec.infrastructure.aws?.alb) fail('infrastructure.aws.alb is required')
-  const healthy: string[] = []
-  for (const [name, binding] of Object.entries(spec.infrastructure.aws!.alb!.bindings)) {
-    let targets: any[]
-    try {targets = aws.json(['elbv2', 'describe-target-health', '--target-group-arn', binding.targetGroupArn], {region: spec.infrastructure.aws!.region}).TargetHealthDescriptions} catch {return fail(`${name}: cannot read target health (provider output omitted)`)}
-    if (!Array.isArray(targets) || targets.length === 0 || targets.some(target => target.TargetHealth?.State !== 'healthy')) fail(`${name}: target group must contain healthy targets only; check rollout, security groups and NetworkPolicy`)
-    healthy.push(name)
-  }
-
-  return healthy
-}
-
 type SelectedRoute = {group: string; host: string; listener: string; name: string; path: string; priority: number}
 
 /** Supported paths are exact matches or prefixes ending in /*. Narrower routes must win. */

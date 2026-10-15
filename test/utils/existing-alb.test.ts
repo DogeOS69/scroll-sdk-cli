@@ -7,7 +7,7 @@ import path from 'node:path'
 
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
-import {projectExistingAlb, projectExistingAlbDirectory, suppressExistingAlbIngress, validateExistingAlb, validateExistingAlbSdk, verifyExistingAlb, verifyExistingAlbTargetHealth} from '../../src/utils/existing-alb.js'
+import {projectExistingAlb, projectExistingAlbDirectory, suppressExistingAlbIngress, validateExistingAlb, validateExistingAlbSdk, verifyExistingAlb} from '../../src/utils/existing-alb.js'
 import {reconcileDeploymentIngresses} from '../../src/utils/public-service-ingress.js'
 
 const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
@@ -183,14 +183,6 @@ describe('existing ALB lifecycle', () => {
       else expect(verify()).to.deep.equal({bindings: ['blockscout-api', 'blockscout-frontend'], loadBalancers: 1})
     })
   }
-
-  it('requires registered healthy targets for runtime checks', () => {
-    for (const targets of [[], [{TargetHealth: {State: 'unhealthy'}}], [{TargetHealth: {State: 'healthy'}}, {TargetHealth: {State: 'initial'}}]]) {
-      expect(() => verifyExistingAlbTargetHealth(spec(), {json() {return {TargetHealthDescriptions: targets}}})).to.throw('healthy targets only')
-    }
-
-    expect(verifyExistingAlbTargetHealth(spec(), {json() {return {TargetHealthDescriptions: [{TargetHealth: {State: 'healthy'}}]}}})).to.deep.equal(['tso-service'])
-  })
 
   it('never exposes provider response details in failures', () => {
     const values = files()
