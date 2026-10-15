@@ -193,7 +193,6 @@ USAGE
 * [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
 * [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
 * [`scrollsdk setup dstack-config`](#scrollsdk-setup-dstack-config)
-* [`scrollsdk setup disable-internal`](#scrollsdk-setup-disable-internal)
 * [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
 * [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
 * [`scrollsdk setup domains`](#scrollsdk-setup-domains)
@@ -1079,48 +1078,6 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/db-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/db-init.ts)_
-
-## `scrollsdk setup disable-internal`
-
-Disable ingress for internal services (Dogecoin, Anvil L1)
-
-```
-USAGE
-  $ scrollsdk setup disable-internal [--dry-run] [-f] [--list-k8s |  | [--disable <value> | --list | --enable <value> |
-    --disable-internal] |  | ] [-n <value>] [--skip-helm] [--values-dir <value>]
-
-FLAGS
-  -f, --force               Skip confirmation prompts
-  -n, --namespace=<value>   [default: default] Kubernetes namespace
-      --disable=<value>     Disable ingress for a service
-      --disable-internal    Disable all internal services (Dogecoin, Anvil L1) using kubectl
-      --dry-run             Show what would be deleted without actually deleting
-      --enable=<value>      Enable ingress for a service
-      --list                List current ingress status from local values files
-      --list-k8s            List current ingress status from Kubernetes cluster
-      --skip-helm           Skip helm upgrade
-      --values-dir=<value>  [default: ./values] Directory containing values files
-
-DESCRIPTION
-  Disable ingress for internal services (Dogecoin, Anvil L1)
-
-EXAMPLES
-  $ scrollsdk setup disable-internal
-
-  $ scrollsdk setup disable-internal --namespace scroll
-
-  $ scrollsdk setup disable-internal --dry-run
-
-  $ scrollsdk setup disable-internal --list
-
-  $ scrollsdk setup disable-internal --list-k8s
-
-  $ scrollsdk setup disable-internal --enable l2-rpc
-
-  $ scrollsdk setup disable-internal --disable frontends
-```
-
-_See code: [src/commands/setup/disable-internal.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/disable-internal.ts)_
 
 ## `scrollsdk setup doge-config`
 
