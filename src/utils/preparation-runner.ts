@@ -22,6 +22,7 @@ import {prepareGrafanaAdmin} from './preparation-grafana.js'
 import {assertHelperFundingImage, prepareManagedHelper, prepareManagedHelperFunding, verifyManagedHelperFunding} from './preparation-helper.js'
 import {helperFeeWalletWif, usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
+import {importPreparationPolicyReceipts} from './preparation-policy-receipts.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
 import {exportCoordinatorMaterializers} from './proof-image-tools.js'
@@ -227,6 +228,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'charts': case 'charts-published': case 'render-final': {
+        if (spec.signing?.cubesigner?.mode === 'production_verifier_key_policy') importPreparationPolicyReceipts(root)
         if (step.id === 'charts' && spec.identities?.bootnodes?.length) {
           const file = localPath(root, '.data/doge-config.toml')
           const before = toml.parse(fs.readFileSync(file, 'utf8')) as any

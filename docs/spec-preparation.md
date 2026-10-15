@@ -574,10 +574,27 @@ genesis, AWS provisioning or funding. No spec structure change is needed.
 provenance for the governance handoff. It is **not** approval or attachment
 evidence. Use the approved governance tools to publish, propose the exact
 attachment, collect Council approval and complete attachment with provider
-readback. Preserve `RequireRoleSession`. Import required policy evidence through
-the configured `signing.cubesigner.policyReceipts` and external inputs before
-production configuration validation; building Wasm alone does not make the key
-ready to sign. This stage does not invent governance commands, approve on behalf
+readback. Preserve `RequireRoleSession`. Before `prep-charts`, the `charts` step
+pauses when production receipts are absent and creates
+`.scrollsdk/inputs/cubesigner-policy/receipts.json`. Its protocol-context path and
+SHA-256 are already populated. Copy the governed release/attachment receipts,
+Wasm and test report into the deployment directory, preserving receipt-relative
+artifact paths. Fill the input's release/attachment paths and SHA-256 digests,
+CubeSigner environment and organization; include `liveEvidence` if required by
+the release. Input paths are relative to the deployment directory, not to
+`receipts.json`. Obtain receipt hashes from the governance handoff and check the
+received files with `sha256sum`.
+
+Rerun `scrollsdk setup proof-materials`. The CLI verifies the exact key, role,
+protocol context and policy evidence before importing the references into
+managed configuration. Do not change the original spec, frozen plan or
+`.data/doge-config.toml`. Existing plans use this handoff without replaying
+completed steps; invalid evidence leaves managed configuration unchanged.
+Already imported references remain authoritative on retries. See
+[the receipt contract](proof-config-transactions.md#cubesigner-receipts-and-external-signer-evidence).
+
+Building Wasm alone does not make the key ready to sign. This stage does not
+invent governance commands, approve on behalf
 of Council members, or configure the organization resolver.
 
 The workflow does not create an EKS cluster, rent GPU capacity or install releases.

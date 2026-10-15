@@ -20,11 +20,13 @@ import {BRIDGE_FUNDING_MARKER, inspectFunding, prepareEthereumAnchor, publicKeyA
 import {prepareLocalGenesis} from '../../src/utils/preparation-genesis.js'
 import {AwaitingInput, loadPreparationEnv} from '../../src/utils/preparation-io.js'
 import {type PreparationPlan, applyPreparation, createPreparationPlan, migrateSignerHandoffSteps, preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
+import {POLICY_RECEIPTS_INPUT} from '../../src/utils/preparation-policy-receipts.js'
 import {resolvePreparationProofRelease} from '../../src/utils/preparation-release.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 import {PREPARATION_STAGES} from '../../src/utils/preparation-stages.js'
 import {buildProofAwsConfig, writeProofAwsConfig} from '../../src/utils/proof-aws-config.js'
 import {PROOF_RELEASE_IMAGE_NAMES} from '../../src/utils/proof-software-release.js'
+import {policyReceiptFixture} from '../helpers/cubesigner-policy-receipts.js'
 import {createSdkFixture} from '../helpers/sdk-templates.js'
 
 const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -62,6 +64,52 @@ describe('resumable preparation plan', () => {
   })
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
+
+  it('resumes a frozen staged plan with late governance receipts before invoking prep-charts', async () => {
+    const spec = yaml.load(fs.readFileSync(path.join(root, 'intent.yaml'), 'utf8')) as DeploymentSpec
+    spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    const plan = await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+    const intentFile = path.join(deployment, '.scrollsdk/intent.json')
+    const frozen = fs.readFileSync(intentFile, 'utf8')
+    const calls: string[] = []
+    const commands: string[][] = []
+    const charts = new CommandPreparationRunner(async (_root, _step, args) => {commands.push(args)})
+    const runner = {async run(step: typeof plan.steps[number], saved: DeploymentSpec) {
+      calls.push(step.id)
+      if (step.id === 'bootstrap') {
+        fs.mkdirSync(path.join(deployment, '.data'))
+        for (const name of ['config.public.toml', 'config-contracts.toml']) fs.writeFileSync(path.join(deployment, name), '[contracts]\n')
+        fs.writeFileSync(path.join(deployment, '.data/doge-config.toml'), toml.stringify({bootnodeReth: {instances: [{index: 0}]}, cubesigner: {
+          mode: saved.signing.cubesigner!.mode!, roles: [{keys: [{key_id: 'key-1', material_id: 'material-1'}], role_id: 'role-1'}],
+        }, network: 'testnet'}))
+      }
+
+      if (step.id === 'protocol-context') fs.writeFileSync(path.join(deployment, '.data/protocol_context.json'), JSON.stringify({genesis: {}}))
+      if (step.id === 'charts' || step.id === 'render-final') await charts.run(step, saved, deployment, plan)
+    }}
+    const stage = (selected: typeof PREPARATION_STAGES[number]) => applyPreparation(deployment, runner, undefined, {stage: selected})
+    for (const selected of ['genesis', 'aws', 'bridge-funding'] as const) await stage(selected)
+    const waiting = await stage('proof-materials')
+    expect(waiting.status).eq('waiting')
+    expect(waiting.currentStep).eq('charts')
+    expect(waiting.waiting?.file).eq(path.join(deployment, POLICY_RECEIPTS_INPUT))
+    expect(commands).empty
+    const refs = policyReceiptFixture(deployment).selection.policyReceipts
+    fs.writeFileSync(path.join(deployment, POLICY_RECEIPTS_INPUT), JSON.stringify(refs))
+    expect((await stage('proof-materials')).status).eq('stage-complete')
+    expect((await stage('render')).status).eq('stage-complete')
+    expect(commands.filter(args => args[0] === 'prep-charts')).length(2)
+    expect(calls.filter(id => id === 'bootstrap')).length(1)
+    expect(calls.filter(id => id === 'helper-setup')).length(1)
+    expect(fs.readFileSync(intentFile, 'utf8')).eq(frozen)
+    expect(JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/plan.json'), 'utf8')).id).eq(plan.id)
+    const configFile = path.join(deployment, '.data/doge-config.toml')
+    expect((toml.parse(fs.readFileSync(configFile, 'utf8')).cubesigner as toml.JsonMap).policyReceipts).deep.eq(refs)
+    // Normal workflow fingerprinting is preserved after the authorized import.
+    fs.appendFileSync(configFile, '\n# operator edit\n')
+    await rejected(() => stage('upload-secrets'), 'changed outside the workflow')
+  })
 
   for (const recipient of [undefined, '', 'REPLACE_WITH_DOGECOIN_P2PKH_ADDRESS', `0x${'1'.repeat(40)}`]) {
     it(`rejects the ${recipient === undefined ? 'missing' : 'invalid ' + recipient} fee-vault recipient before planning external inputs`, async () => {
