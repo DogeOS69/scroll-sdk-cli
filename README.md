@@ -193,7 +193,6 @@ USAGE
 * [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
 * [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
 * [`scrollsdk setup dstack-config`](#scrollsdk-setup-dstack-config)
-* [`scrollsdk setup disable-internal`](#scrollsdk-setup-disable-internal)
 * [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
 * [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
 * [`scrollsdk setup domains`](#scrollsdk-setup-domains)
@@ -1079,48 +1078,6 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/db-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/db-init.ts)_
-
-## `scrollsdk setup disable-internal`
-
-Disable ingress for internal services (Dogecoin, Anvil L1)
-
-```
-USAGE
-  $ scrollsdk setup disable-internal [--dry-run] [-f] [--list-k8s |  | [--disable <value> | --list | --enable <value> |
-    --disable-internal] |  | ] [-n <value>] [--skip-helm] [--values-dir <value>]
-
-FLAGS
-  -f, --force               Skip confirmation prompts
-  -n, --namespace=<value>   [default: default] Kubernetes namespace
-      --disable=<value>     Disable ingress for a service
-      --disable-internal    Disable all internal services (Dogecoin, Anvil L1) using kubectl
-      --dry-run             Show what would be deleted without actually deleting
-      --enable=<value>      Enable ingress for a service
-      --list                List current ingress status from local values files
-      --list-k8s            List current ingress status from Kubernetes cluster
-      --skip-helm           Skip helm upgrade
-      --values-dir=<value>  [default: ./values] Directory containing values files
-
-DESCRIPTION
-  Disable ingress for internal services (Dogecoin, Anvil L1)
-
-EXAMPLES
-  $ scrollsdk setup disable-internal
-
-  $ scrollsdk setup disable-internal --namespace scroll
-
-  $ scrollsdk setup disable-internal --dry-run
-
-  $ scrollsdk setup disable-internal --list
-
-  $ scrollsdk setup disable-internal --list-k8s
-
-  $ scrollsdk setup disable-internal --enable l2-rpc
-
-  $ scrollsdk setup disable-internal --disable frontends
-```
-
-_See code: [src/commands/setup/disable-internal.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/disable-internal.ts)_
 
 ## `scrollsdk setup doge-config`
 
@@ -2507,20 +2464,69 @@ _See code: [src/commands/signer/preflight.ts](https://github.com/dogeos69/scroll
 
 ## `scrollsdk test contracts`
 
-Test contracts by checking deployment and initialization
+Test L2 contracts and preinstalls by checking deployment, initialization and ownership
 
 ```
 USAGE
-  $ scrollsdk test contracts [-c <value>] [-n <value>] [-p]
+  $ scrollsdk test contracts [-c <value>] [-n <value>] [-p] [--preinstalls-image <value>]
 
 FLAGS
   -c, --config=<value>     [default: ./config.toml] Path to config.toml file
-  -n, --contracts=<value>  [default: ./config-contracts.toml] Path to configs-contracts.toml file
+  -n, --contracts=<value>  [default: ./config-contracts.toml] Path to config-contracts.toml file
   -p, --pod                Run inside Kubernetes pod
+      --preinstalls-image  [default: dogeos69/preinstalls:v0.2.1] Image for runtime codehash verification
 
 DESCRIPTION
-  Test contracts by checking deployment and initialization
+  Test L2 contracts and preinstalls by checking deployment, initialization and ownership
 ```
+
+Progress, contract results, and pass/fail/optional-absent counts are grouped by
+repository (`scroll-contracts` and `dogeos-preinstalls`), followed by an overall
+summary. A failed contract check in one group does not skip the other group.
+
+The `scroll-contracts` group checks 16 L2 contracts: the 14 contracts deployed
+or reused and configured by Docker `deploy.sh`, using addresses from
+`config-contracts.toml`, plus the genesis-only NativeDogeToken and EIP-2935
+BlockHashHistory at their fixed canonical addresses. The latter two require no
+config entries and are checked for code presence, without owner or proxy
+initialization checks. This does not compare live storage against genesis.
+Legacy L1 contracts and retired Gateway/Bascule entries are ignored. L1 RPC
+configuration is not required.
+
+Also checks the 21 required canonical addresses from `dogeos-preinstalls`,
+including Multicall3, CreateX, Arachnid, Permit2, nine canonical Safe v1.3.0
+contracts, and EntryPoint/SenderCreator v0.6–v0.9. These fixed addresses do not
+need entries in `config-contracts.toml`. Safe Singleton Factory is optional;
+once deployed, its six Safe eip155 contracts become required.
+
+Deployment checks require nonempty runtime code. Initialization checks inspect
+proxy initialization flags and the queue messenger, oracle whitelist, and fee
+vault adapter references. Ownership checks apply to the eight owned core
+contracts. Missing required addresses/code, failed checks, and unreadable
+initialization/ownership cause exit status 1. Optional missing preinstalls are
+reported separately. These native CLI checks do not compare runtime codehashes.
+
+After both groups, a separate **preinstalls image verification** step runs
+`/app/lib/verify.sh` from `dogeos69/preinstalls:v0.2.1`, overriding the image's
+default deployment entrypoint. It uses the same L2 RPC and verifies runtime
+codehashes using the image's chain-specific expectations. It runs even if the
+native CLI checks report missing or misconfigured contracts; either phase
+failing causes a nonzero command exit. The original CLI catalogs and checks
+remain in place.
+
+Docker must be available. The verifier container uses host networking, so the
+Docker host must be able to reach the chosen RPC, including internal endpoints
+selected with `--pod`. No private key or deployment volume is passed to the
+container. RPC credentials in verifier output are redacted. Use
+`--preinstalls-image <repository:tag-or-digest>` to select the verifier image
+matching your deployment; the default matches the SDK preinstalls chart.
+
+The default image has codehash expectations for chain IDs 1, 31337, 1122005 and
+6281971. An unsupported chain ID fails verification. Confirm that the RPC
+reports the intended chain ID; supporting a new network requires an image with
+expected hashes for Permit2 and EntryPoint v0.8/v0.9.
+This command does not query explorer source-verification status or validate
+every deployment parameter, proxy implementation, or genesis storage value.
 
 _See code: [src/commands/test/contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/contracts.ts)_
 

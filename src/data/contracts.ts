@@ -1,169 +1,37 @@
 /* eslint-disable perfectionist/sort-objects */
+import {GENESIS_PREDEPLOYS} from '../constants/deployment.js'
+
 export type DeployedContract = {
-  additionalAltGas?: boolean
   address?: string
-  bypassedInAltGas?: boolean
-  initializes: boolean
-  layer: Layer
+  initialization?: {byteOffset: number} | {expectedAddress: string; getter: string}
   name: string
+  optional?: boolean
   owned: boolean
+  requiredWhen?: string
 }
 
-export enum Layer {
-  L1 = 'l1',
-  L2 = 'l2',
-}
+// scroll-contracts bdbe658: docker/scripts/deploy.sh -> DeployScroll.run("L2", ...).
+// Includes contracts used by deployL2Contracts1stPass/2ndPass and the two
+// additional genesis-only contracts from GenerateGenesis.generateGenesisAlloc.
+// The first five entries can already exist in genesis and are reused by deploy.sh.
+// Constructor-owned contracts do not have an Initializable flag. For the queue,
+// gas oracle and fee vault, check the address wired by initializeL2Contracts.
 export const contracts: DeployedContract[] = [
-  {name: 'L1_SCROLL_CHAIN_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  {name: 'L1_SCROLL_MESSENGER_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  {name: 'L1_MULTIPLE_VERSION_ROLLUP_VERIFIER_ADDR', initializes: false, owned: true, layer: Layer.L1},
-  {name: 'L1_MESSAGE_QUEUE_V2_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  {name: 'L2_MESSAGE_QUEUE_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  {name: 'L1_GAS_PRICE_ORACLE_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  {name: 'L2_WHITELIST_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  {name: 'L2_WDOGE_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  {name: 'L2_TX_FEE_VAULT_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  {name: 'L2_PROXY_ADMIN_ADDR', initializes: false, owned: true, layer: Layer.L2},
-  {name: 'L2_DOGEOS_MESSENGER_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  {name: 'L2_GATEWAY_ROUTER_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  {name: 'L2_ETH_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  {name: 'L2_WETH_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2, bypassedInAltGas: true},
-  {name: 'L1_MESSAGE_QUEUE_V2_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  {name: 'L2_DOGEOS_MESSENGER_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  {name: 'L2_ETH_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  {name: 'L2_WETH_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2, bypassedInAltGas: true},
-  {name: 'L2_GATEWAY_ROUTER_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  {name: 'L2_MOAT_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  {name: 'L2_MOAT_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  {name: 'L2_BASCULE_MOCK_VERIFIER_ADDR', initializes: false, owned: false, layer: Layer.L2},
-
-
-  // not used in dogeos
-  // {name: 'L1_WETH_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_PROXY_ADMIN_ADDR', initializes: false, owned: true, layer: Layer.L1},
-  // {name: 'L1_PROXY_IMPLEMENTATION_PLACEHOLDER_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_WHITELIST_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  // {name: 'L1_SCROLL_CHAIN_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_SCROLL_MESSENGER_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_ENFORCED_TX_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_ENFORCED_TX_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  // {name: 'L1_ZKEVM_VERIFIER_V2_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_MESSAGE_QUEUE_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_MESSAGE_QUEUE_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  // {name: 'L1_GATEWAY_ROUTER_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_GATEWAY_ROUTER_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  // {
-  //   name: 'L1_ETH_GATEWAY_IMPLEMENTATION_ADDR',
-  //   initializes: false,
-  //   owned: false,
-  //   layer: Layer.L1,
-  //   bypassedInAltGas: true,
-  // },
-  // {name: 'L1_ETH_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1, bypassedInAltGas: true},
-  // {
-  //   name: 'L1_WETH_GATEWAY_IMPLEMENTATION_ADDR',
-  //   initializes: false,
-  //   owned: false,
-  //   layer: Layer.L1,
-  //   bypassedInAltGas: true,
-  // },
-  // {name: 'L1_WETH_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1, bypassedInAltGas: true},
-  // {name: 'L1_STANDARD_ERC20_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  // {name: 'L1_CUSTOM_ERC20_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  // {name: 'L1_ERC721_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_ERC721_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  // {name: 'L1_ERC1155_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L1},
-  // {name: 'L1_ERC1155_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1},
-  // {name: 'L1_PLONK_VERIFIER_ADDR', initializes: false, owned: false, layer: Layer.L1},
-
-  // {name: 'L2_PROXY_IMPLEMENTATION_PLACEHOLDER_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  // {name: 'L2_DOGEOS_MESSENGER_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  // {name: 'L2_GATEWAY_ROUTER_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  // {name: 'L2_STANDARD_ERC20_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  // {name: 'L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  // {name: 'L2_ERC721_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  // {name: 'L2_ERC1155_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-  // {name: 'L2_SCROLL_STANDARD_ERC20_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  // {name: 'L2_SCROLL_STANDARD_ERC20_FACTORY_ADDR', initializes: true, owned: true, layer: Layer.L2},
-
-  // // New contracts with additionalAltGas set to true
-  // {name: 'L1_GAS_TOKEN_ADDR', initializes: false, owned: false, layer: Layer.L1, additionalAltGas: true},
-  // {
-  //   name: 'L1_GAS_TOKEN_GATEWAY_IMPLEMENTATION_ADDR',
-  //   initializes: false,
-  //   owned: false,
-  //   layer: Layer.L1,
-  //   additionalAltGas: true,
-  // },
-  // {name: 'L1_GAS_TOKEN_GATEWAY_PROXY_ADDR', initializes: true, owned: true, layer: Layer.L1, additionalAltGas: true},
-  // {name: 'L1_WRAPPED_TOKEN_GATEWAY_ADDR', initializes: true, owned: false, layer: Layer.L1, additionalAltGas: true},
-  // {name: 'L2_STANDARD_ERC20_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  // {name: 'L2_ETH_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  // {
-  //   name: 'L2_WETH_GATEWAY_IMPLEMENTATION_ADDR',
-  //   initializes: false,
-  //   owned: false,
-  //   layer: Layer.L2,
-  //   bypassedInAltGas: true,
-  // },
-  // {name: 'L2_CUSTOM_ERC20_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  // {name: 'L2_ERC721_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
-  // {name: 'L2_ERC1155_GATEWAY_IMPLEMENTATION_ADDR', initializes: false, owned: false, layer: Layer.L2},
+  {name: 'L2_MESSAGE_QUEUE_ADDR', owned: true, initialization: {getter: 'messenger', expectedAddress: 'L2_DOGEOS_MESSENGER_PROXY_ADDR'}},
+  {name: 'L1_GAS_PRICE_ORACLE_ADDR', owned: true, initialization: {getter: 'whitelist', expectedAddress: 'L2_WHITELIST_ADDR'}},
+  {name: 'L2_WHITELIST_ADDR', owned: true},
+  {name: 'L2_WDOGE_ADDR', owned: false},
+  {name: 'L2_TX_FEE_VAULT_ADDR', owned: true, initialization: {getter: 'messenger', expectedAddress: 'L2_FEE_VAULT_MOAT_ADAPTER_ADDR'}},
+  {name: 'L2_PROXY_ADMIN_ADDR', owned: true},
+  {name: 'L2_PROXY_IMPLEMENTATION_PLACEHOLDER_ADDR', owned: false},
+  {name: 'L2_DOGEOS_MESSENGER_PROXY_ADDR', owned: true, initialization: {byteOffset: 0}},
+  {name: 'L2_MOAT_PROXY_ADDR', owned: true, initialization: {byteOffset: 20}},
+  {name: 'L2_SYSTEM_CONFIG_IMPLEMENTATION_ADDR', owned: false},
+  {name: 'L2_SYSTEM_CONFIG_PROXY_ADDR', owned: true, initialization: {byteOffset: 0}},
+  {name: 'L2_DOGEOS_MESSENGER_IMPLEMENTATION_ADDR', owned: false},
+  {name: 'L2_FEE_VAULT_MOAT_ADAPTER_ADDR', owned: false},
+  {name: 'L2_MOAT_IMPLEMENTATION_ADDR', owned: false},
+  // Genesis-only runtime contracts: no operator owner or proxy initializer.
+  {name: 'L2_NATIVE_DOGE_TOKEN_ADDR', address: GENESIS_PREDEPLOYS.L2_NATIVE_DOGE_TOKEN, owned: false},
+  {name: 'BLOCK_HASH_HISTORY_ADDR', address: '0x0000f90827f1c53a10cb7a02335b175320002935', owned: false},
 ]
-
-// export const L1Contracts: DeployedContract[] = [
-//     { name: "L1_WETH_ADDR", initializes: false, owned: false },
-//     { name: "L1_PROXY_ADMIN_ADDR", initializes: false, owned: true },
-//     { name: "L1_PROXY_IMPLEMENTATION_PLACEHOLDER_ADDR", initializes: false, owned: false },
-//     { name: "L1_WHITELIST_ADDR", initializes: true, owned: true },
-//     { name: "L2_GAS_PRICE_ORACLE_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L2_GAS_PRICE_ORACLE_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_SCROLL_CHAIN_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_SCROLL_CHAIN_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_SCROLL_MESSENGER_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_SCROLL_MESSENGER_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_ENFORCED_TX_GATEWAY_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_ENFORCED_TX_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_ZKEVM_VERIFIER_V1_ADDR", initializes: false, owned: false },
-//     { name: "L1_MULTIPLE_VERSION_ROLLUP_VERIFIER_ADDR", initializes: false, owned: true },
-//     { name: "L1_MESSAGE_QUEUE_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_MESSAGE_QUEUE_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_GATEWAY_ROUTER_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_GATEWAY_ROUTER_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_ETH_GATEWAY_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_ETH_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_WETH_GATEWAY_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_WETH_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_STANDARD_ERC20_GATEWAY_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_CUSTOM_ERC20_GATEWAY_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_ERC721_GATEWAY_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_ERC721_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L1_ERC1155_GATEWAY_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L1_ERC1155_GATEWAY_PROXY_ADDR", initializes: true, owned: true }
-// ]
-
-// export const L2Contracts: DeployedContract[] = [
-//     { name: "L2_MESSAGE_QUEUE_ADDR", initializes: true, owned: true },
-//     { name: "L1_GAS_PRICE_ORACLE_ADDR", initializes: true, owned: true },
-//     { name: "L2_WHITELIST_ADDR", initializes: true, owned: true },
-//     { name: "L2_WETH_ADDR", initializes: false, owned: false },
-//     { name: "L2_TX_FEE_VAULT_ADDR", initializes: true, owned: true },
-//     { name: "L2_PROXY_ADMIN_ADDR", initializes: false, owned: true },
-//     { name: "L2_PROXY_IMPLEMENTATION_PLACEHOLDER_ADDR", initializes: false, owned: false },
-//     { name: "L2_DOGEOS_MESSENGER_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L2_DOGEOS_MESSENGER_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L2_GATEWAY_ROUTER_IMPLEMENTATION_ADDR", initializes: false, owned: false },
-//     { name: "L2_GATEWAY_ROUTER_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L2_ETH_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L2_WETH_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L2_STANDARD_ERC20_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L2_ERC721_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L2_ERC1155_GATEWAY_PROXY_ADDR", initializes: true, owned: true },
-//     { name: "L2_SCROLL_STANDARD_ERC20_ADDR", initializes: false, owned: false },
-//     { name: "L2_SCROLL_STANDARD_ERC20_FACTORY_ADDR", initializes: true, owned: true }
-// ]

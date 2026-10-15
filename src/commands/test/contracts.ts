@@ -1,19 +1,23 @@
-import { Command, Flags } from '@oclif/core'
+import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
 import * as cliProgress from 'cli-progress'
-import { ethers } from 'ethers'
+import {ethers} from 'ethers'
 import path from 'node:path'
 
-import { DeployedContract, Layer, contracts } from '../../data/contracts.js'
-import { parseTomlConfig } from '../../utils/config-parser.js'
-import { addressLink } from '../../utils/onchain/index.js'
+import {DeployedContract, contracts} from '../../data/contracts.js'
+import {preinstalledContracts} from '../../data/preinstalled-contracts.js'
+import {parseTomlConfig} from '../../utils/config-parser.js'
+import {addressLink} from '../../utils/onchain/index.js'
+import {PREINSTALLS_CHECK_IMAGE, checkPreinstallsImage} from '../../utils/preinstalls-image-check.js'
 
-interface ContractsConfig {
-  [key: string]: string
+type ContractResult = {
+  contract: DeployedContract
+  deployed: boolean
+  problems: string[]
 }
 
 export default class TestContracts extends Command {
-  static description = 'Test contracts by checking deployment and initialization'
+  static description = 'Test L2 contracts and preinstalls by checking deployment, initialization and ownership'
 
   static flags = {
     config: Flags.string({
@@ -24,418 +28,170 @@ export default class TestContracts extends Command {
     contracts: Flags.string({
       char: 'n',
       default: './config-contracts.toml',
-      description: 'Path to configs-contracts.toml file',
+      description: 'Path to config-contracts.toml file',
     }),
     pod: Flags.boolean({
       char: 'p',
       default: false,
       description: 'Run inside Kubernetes pod',
     }),
+    'preinstalls-image': Flags.string({
+      default: PREINSTALLS_CHECK_IMAGE,
+      description: 'Preinstalls image used for the additional runtime codehash check (requires Docker)',
+    }),
   }
 
-  private alternativeGasTokenEnabled: boolean = false
-
-  private blockExplorers: Record<Layer, { blockExplorerURI: string }> = {
-    [Layer.L1]: { blockExplorerURI: '' },
-    [Layer.L2]: { blockExplorerURI: '' },
-  }
-
-  private contractsConfig: ContractsConfig = {}
-
-  private extraContracts: string[] = []
-  private missingContracts: string[] = []
-  private skippedContracts: string[] = []
-  private unableToCheckOwnership: string[] = []
-
-   
   async run(): Promise<void> {
-    const { flags } = await this.parse(TestContracts)
-
+    const {flags} = await this.parse(TestContracts)
     const configPath = path.resolve(flags.config)
     const contractsPath = path.resolve(flags.contracts)
-
     const config = parseTomlConfig(configPath)
-    this.contractsConfig = parseTomlConfig(contractsPath)
+    const contractAddresses: Record<string, string> = parseTomlConfig(contractsPath)
+    const rpcUrl: string = flags.pod ? config?.general?.L2_RPC_ENDPOINT : config?.frontend?.EXTERNAL_RPC_URI_L2
+    const owner: string = config?.accounts?.OWNER_ADDR
+    const explorer: string | undefined = config?.frontend?.EXTERNAL_EXPLORER_URI_L2
 
-    // Read ALTERNATIVE_GAS_TOKEN_ENABLED from config
-    this.alternativeGasTokenEnabled = config?.['gas-token']?.ALTERNATIVE_GAS_TOKEN_ENABLED === true
-
-    // Print "Alternative Gas Token Mode" if enabled
-    if (this.alternativeGasTokenEnabled) {
-      this.log(chalk.cyan('\nAlternative Gas Token Mode\n'))
+    if (!rpcUrl) {
+      this.error(`Missing L2 RPC URL in ${configPath}. Please ensure L2_RPC_ENDPOINT (for pod mode) or EXTERNAL_RPC_URI_L2 (for non-pod mode) is defined.`, {exit: 1})
     }
 
-    let l1RpcUrl: string
-    let l2RpcUrl: string
-
-    // if we're running inside a pod, we shouldn't use external URLs
-    if (flags.pod) {
-      l1RpcUrl = config?.general?.L1_RPC_ENDPOINT
-      l2RpcUrl = config?.general?.L2_RPC_ENDPOINT
-    } else {
-      l1RpcUrl = config?.frontend?.EXTERNAL_RPC_URI_L1
-      l2RpcUrl = config?.frontend?.EXTERNAL_RPC_URI_L2
+    if (!owner || !ethers.isAddress(owner)) {
+      this.error(`Missing or invalid OWNER_ADDR in ${configPath}. Please ensure it is defined in the accounts section.`, {exit: 1})
     }
 
-    const owner = config?.accounts?.OWNER_ADDR
-
-    this.blockExplorers.l1.blockExplorerURI = config?.frontend?.EXTERNAL_EXPLORER_URI_L1
-    this.blockExplorers.l2.blockExplorerURI = config?.frontend?.EXTERNAL_EXPLORER_URI_L2
-
-    // Check if RPC URLs are defined
-    if (!l1RpcUrl || !l2RpcUrl) {
-      this.error(
-        chalk.red(
-          `Missing RPC URL(s) in ${configPath}. Please ensure L1_RPC_ENDPOINT and L2_RPC_ENDPOINT (for pod mode) or EXTERNAL_RPC_URI_L1 and EXTERNAL_RPC_URI_L2 (for non-pod mode) are defined.`,
-        ),
-      )
-    }
-
-    // Check if owner address is defined
-    if (!owner) {
-      this.error(chalk.red(`Missing OWNER_ADDR in ${configPath}. Please ensure it is defined in the accounts section.`))
-    }
-
-    // Check if contractsConfig is empty
-    if (Object.keys(this.contractsConfig).length === 0) {
-      this.error(
-        chalk.red(
-          `Contract configuration in ${contractsPath} is empty. Please ensure it contains the necessary contract addresses.`,
-        ),
-      )
-    }
-
-    const l1Provider = new ethers.JsonRpcProvider(l1RpcUrl)
-    const l2Provider = new ethers.JsonRpcProvider(l2RpcUrl)
-
-    // Check that config has a value for each required contract name
-
-    const l1Addresses: DeployedContract[] = this.processContracts(contracts.filter((contract) => contract.layer === Layer.L1))
-    const l2Addresses: DeployedContract[] = this.processContracts(contracts.filter((contract) => contract.layer === Layer.L2))
+    // Legacy L1 and retired gateway entries in config-contracts.toml are ignored.
+    // Canonical genesis/preinstall addresses are fixed and cannot be overridden by config.
+    const groups = [
+      {contracts: contracts.map(contract => ({...contract, address: contract.address ?? contractAddresses[contract.name]})), name: 'scroll-contracts'},
+      {contracts: preinstalledContracts, name: 'dogeos-preinstalls'},
+    ]
+    const totals = {failures: 0, optionalAbsent: 0, passed: 0}
+    const provider = new ethers.JsonRpcProvider(rpcUrl)
+    const progress = new cliProgress.SingleBar({
+      clearOnComplete: true,
+      format: ' {bar} | {percentage}% | {value}/{total} | {name}',
+      hideCursor: true,
+    }, cliProgress.Presets.shades_classic)
 
     try {
-      // Check Deployments
+      for (const group of groups) {
+        this.log(chalk.bold(`\n=== ${group.name} (${group.contracts.length} contracts) ===`))
+        const results: ContractResult[] = group.contracts.map(contract => ({contract, deployed: false, problems: []}))
+        progress.start(results.length, 0, {name: `Checking ${group.name}...`})
+        for (const result of results) {
+          const {contract} = result
+          progress.update({name: `${group.name}: ${contract.name}`})
+          if (!contract.address || !ethers.isAddress(contract.address) || contract.address === ethers.ZeroAddress) {
+            result.problems.push('Missing or invalid contract address')
+          } else {
+            result.deployed = await provider.getCode(contract.address) !== '0x'
+            if (result.deployed) {
+              await this.checkConfiguration(provider, contract, contractAddresses, owner, result.problems)
+            }
+          }
 
-      const multibarDeployment = new cliProgress.MultiBar(
-        {
-          clearOnComplete: false,
-          format: ' {bar} | {percentage}% | {value}/{total} | {name}',
-          hideCursor: true,
-        },
-        cliProgress.Presets.shades_classic,
-      )
-
-      const l1BarDeploy = multibarDeployment.create(l1Addresses.length, 0, { name: 'Checking L1 contract deployment...' })
-      const l2BarDeploy = multibarDeployment.create(l2Addresses.length, 0, { name: 'Checking L2 contract deployment...' })
-
-      const notDeployed: DeployedContract[] = []
-
-      await Promise.all([
-        this.checkContractDeployment(l1Provider, l1Addresses, l1BarDeploy, notDeployed),
-        this.checkContractDeployment(l2Provider, l2Addresses, l2BarDeploy, notDeployed),
-      ])
-
-      // Check Initializations
-
-      const multibarInitialization = new cliProgress.MultiBar(
-        {
-          clearOnComplete: false,
-          format: ' {bar} | {percentage}% | {value}/{total} | {name}',
-          hideCursor: true,
-        },
-        cliProgress.Presets.shades_classic,
-      )
-
-      const l1AddressesToInitialize = l1Addresses.filter(
-        (contract) => contract.initializes && !notDeployed.some((nd) => nd.name === contract.name),
-      )
-      const l2AddressesToInitialize = l2Addresses.filter(
-        (contract) => contract.initializes && !notDeployed.some((nd) => nd.name === contract.name),
-      )
-
-      const l1BarInit = multibarDeployment.create(l1AddressesToInitialize.length, 0, {
-        name: 'Checking L1 contract initialization...',
-      })
-      const l2BarInit = multibarDeployment.create(l2AddressesToInitialize.length, 0, {
-        name: 'Checking L2 contract initialization...',
-      })
-
-      const notInitialized: DeployedContract[] = []
-
-      await Promise.all([
-        this.checkContractInitialization(l1Provider, l1AddressesToInitialize, l1BarInit, notInitialized),
-        this.checkContractInitialization(l2Provider, l2AddressesToInitialize, l2BarInit, notInitialized),
-      ])
-
-      // Check Owner
-
-      const multibarOwner = new cliProgress.MultiBar(
-        {
-          clearOnComplete: false,
-          format: ' {bar} | {percentage}% | {value}/{total} | {name}',
-          hideCursor: true,
-        },
-        cliProgress.Presets.shades_classic,
-      )
-
-      const l1AddressesWithOwner = l1Addresses.filter(
-        (contract) => contract.owned && !notDeployed.some((nd) => nd.name === contract.name),
-      )
-      const l2AddressesWithOwner = l2Addresses.filter(
-        (contract) => contract.owned && !notDeployed.some((nd) => nd.name === contract.name),
-      )
-
-      const l1BarOwner = multibarOwner.create(l1AddressesWithOwner.length, 0, {
-        name: 'Checking L1 contract ownership...',
-      })
-      const l2BarOwner = multibarOwner.create(l2AddressesWithOwner.length, 0, {
-        name: 'Checking L2 contract ownership...',
-      })
-
-      const notOwned: DeployedContract[] = []
-
-      await Promise.all([
-        this.checkContractOwner(l1Provider, l1AddressesWithOwner, l1BarOwner, owner, notOwned),
-        this.checkContractOwner(l2Provider, l2AddressesWithOwner, l2BarOwner, owner, notOwned),
-      ])
-
-      multibarDeployment.stop()
-      multibarInitialization.stop()
-      multibarOwner.stop()
-
-      // Print results
-      // Print results for correctly deployed, initialized, and owned contracts
-      const correctlyConfigured = [...l1Addresses, ...l2Addresses].filter(
-        (contract) =>
-          !notDeployed.some((nd) => nd.name === contract.name) &&
-          (!contract.initializes || !notInitialized.some((ni) => ni.name === contract.name)) &&
-          (!contract.owned || !notOwned.some((no) => no.name === contract.name)),
-      )
-
-      this.log(chalk.green('\nCorrectly configured contracts:'))
-      for (const contract of correctlyConfigured) {
-        let status = 'Deployed'
-        if (contract.initializes) status += ', Initialized'
-        if (contract.owned) status += ', Correctly Owned'
-         
-        const link = await addressLink(
-          contract.address!,
-          this.blockExplorers[contract.layer === 'l1' ? Layer.L1 : Layer.L2],
-        )
-        this.log(`- ${chalk.cyan(contract.name)}\n     ${chalk.blue(link)}\n     Status: ${chalk.green(status)}`)
-      }
-
-      if (notDeployed.length > 0) {
-        this.log(chalk.red('\nContracts not deployed:'))
-        for (const contract of notDeployed) {
-           
-          const link = await addressLink(
-            contract.address!,
-            this.blockExplorers[contract.layer === 'l1' ? Layer.L1 : Layer.L2],
-          )
-          this.log(chalk.red(`- ${contract.name}\n     ${chalk.blue(link)}`))
+          progress.increment()
         }
-      }
 
-      if (notInitialized.length > 0) {
-        this.log(chalk.yellow('\nContracts not initialized:'))
-        for (const contract of notInitialized) {
-           
-          const link = await addressLink(
-            contract.address!,
-            this.blockExplorers[contract.layer === 'l1' ? Layer.L1 : Layer.L2],
-          )
-          this.log(chalk.yellow(`- ${contract.name}\n     ${chalk.blue(link)}`))
-        }
+        progress.stop()
+        const summary = await this.reportResults(results, explorer)
+        totals.passed += summary.passed
+        totals.failures += summary.failures
+        totals.optionalAbsent += summary.optionalAbsent
       }
-
-      if (notOwned.length > 0) {
-        this.log(chalk.yellow('\nContracts without correct owner:'))
-        for (const contract of notOwned) {
-           
-          const link = await addressLink(
-            contract.address!,
-            this.blockExplorers[contract.layer === 'l1' ? Layer.L1 : Layer.L2],
-          )
-          this.log(chalk.yellow(`- ${contract.name}\n     ${chalk.blue(link)}`))
-        }
-      }
-
-      if (notDeployed.length === 0 && notInitialized.length === 0 && notOwned.length === 0) {
-        this.log(chalk.green('\nAll contracts are deployed, initialized and have owner set.'))
-      }
-
-      // Report skipped, missing, and extra contracts
-      this.reportContractStatus()
-    } catch (error) {
-      this.error(chalk.red(`Failed to check contracts: ${error}`))
+    } finally {
+      progress.stop()
+      provider.destroy()
     }
+
+    this.log(`\nOverall: ${totals.passed} passed, ${totals.failures} failed, ${totals.optionalAbsent} optional absent.`)
+    this.log(chalk.bold('\n=== dogeos-preinstalls image verification ==='))
+    this.log(`Image: ${flags['preinstalls-image']}`)
+    const imageCheck = await checkPreinstallsImage(flags['preinstalls-image'], rpcUrl)
+    if (imageCheck.output.trim()) this.log(imageCheck.output.trim())
+    const imagePassed = imageCheck.exitCode === 0
+    this.log(imagePassed
+      ? chalk.green('[ok] Preinstalls image verification passed.')
+      : chalk.red(`[failed] Preinstalls image verification failed (${imageCheck.exitCode === null ? 'execution error' : `exit ${imageCheck.exitCode}`}).`))
+    if (totals.failures > 0 || !imagePassed) this.error('L2 contract checks failed.', {exit: 1})
+    this.log(chalk.green('All required L2 contract and preinstall checks passed.'))
   }
 
-  private async checkContractDeployment(
+  private async checkConfiguration(
     provider: ethers.Provider,
-    contracts: DeployedContract[],
-    progressBar: cliProgress.SingleBar,
-    notDeployed: DeployedContract[],
-  ) {
-    for (const c of contracts) {
-      progressBar.update({ name: `Checking ${c.name}...` })
-       
-      const code = await provider.getCode(c.address ?? '')
-      if (code === '0x') {
-        notDeployed.push(c)
-      }
-
-      progressBar.increment()
-    }
-  }
-
-  private async checkContractInitialization(
-    provider: ethers.Provider,
-    contracts: DeployedContract[],
-    progressBar: cliProgress.SingleBar,
-    notInitialized: DeployedContract[],
-  ) {
-    for (const c of contracts) {
-      progressBar.update({ name: `Checking ${c.name}...` })
+    contract: DeployedContract,
+    addresses: Record<string, string>,
+    expectedOwner: string,
+    problems: string[],
+  ): Promise<void> {
+    const {initialization} = contract
+    if (initialization) {
       try {
-        if (!c.address) {
-          throw new Error(`No address found for ${c.name}`)
+        if ('byteOffset' in initialization) {
+          // Initializable uses one byte in slot 0. Moat packs it after its
+          // 20-byte owner; Messenger and SystemConfig use the low byte.
+          const slot = BigInt(await provider.getStorage(contract.address!, 0))
+          // eslint-disable-next-line no-bitwise
+          const initialized = (slot >> BigInt(initialization.byteOffset * 8)) & 0xffn
+          if (initialized === 0n) problems.push('Contract not initialized')
+        } else {
+          const expected = addresses[initialization.expectedAddress]
+          const instance = new ethers.Contract(contract.address!, [`function ${initialization.getter}() view returns (address)`], provider)
+          const actual: string = await instance[initialization.getter]()
+          if (!expected || !ethers.isAddress(expected) || actual === ethers.ZeroAddress || actual.toLowerCase() !== expected.toLowerCase()) {
+            problems.push(`${initialization.getter}() does not match ${initialization.expectedAddress}`)
+          }
         }
+      } catch {
+        problems.push('Unable to check initialization')
+      }
+    }
 
-        // TODO: Look into L2_MESSAGE_QUEUE_ADDR initialization later
-        if (c.name === 'L2_MESSAGE_QUEUE_ADDR') {
+    if (contract.owned) {
+      try {
+        const instance = new ethers.Contract(contract.address!, ['function owner() view returns (address)'], provider)
+        const actual: string = await instance.owner()
+        if (actual.toLowerCase() !== expectedOwner.toLowerCase()) problems.push('Incorrect owner')
+      } catch {
+        problems.push('Unable to check ownership')
+      }
+    }
+  }
+
+  private async reportResults(results: ContractResult[], explorer?: string): Promise<{failures: number; optionalAbsent: number; passed: number}> {
+    let failures = 0
+    let passed = 0
+    let optionalAbsent = 0
+    for (const result of results) {
+      const {contract, deployed, problems} = result
+      const required = !contract.optional || results.some(other => other.contract.name === contract.requiredWhen && other.deployed)
+      if (!deployed && problems.length === 0) {
+        if (required) {
+          problems.push('Contract not deployed')
+        } else {
+          optionalAbsent++
+          this.log(chalk.yellow(`[optional absent] ${contract.name} (${contract.address})`))
           continue
         }
-
-         
-        const initCount = await provider.getStorage(c.address, 0)
-        if (Number.parseInt(initCount, 16) <= 0) {
-          notInitialized.push(c)
-        }
-      } catch (error) {
-        this.error(`Error checking initialization for ${c.name}: ${error}`)
       }
 
-      progressBar.increment()
-    }
-  }
-
-   
-  private async checkContractOwner(
-    provider: ethers.Provider,
-    contracts: DeployedContract[],
-    progressBar: cliProgress.SingleBar,
-    expectedOwner: string,
-    notOwned: DeployedContract[],
-  ) {
-    const ownableABI = ['function owner() view returns (address)']
-
-    for (const c of contracts) {
-      progressBar.update({ name: `Checking ${c.name}...` })
-      if (c.owned && c.address) {
-        const contract = new ethers.Contract(c.address, ownableABI, provider)
-        try {
-           
-          const owner = await contract.owner()
-          let expectedOwnerForContract = expectedOwner
-
-          // Special case for L2_SCROLL_STANDARD_ERC20_FACTORY_ADDR
-          if (c.name === 'L2_SCROLL_STANDARD_ERC20_FACTORY_ADDR') {
-            expectedOwnerForContract = this.contractsConfig.L2_STANDARD_ERC20_GATEWAY_PROXY_ADDR
-          }
-
-          if (owner.toLowerCase() !== expectedOwnerForContract.toLowerCase()) {
-            notOwned.push(c)
-          }
-        } catch (error) {
-          this.log(chalk.yellow(`Unable to check ownership for ${c.name}: ${error}`))
-          this.unableToCheckOwnership.push(c.name)
-        }
-      }
-
-      progressBar.increment()
-    }
-  }
-
-  private filterBypassedContracts(contract: DeployedContract): boolean {
-    if (!this.shouldCheckContract(contract)) {
-      if (this.alternativeGasTokenEnabled && contract.bypassedInAltGas) {
-        this.skippedContracts.push(contract.name)
-      }
-
-      return false
-    }
-
-    return true
-  }
-
-  private processContracts(contractList: DeployedContract[]): DeployedContract[] {
-    return contractList
-      .map((contract) => {
-        const address = this.contractsConfig[contract.name]
-        if (this.shouldCheckContract(contract)) {
-          if (!address) {
-            this.missingContracts.push(contract.name)
-            return null // Return null for contracts without addresses
-          }
-
-          return { ...contract, address } as DeployedContract // Assert the type here
-        }
-
-        return null // Return null for contracts that shouldn't be checked
-      })
-      .filter((contract): contract is DeployedContract => contract !== null) // Filter out null values
-  }
-
-  private reportContractStatus(): void {
-    if (this.alternativeGasTokenEnabled && this.skippedContracts.length > 0) {
-      this.log(chalk.yellow('\nSkipped contracts due to alternative gas token being enabled:'))
-      for (const name of this.skippedContracts) this.log(chalk.yellow(`- ${name}`))
-    }
-
-    // Remove skipped contracts from missing contracts
-    this.missingContracts = this.missingContracts.filter(name => !this.skippedContracts.includes(name))
-
-    if (this.missingContracts.length > 0) {
-      this.log(chalk.yellow('\nMissing addresses for contracts:'))
-      for (const name of this.missingContracts) this.log(chalk.yellow(`- ${name}`))
-    }
-
-    // Check for extra contracts in config file
-    const contractNames = new Set(contracts.map((c) => c.name))
-    for (const name in this.contractsConfig) {
-      if (!contractNames.has(name)) {
-        this.extraContracts.push(name)
+      const link = contract.address && ethers.isAddress(contract.address) && explorer
+        ? await addressLink(contract.address, {blockExplorerURI: explorer})
+        : contract.address || '(no address)'
+      if (problems.length > 0) {
+        failures++
+        this.log(chalk.red(`[failed] ${contract.name} (${link}): ${problems.join('; ')}`))
+      } else {
+        passed++
+        const checks = ['Deployed']
+        if (contract.initialization) checks.push('Initialized')
+        if (contract.owned) checks.push('Correctly Owned')
+        this.log(chalk.green(`[ok] ${contract.name} (${link}): ${checks.join(', ')}`))
       }
     }
 
-    if (this.extraContracts.length > 0) {
-      this.log(chalk.yellow('\nContracts in config file not present in contracts data:'))
-      for (const name of this.extraContracts) this.log(chalk.yellow(`- ${name}`))
-    }
-
-    if (this.unableToCheckOwnership.length > 0) {
-      this.log(chalk.yellow('\nContracts where ownership could not be checked:'))
-      for (const name of this.unableToCheckOwnership) this.log(chalk.yellow(`- ${name}`))
-    }
-
-    if (
-      this.skippedContracts.length === 0 &&
-      this.missingContracts.length === 0 &&
-      this.extraContracts.length === 0 &&
-      this.unableToCheckOwnership.length === 0
-    ) {
-      this.log(chalk.green('\nAll contracts are accounted for and no contracts were skipped or had issues.'))
-    }
+    this.log(`\n${passed} passed, ${failures} failed, ${optionalAbsent} optional absent.`)
+    return {failures, optionalAbsent, passed}
   }
 
-  private shouldCheckContract(contract: DeployedContract): boolean {
-    if (this.alternativeGasTokenEnabled) {
-      return !contract.bypassedInAltGas
-    }
- 
-      return !contract.additionalAltGas
-    
-  }
 }
