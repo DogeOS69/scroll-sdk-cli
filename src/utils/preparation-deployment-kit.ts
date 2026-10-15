@@ -1,7 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import {readProofArtifactStore} from './artifact-stores.js'
 import {type DeploymentKitRecord, writeDeploymentKit} from './deployment-kit.js'
+import {type KitPublicationDependencies, publishDeploymentKit} from './deployment-kit-publication.js'
 import {DEPLOYMENT_KIT_PROTOCOL_CONTEXT, recordDeploymentKitPublication} from './deployment-kit-record.js'
 import {loadDogeConfigWithSelection} from './doge-config.js'
 import {AwaitingInput, localPath, writeJson} from './preparation-io.js'
@@ -10,6 +12,18 @@ import {resolveProofIntent, validateProofIntentBinding} from './proof-intent.js'
 import {deriveTsoUrl} from './signer-policy-derivation.js'
 
 const INBOX = '.scrollsdk/inputs/deployment-kit'
+
+/** Invoked only by an explicit --apply command or an S3 publication plan step. */
+export async function publishPreparationDeploymentKit(root: string, profile?: string, dependencies?: KitPublicationDependencies): Promise<{manifest_sha256: string; url: string; version: string}> {
+  const {configPath, kit} = await exportPreparationDeploymentKit(root)
+  const {store} = readProofArtifactStore(root, configPath)
+  const published = await publishDeploymentKit(kit, store, profile, dependencies)
+  const current = await exportPreparationDeploymentKit(root)
+  if (current.kit.manifestSha256 !== kit.manifestSha256) throw new Error('Deployment kit inputs changed during publication; export and publish the current version')
+  recordDeploymentKitPublication(root, configPath, kit, published.url)
+  writeJson(localPath(root, `${INBOX}/published.json`), published)
+  return {...published, version: kit.kitVersion}
+}
 
 /**
  * The `deployment-kit` step: the same writer and inputs as `setup
@@ -30,11 +44,11 @@ export async function exportPreparationDeploymentKit(root: string): Promise<{con
  * the current kit unchanged and saved its URL and manifest SHA-256 in
  * `.scrollsdk/inputs/deployment-kit/published.json`, then record it.
  */
-export async function awaitDeploymentKitPublication(root: string): Promise<void> {
+export async function awaitDeploymentKitPublication(root: string, resumeCommand = 'scrollsdk setup apply'): Promise<void> {
   const {configPath, kit} = await exportPreparationDeploymentKit(root)
   const kitDirectory = path.relative(root, kit.kitDir)
   writeJson(localPath(root, `${INBOX}/request.json`), {
-    instructions: `Publish ${kitDirectory}/ (or an archive of it) unchanged at a new immutable https URL and record that URL with this manifest SHA-256 on the deployment's governance record. Then save {"url": "<https URL>", "manifest_sha256": "${kit.manifestSha256}"} as published.json next to this file and rerun apply.`,
+    instructions: `Publish ${kitDirectory}/ (or an archive of it) unchanged at a new immutable https URL and record that URL with this manifest SHA-256 on the deployment's governance record. Then save {"url": "<https URL>", "manifest_sha256": "${kit.manifestSha256}"} as published.json next to this file and rerun ${resumeCommand}.`,
     kitDirectory,
     kitVersion: kit.kitVersion,
     manifestSha256: kit.manifestSha256,

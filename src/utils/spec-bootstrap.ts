@@ -4,6 +4,8 @@ import {createHash} from 'node:crypto'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
+import {bindMakefileTarget} from './spec-kubernetes-target.js'
+
 const REQUIRED_TEMPLATES = [
   'Makefile.example', 'withdrawal-processor/WithdrawalProcessor.toml',
   'proof-coordinator/ProofCoordinator.toml', 'values/scroll-monitor-production.yaml',
@@ -79,7 +81,13 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
     delete hashes['values/l1-devnet-production.yaml']
   }
 
-  files.Makefile = adaptNodeCounts(files.Makefile, spec)
+  if (spec.capacityManager && !files['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use SDK PR #145 or a release containing it')
+  if (!spec.capacityManager) {
+    delete files['values/capacity-manager-production.yaml']
+    delete hashes['values/capacity-manager-production.yaml']
+  }
+
+  files.Makefile = bindMakefileTarget(adaptNodeCounts(files.Makefile, spec), spec)
   files['.data/spec-bootstrap.json'] = JSON.stringify({
     pendingStages: ['identity provisioning/import', 'contract and genesis generation', 'Bridge initialization and canonical protocol context', 'proof materials, compilation and publication', 'secret preparation and chart reconciliation'], schema: 'dogeos/spec-bootstrap/v1', sdkRevision: revision,
     templateHashes: hashes,
@@ -102,6 +110,8 @@ export function loadSdkTemplateFiles(sdkDirectory: string, revisionOverride?: st
   const files: Record<string, string> = {}
   const hashes: Record<string, string> = {}
   for (const [file, mode] of sourceFiles) {
+    // Qualified DevNet profiles contain deployment-specific endpoints and are opt-in overlays.
+    if (file.startsWith('values/capacity-manager-devnet-')) continue
     if (!(file === 'Makefile.example' || file.endsWith('.sh') && !file.includes('/') || /^(?:values|withdrawal-processor|proof-coordinator)\//.test(file))) continue
     if (!['100644', '100755'].includes(mode) || file.split('/').includes('..')) throw new Error(`Unsupported SDK template entry: ${file}`)
     const content = git('show', `${revision}:examples/${file}`)
@@ -118,7 +128,9 @@ function adaptNodeCounts(source: string, spec: DeploymentSpec): string {
     const start = lines.indexOf(`${name}:`)
     if (start < 0) throw new Error(`Pinned SDK Makefile lacks ${name}`)
     let end = start + 1
-    while (end < lines.length && !/^[a-z][\da-z-]*:/.test(lines[end])) end++
+    // Replace only this recipe. Global variables and directives between targets
+    // belong to the surrounding Makefile, not to the preceding node rule.
+    while (end < lines.length && (lines[end].trim() === '' || lines[end].startsWith('\t'))) end++
     lines.splice(start, end - start, ...body.trimEnd().split('\n'), '')
   }
 

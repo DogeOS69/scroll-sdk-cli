@@ -10,11 +10,17 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {PreparationPlan, PreparationRunner, PreparationStep} from './preparation-plan.js'
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
+import {prepareCapacityManager} from './capacity-manager.js'
+import {writeContractsHelmValues} from './contracts-helm-values.js'
 import {parseDatabaseUrl} from './dstack-database.js'
+import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
+import {prepareLocalGenesis} from './preparation-genesis.js'
 import {prepareGrafanaAdmin} from './preparation-grafana.js'
+import {assertHelperFundingImage, prepareManagedHelper, prepareManagedHelperFunding, verifyManagedHelperFunding} from './preparation-helper.js'
+import {helperFeeWalletWif, usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
@@ -22,6 +28,7 @@ import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
 import {buildProofTopology} from './proof-topology-init.js'
+import {specKubernetesTarget} from './spec-kubernetes-target.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
@@ -43,7 +50,7 @@ export const invokePreparationCommand: Invoke = async (root, step, args, environ
 function requiredFile(root: string, input: string | undefined, label: string): string {
   if (!input) throw new AwaitingInput({message: `${label} is required`})
   const file = path.resolve(root, input)
-  if (!fs.existsSync(file)) throw new AwaitingInput({file, message: `Supply ${label}, then rerun apply`})
+  if (!fs.existsSync(file)) throw new AwaitingInput({file, message: `Supply ${label}, then rerun the same preparation command`})
   if (!fs.statSync(file).isFile()) throw new Error(`${label} must be a regular file`)
   return file
 }
@@ -54,9 +61,14 @@ export class CommandPreparationRunner implements PreparationRunner {
   constructor(private readonly invoke: Invoke = invokePreparationCommand, private readonly exportMaterializers = exportCoordinatorMaterializers) {}
   async run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void> {
     const p = spec.preparation!
-    const command = (args: string[], environment?: Record<string, string>) => this.invoke(root, step.id, args, environment)
+    const command = (args: string[], environment?: Record<string, string>) => this.invoke(root, step.id, args, {
+      ...(usesManagedHelper(spec) && fs.existsSync(path.join(root, '.data/bridge-helper-seed')) && !process.env.DOGECOIN_FEE_WALLET_KEY ? {DOGECOIN_FEE_WALLET_KEY: helperFeeWalletWif(root, spec)} : {}),
+      ...environment,
+    })
     const bridgeArgs = ['-N', '--image', p.bridge.image, '--ethereum-da-probe', 'direct', ...(p.bridge.mode === 'production' ? ['--production'] : [])]
     switch (step.id) {
+      case 'capacity-manager': {prepareCapacityManager(root); break}
+
       case 'proof-workers-intent': {
         // Capacity apply runs only after the operator installs the services.
         break
@@ -66,6 +78,8 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(['generate-from-spec', '--spec', '.scrollsdk/intent.json', '--output', '.', '--bootstrap', '--sdk-dir', plan.sdkDirectory, '--force'])
         break
       }
+
+      case 'genesis-local': {await prepareLocalGenesis(root, spec, this.invoke); break}
 
       case 'identities': {
         await command(['gen-keystore', '-N']); break
@@ -102,9 +116,15 @@ export class CommandPreparationRunner implements PreparationRunner {
         }
 
         if (d?.mode === 'external') break
-        const args = ['dstack-config', '-N', ...(d?.providers ?? []).flatMap(provider => ['--provider', provider]), ...optional('project', d?.project), ...optional('gcp-project-id', d?.gcpProjectId)]
+        const args = ['dstack-config', '-N', ...(d?.providers ?? []).flatMap(provider => ['--provider', provider]), ...optional('project', spec.capacityManager?.project ?? d?.project), ...optional('gcp-project-id', d?.gcpProjectId)]
+        if (d?.aws) {
+          const awsConfig = path.join(root, '.data/dstack/aws-backend.json')
+          privateWrite(awsConfig, JSON.stringify(d.aws, null, 2) + '\n')
+          args.push('--aws-backend-config', awsConfig)
+        }
+
         if (d?.vastaiApiKeyEnv) {
-          if (!process.env[d.vastaiApiKeyEnv]?.trim()) throw new AwaitingInput({message: `Set ${d.vastaiApiKeyEnv} to the Vast.ai API key, then rerun apply`})
+          if (!process.env[d.vastaiApiKeyEnv]?.trim()) throw new AwaitingInput({message: `Set ${d.vastaiApiKeyEnv} to the Vast.ai API key, then rerun the same preparation command`})
           args.push('--vastai-api-key-env', d.vastaiApiKeyEnv)
         }
 
@@ -126,6 +146,15 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'ethereum-anchor': {await prepareEthereumAnchor(root, spec); break}
+      case 'managed-helper-prepare': {assertHelperFundingImage(p.bridge.image); prepareManagedHelper(root, spec); break}
+      case 'managed-helper-funding': {await prepareManagedHelperFunding(root, spec, dogecoinRpc(root)); break}
+      case 'managed-helper-setup':
+      case 'managed-helper-fund': {
+        await command(['bridge-init', '--step', step.id === 'managed-helper-setup' ? '2-setup' : '4-fund', ...bridgeArgs.filter(arg => arg !== '--production'), '--managed-helper-wallets'])
+        break
+      }
+
+      case 'managed-helper-verify': {await verifyManagedHelperFunding(root, spec, dogecoinRpc(root)); break}
       case 'production-wallets': {await prepareProductionWallets(root, spec, dogecoinRpc(root)); break}
       case 'production-funding': {await prepareProductionBridgeFunding(root, spec, dogecoinRpc(root)); break}
       case 'helper-funding': {await prepareHelperFunding(root, spec, dogecoinRpc(root)); break}
@@ -141,6 +170,8 @@ export class CommandPreparationRunner implements PreparationRunner {
 
         break
       }
+
+      case 'cubesigner-policy-build': {await prepareCubesignerPolicy(root, command); break}
 
       case 'proof-release-bake': {
         const release = p.proofRelease!
@@ -195,7 +226,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         break
       }
 
-      case 'charts': case 'charts-published': {
+      case 'charts': case 'charts-published': case 'render-final': {
         if (step.id === 'charts' && spec.identities?.bootnodes?.length) {
           const file = localPath(root, '.data/doge-config.toml')
           const before = toml.parse(fs.readFileSync(file, 'utf8')) as any
@@ -215,10 +246,15 @@ export class CommandPreparationRunner implements PreparationRunner {
         // before compiling that binding, never between compilation and export.
         await prepareGrafanaAdmin(root)
         const args = ['prep-charts', '-N', '--skip-auth-check', '--skip-l2-contract-deployment-block']
+        // Proof preparation needs compiled service configuration, not a ready
+        // HTTPS edge. The final render still validates deployment ingress.
+        if (step.stage === 'proof-materials') args.push('--proof-preparation')
         const receipt = p.proofMaterials.receipt ?? '.data/proof-materials-v1.json'
         if (fs.existsSync(path.resolve(root, receipt))) args.push('--proof-materials-receipt', receipt)
         if (p.proofPublication && step.id !== 'charts') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
-        await command(args); break
+        await command(args)
+        if (step.id === 'render-final') writeContractsHelmValues(root)
+        break
       }
 
       case 'proof-publish': {
@@ -238,13 +274,19 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'deployment-kit': {await exportPreparationDeploymentKit(root); break}
-      case 'deployment-kit-published': {await awaitDeploymentKitPublication(root); break}
+      case 'deployment-kit-published': {
+        await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup proof-materials' : 'scrollsdk setup apply'));
+        break
+      }
+
       case 'proof-check': {await command(['proof-config-check']); break}
       case 'secret-upload': {
-        const upload = p.secretUpload!
-        if (spec.monitoring?.slack?.enabled && !upload.kubeContext) throw new AwaitingInput({message: 'Set preparation.secretUpload.kubeContext to upload monitoring Secrets'})
-        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.provider === 'aws' ? specAwsSecretPrefix(spec) : undefined), ...optional('kube-context', upload.kubeContext), ...optional('namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default')])
-        if (upload.kubeContext) await command(['monitoring-secrets', '--apply', '--kube-context', upload.kubeContext, '--namespace', upload.namespace ?? spec.infrastructure.namespace ?? 'default'])
+        const upload = p.secretUpload ?? (spec.infrastructure.provider === 'aws' ? {provider: 'aws' as const} : undefined)
+        if (!upload) throw new Error('Configure preparation.secretUpload for the external Secret store before uploading')
+        const {kubeContext, namespace} = specKubernetesTarget(spec)
+        if (spec.monitoring?.slack?.enabled && !kubeContext) throw new AwaitingInput({message: 'Set infrastructure.kubeContext to upload monitoring Secrets'})
+        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.provider === 'aws' ? specAwsSecretPrefix(spec) : undefined), ...optional('kube-context', kubeContext), ...optional('namespace', namespace)])
+        if (kubeContext) await command(['monitoring-secrets', '--apply', '--kube-context', kubeContext, '--namespace', namespace])
         break
       }
 

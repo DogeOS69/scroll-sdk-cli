@@ -9,7 +9,7 @@ storage required by your chosen deployment separately.
 
 For configuration generated from a deployment spec, see the
 [spec projection reference](spec-projection.md) for defaults, preserved inputs
-and the remaining setup steps. The [plan/apply workflow](spec-preparation.md)
+and the remaining setup steps. The [staged preparation workflow](spec-preparation.md)
 orchestrates those steps and resumes after external funding and partner handoffs.
 
 Use core images and the topology compiler containing
@@ -39,7 +39,7 @@ findings and the cloud/proof/runtime steps that remain unverified.
 The newer [production input review](production-inputs-review.md) records the
 cross-repository corrections and shadowfork configuration rehearsal.
 
-Production Bridge initialization follows the [plan/apply production flow](spec-preparation.md#production-funding-and-resume).
+Production Bridge initialization follows the [staged production flow](spec-preparation.md#production-funding-and-resume).
 The legacy full `bridge-init` command uses a deterministic test helper.
 
 ## 1. Prepare configuration and identities
@@ -74,7 +74,7 @@ Configure the following before generating genesis or initializing Bridge:
 | --- | --- | --- |
 | Deployment/activity accounts | `scrollsdk setup gen-keystore --accounts`; add `--activity-helper` if needed | Preserve the selected owner; an empty owner defaults to deployer. |
 | Dogecoin RPC, Ethereum DA and domains | `scrollsdk setup doge-config`, then `scrollsdk setup domains` | Use the intended network and service endpoints. |
-| Application signers | `scrollsdk setup gen-keystore --service eth-da-submitter`; `scrollsdk setup gen-keystore --service fee-oracle` | Select local or AWS KMS signing, or consume the saved spec identity intent. The fee oracle public address is needed for genesis. Configure DA archive access separately with `setup eth-da-submitter`. |
+| Application signers | `scrollsdk setup gen-keystore --service eth-da-submitter`; `scrollsdk setup gen-keystore --service fee-oracle` | Select local or AWS KMS signing, or consume the saved spec identity intent. Standalone generation reads the fee oracle public address. The staged `setup genesis` isolates that reader input and defers the service identity to `setup aws`. Configure DA archive access separately with `setup eth-da-submitter`. |
 | Reth node identities | `scrollsdk setup l2-sequencer-reth --index 0`; `scrollsdk setup l2-bootnode-reth` | Configure additional instances as needed; see [Pure Reth configuration](reth-only-peers.md). |
 | Attestation signer inputs | Each signer operator runs `scrollsdk signer init --id <id> --network <network>`, then `attestation_signer --print-identity` and `scrollsdk signer init ... --identity <file>` on their own infrastructure to produce the descriptor (attestation + transport public keys, no endpoint: signers dial out to the TSO), then the bridge operator runs `scrollsdk setup attestation-signer` | Collect the public descriptors in `descriptors/` or pass `--descriptor` for each file. This signer identity flow is independent of DA/Fee Oracle KMS provisioning. |
 | TEE identity and session | `scrollsdk setup cubesigner-init`, then `scrollsdk setup cubesigner-refresh` | Use the intended CubeSigner environment and identity lifecycle; gamma is not a universal requirement. |
@@ -103,7 +103,7 @@ scrollsdk setup gen-l2-artifacts
 ```
 
 The generator, deployer and verification images use `gen-configs-<revision>`,
-`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.6`.
+`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.7`.
 Choose a new deployment salt for a new instance. Owner and index-0 Reth signer checks must pass first. This produces
 `values/genesis.yaml`, which Bridge preparation consumes.
 

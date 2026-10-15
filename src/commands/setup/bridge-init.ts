@@ -17,6 +17,8 @@ import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import {resolveEthereumRpc} from '../../utils/ethereum-rpc-secrets.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
+import {assertHelperFundingImage, bindManagedHelperWallets} from '../../utils/preparation-helper.js'
+import {privateWrite} from '../../utils/preparation-io.js'
 import { protocolIdSidecarPath } from '../../utils/signer-policy-derivation.js'
 import {withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 
@@ -307,6 +309,7 @@ export class BridgeInitCommand extends Command {
       description: 'Explicit Kubernetes context for the Ethereum DA RPC probe (defaults to KUBE_CONTEXT).',
       env: 'KUBE_CONTEXT',
     }),
+    'managed-helper-wallets': Flags.boolean({default: false, description: 'Bind helper outputs to the frozen preparation plan and its external wallet backends', exclusive: ['production']}),
     'non-interactive': Flags.boolean({
       char: 'N',
       default: false,
@@ -338,6 +341,7 @@ export class BridgeInitCommand extends Command {
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private kubeContext?: string
+  private managedHelperWallets: boolean = false
   private nonInteractive: boolean = false
   private selectedInitialSystemSigner?: string
 
@@ -345,6 +349,7 @@ export class BridgeInitCommand extends Command {
     const { flags } = await this.parse(BridgeInitCommand)
 
     this.nonInteractive = flags['non-interactive']
+    this.managedHelperWallets = flags['managed-helper-wallets']
     this.jsonMode = flags.json
     this.dockerPlatform = flags['docker-platform']
     this.ethereumDaProbe = flags['ethereum-da-probe']
@@ -386,6 +391,7 @@ export class BridgeInitCommand extends Command {
 
     if (flags.image && !flags.image.includes('@')) throw new Error('--image requires an immutable SHA-256 reference; use --image-tag for tags')
     imageTag = flags.image ?? await this.getDockerImageTag(imageTag)
+    if (this.managedHelperWallets) assertHelperFundingImage(resolveBridgeGenesisImage(imageTag))
     this.jsonCtx.info(`Using Docker image: ${resolveBridgeGenesisImage(imageTag)}`)
     this.jsonCtx.info(`Using Docker platform: ${this.dockerPlatform}`)
 
@@ -1184,13 +1190,19 @@ export class BridgeInitCommand extends Command {
   }
 
   private materializeWithdrawalProcessorSecrets(paths: BridgeInitPaths): void {
+    if (this.managedHelperWallets) {
+      const spec = JSON.parse(fs.readFileSync(path.join(process.cwd(), '.scrollsdk/intent.json'), 'utf8'))
+      bindManagedHelperWallets(process.cwd(), spec)
+    }
+
     this.assertFileExists(
       paths.withdrawalProcessorTomlPath,
       'E103_WITHDRAWAL_PROCESSOR_OUTPUT_MISSING',
         'Run `scrollsdk setup bridge-init --step 2-setup` first.'
     )
 
-    const withdrawalProcessorToml = toml.parse(fs.readFileSync(paths.withdrawalProcessorTomlPath, 'utf8')) as any
+    const parsedWithdrawal = toml.parse(fs.readFileSync(paths.withdrawalProcessorTomlPath, 'utf8'))
+    const withdrawalProcessorToml = (this.managedHelperWallets ? resolveEnvRefs(parsedWithdrawal) : parsedWithdrawal) as any
     const feeSignerKey = this.getRequiredStringValue(
       withdrawalProcessorToml,
       'fee_signer_key',
@@ -1212,7 +1224,7 @@ export class BridgeInitCommand extends Command {
       DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY: feeSignerKey,
       ...(sequencerSignerKey ? {DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY: sequencerSignerKey} : {}),
     })
-    fs.writeFileSync(paths.withdrawalProcessorSecretPath, nextContent)
+    privateWrite(paths.withdrawalProcessorSecretPath, nextContent)
     this.jsonCtx.info(`Updated withdrawal processor signer keys in ${paths.withdrawalProcessorSecretPath}`)
   }
 
@@ -1522,6 +1534,7 @@ export class BridgeInitCommand extends Command {
       '.data/bridge.json',
     ])
     this.moveLegacyOutputFiles(paths.dataDir)
+    if (this.managedHelperWallets) this.materializeWithdrawalProcessorSecrets(paths)
   }
 
   private async runPrepareStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {

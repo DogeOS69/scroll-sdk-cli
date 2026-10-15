@@ -1621,7 +1621,7 @@ describe('deployment-spec-generator', () => {
       const files = generateValuesFiles(createMinimalSpec());
       const tso = yaml.load(files['tso-service-production.yaml']) as any;
 
-      expect(tso.image).to.include({repository: 'dogeos69/tso-service', tag: 'v0.3.0-beta.6'});
+      expect(tso.image).to.include({repository: 'dogeos69/tso-service', tag: 'v0.3.0-beta.7'});
       expect(tso.ingress.main.hosts[0].paths).to.deep.equal([
         {path: '/health', pathType: 'Exact'},
         {path: '/signer', pathType: 'Prefix'},
@@ -1786,6 +1786,16 @@ describe('deployment-spec-generator', () => {
         expect(node.reth.extraArgs.slice(0, 2)).to.deep.equal(['--network.legacy-geth-header-transform', 'false']);
         expect(node).not.to.have.property('configMaps');
       }
+
+      const preinstalls = yaml.load(files['preinstalls-production.yaml']) as any;
+      expect(preinstalls.configMaps['preinstalls-env'].data).to.deep.equal({L2_RPC_ENDPOINT: 'http://l2-rpc:8545'});
+      expect(preinstalls.envFrom).to.deep.include({secretRef: {name: 'preinstalls-secret-env'}});
+      expect(preinstalls.externalSecrets['preinstalls-secret-env'].data).to.deep.equal([{
+        remoteRef: {key: 'dogeos-test/preinstalls-secret-env', property: 'PRIV_KEY'}, secretKey: 'PRIV_KEY',
+      }]);
+      // Image and source-verification policy belong to the SDK values template.
+      expect(preinstalls).not.to.have.property('image');
+      expect(preinstalls).not.to.have.property('verify');
 
       const contractsValues = yaml.load(files['contracts-production.yaml']) as any;
       expect(contractsValues.image).to.include({repository: DOCKER_REPOSITORY, tag: `deploy-${CONTRACTS_DOCKER_DEFAULT_TAG}`});

@@ -1,5 +1,6 @@
 import {validateBootnodePublicP2p} from './bootnode-public-p2p.js'
 import {validateMonitoring} from './monitoring-slack.js'
+import {specDstackController} from './spec-kubernetes-target.js'
 /**
  * DeploymentSpec Generator
  *
@@ -417,6 +418,7 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
   spec = stripRetiredServiceConfig(spec)
   assertDeploymentSpecFields(spec)
   resolveSpecIdentities(spec)
+  const dstackController = specDstackController(spec)
   const frontend = (spec.frontend ?? {}) as Partial<DeploymentSpec['frontend']>
   const accounts = normalizeAccounts(spec.accounts)
   const baseDomain = frontend.baseDomain || spec.metadata?.name || 'localhost'
@@ -492,9 +494,10 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
         proverPublicUrl: spec.proofTopology.deployment?.proverPublicUrl ?? publicUrl(protocol, hosts.proofCoordinator!),
       },
     }} : {}),
+    ...(dstackController ? {dstackController} : {}),
     ...(spec.dstackController?.enabled !== false && spec.dstackController?.ingress?.enabled === true
       && spec.dstackController.ingress.hosts === undefined ? {dstackController: {
-        ...spec.dstackController,
+        ...dstackController,
         ingress: {...spec.dstackController.ingress, hosts: [buildHost(baseDomain, 'dstack')]},
       }} : {}),
     contracts: {
@@ -1318,7 +1321,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   try {
-    validateDstackControllerConfig(spec.dstackController)
+    validateDstackControllerConfig(specDstackController(spec))
   } catch (error) {
     errors.push({
       code: 'E015_INVALID_DSTACK_CONTROLLER_CONFIG',
@@ -1549,8 +1552,8 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   }
   config.feeOracle = {contractWriteMode: spec.feeOracle?.contractWriteMode ?? 'live', ethereumRpcUrl: spec.feeOracle?.ethereumRpcUrl ?? 'https://ethereum-rpc.publicnode.com'}
 
-  validateDstackControllerConfig(spec.dstackController)
-  if (spec.dstackController !== undefined) config.dstackController = structuredClone(spec.dstackController)
+  validateDstackControllerConfig(specDstackController(spec))
+  if (spec.dstackController !== undefined) config.dstackController = specDstackController(spec)
 
   config.rpc = {
     password: externalRpc.password || '',

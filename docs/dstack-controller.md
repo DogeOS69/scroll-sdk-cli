@@ -249,13 +249,13 @@ path instead. Include `--spec deployment-spec.yaml` if that is your source.
 ```bash
 # Local validation only: no Kubernetes or provider requests.
 scrollsdk setup push-secrets --dstack-only \
-  --kube-context YOUR_ISOLATED_CONTEXT --namespace dstack-system \
+  --kube-context YOUR_ISOLATED_CONTEXT --namespace default \
   --values-file values/dstack-controller-production.yaml \
   --dry-run --non-interactive
 
 # Upload the validated Secret bundle to that destination.
 scrollsdk setup push-secrets --dstack-only \
-  --kube-context YOUR_ISOLATED_CONTEXT --namespace dstack-system \
+  --kube-context YOUR_ISOLATED_CONTEXT --namespace default \
   --values-file values/dstack-controller-production.yaml \
   --non-interactive
 ```
@@ -284,7 +284,7 @@ For example, upload all generated service secrets including enabled dstack:
 
 ```bash
 scrollsdk setup push-secrets --provider aws --aws-region us-east-1 \
-  --kube-context YOUR_ISOLATED_CONTEXT --namespace dstack-system \
+  --kube-context YOUR_ISOLATED_CONTEXT --namespace default \
   --values-dir values --non-interactive
 ```
 
@@ -533,7 +533,7 @@ Review the generated file against your local chart before deployment:
 helm lint --strict ../scroll-sdk/charts/dstack-controller \
   -f ./generated-deployment/values/dstack-controller-production.yaml
 helm template dstack-controller ../scroll-sdk/charts/dstack-controller \
-  --namespace dstack-system \
+  --namespace default \
   -f ./generated-deployment/values/dstack-controller-production.yaml
 ```
 
@@ -635,7 +635,7 @@ dstackController:
   fullnameOverride: dstack-controller
   monitoring:
     enabled: true
-    namespace: dstack-system
+    namespace: default
     auth: {existingSecret: dstack-controller-monitoring, key: token}
     interval: 30s
     scrapeTimeout: 10s

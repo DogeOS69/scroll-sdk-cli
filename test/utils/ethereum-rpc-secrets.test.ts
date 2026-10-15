@@ -87,6 +87,38 @@ describe('Ethereum provider Secret projection', () => {
     expect(values.envFrom).deep.eq([])
     expect(values.externalSecrets).not.have.property('proof-coordinator-rpc-env')
   })
+  it('exports refreshed Dogecoin credentials for existing coordinator materializers without embedding them in values', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rpc-dogecoin-'))
+    const previous = process.cwd()
+    const source = '[materializer.bridge.dogecoin_rpc]\nurl="http://dogecoin:22555"\nnetwork="testnet"\nuser="FAKE_OLD_USER"\npass="FAKE_OLD_PASSWORD"\n'
+    try {
+      const sanitized = sanitizeEthereumRpcToml(source)
+      expect(sanitized).not.contains('FAKE_OLD_')
+      const config: any = toml.parse(sanitized)
+      expect(config.materializer.bridge.dogecoin_rpc.url).eq('http://dogecoin:22555')
+      expect(config.materializer.bridge.dogecoin_rpc.network).eq('testnet')
+      fs.mkdirSync(path.join(root, 'proof-coordinator'))
+      fs.writeFileSync(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), sanitized)
+      process.chdir(root)
+      const command: any = Object.create(SetupGenSecrets.prototype)
+      command.dogeConfig = {dogecoinClusterRpc: {password: 'FAKE_NEW_PASSWORD', username: 'FAKE_NEW_USER'}}
+      const env = command.generateEnvContent('proof-coordinator', {})['proof-coordinator-rpc.env']
+      expect(env).contains('DOGEOS_PROOF_COORDINATOR_MATERIALIZER__BRIDGE__DOGECOIN_RPC__PASS="FAKE_NEW_PASSWORD"')
+      expect(env).contains('DOGEOS_PROOF_COORDINATOR_MATERIALIZER__BRIDGE__DOGECOIN_RPC__USER="FAKE_NEW_USER"')
+      expect(env).not.contains('FAKE_OLD_').not.contains('ETHEREUM_DA')
+      const keys = proofCoordinatorRpcKeys(sanitized)
+      const values: any = {}
+      reconcileEthereumRpcSecrets(values, 'proof-coordinator', {prefix: 'test/cluster/default', provider: 'aws'}, keys)
+      expect(values.envFrom).deep.eq([{secretRef: {name: 'proof-coordinator-rpc-env'}}])
+      expect(values.externalSecrets['proof-coordinator-rpc-env'].data.map((item: any) => item.remoteRef.property)).deep.eq(keys)
+      expect(JSON.stringify(values)).not.contains('FAKE_NEW_').not.contains('FAKE_OLD_')
+      command.dogeConfig.dogecoinClusterRpc.password = 'FAKE_ROTATED_PASSWORD'
+      expect(command.generateEnvContent('proof-coordinator', {})['proof-coordinator-rpc.env']).contains('FAKE_ROTATED_PASSWORD').not.contains('FAKE_NEW_PASSWORD')
+      delete command.dogeConfig.dogecoinClusterRpc.password
+      expect(() => command.generateEnvContent('proof-coordinator', {})).throws('Dogecoin cluster RPC password is required (value omitted)')
+    } finally {process.chdir(previous); fs.rmSync(root, {force: true, recursive: true})}
+  })
+
   it('loads only referenced RPC inputs from the saved deployment environment file', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rpc-env-'))
     const previous = process.cwd()

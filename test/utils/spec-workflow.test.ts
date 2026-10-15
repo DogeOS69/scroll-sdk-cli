@@ -195,6 +195,12 @@ describe('spec identity and template workflow', () => {
     const plan = planSpecBootstrap(spec, sdk)
     expect(plan).to.deep.equal(explicit)
     expect(plan['values/scroll-monitor-production.yaml']).to.equal('# pinned fixture\n')
+    expect(plan.Makefile).to.include('NAMESPACE ?= default\n')
+    spec.infrastructure.kubeContext = 'explicit-cluster'
+    spec.infrastructure.namespace = 'chain'
+    const targeted = planSpecBootstrap(spec, sdk).Makefile
+    expect(targeted).to.include('KUBE_CONTEXT ?= explicit-cluster\n')
+    expect(targeted).to.include('NAMESPACE ?= chain\n')
     expect(plan.Makefile).to.include('for index in 0 1; do')
     expect(plan.Makefile).not.to.include('values/l2-reth-bootnode-production-1.yaml')
     expect(plan).not.to.have.property('values/genesis.yaml')

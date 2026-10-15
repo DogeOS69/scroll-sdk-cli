@@ -29,7 +29,9 @@ describe('dstack monitoring generation and credential handoff', () => {
   })
 
   it('generates matching controller and explicitly scoped monitor overlay without credentials', () => {
-    const files = generateValuesFiles(dstackSpec({...config, fullnameOverride: 'gpu-control', monitoring: {enabled: true, interval: '60s', namespace: 'gpu-system'}}))
+    const input = dstackSpec({...config, fullnameOverride: 'gpu-control', monitoring: {enabled: true, interval: '60s'}})
+    input.infrastructure.namespace = 'gpu-system'
+    const files = generateValuesFiles(input)
     const controller = yaml.load(files[DSTACK_CONTROLLER_VALUES_FILE]) as any
     const monitor = yaml.load(files[DSTACK_MONITORING_VALUES_FILE]) as any
     expect(controller.fullnameOverride).to.equal('gpu-control')
@@ -70,12 +72,12 @@ describe('dstack monitoring generation and credential handoff', () => {
     const valuesFile = path.join('values', DSTACK_CONTROLLER_VALUES_FILE)
     fs.writeFileSync(valuesFile, generateDstackControllerValues(config)!)
     writeDstackCredentialSecrets(config)
-    const secrets = loadDstackSecretPublication(config, valuesFile, 'dstack-system')
+    const secrets = loadDstackSecretPublication(config, valuesFile, 'default')
     expect(secrets.map(s => s.metadata.name)).to.include('dstack-controller-monitoring')
     expect(() => loadDstackSecretPublication(config, valuesFile, 'wrong')).to.throw('namespace')
     const calls: string[][] = []
     try {
-      await publishDstackSecrets({config, context: 'test', namespace: 'dstack-system', async runner(args) {
+      await publishDstackSecrets({config, context: 'test', namespace: 'default', async runner(args) {
         calls.push(args)
         return JSON.stringify({items: [{data: {token: Buffer.from('different').toString('base64')}, metadata: {name: 'dstack-controller-monitoring'}}]})
       }, valuesFile})
@@ -86,7 +88,7 @@ describe('dstack monitoring generation and credential handoff', () => {
 
     expect(calls).to.have.length(1)
     fs.writeFileSync('secrets/dstack-controller-monitoring.yaml', yaml.dump({...secrets.find(s => s.metadata.name === 'dstack-controller-monitoring'), stringData: {token: 'stale'}}))
-    expect(() => loadDstackSecretPublication(config, valuesFile, 'dstack-system')).to.throw('Stale')
+    expect(() => loadDstackSecretPublication(config, valuesFile, 'default')).to.throw('Stale')
   })
 
   it('does not silently recreate missing private monitoring state when a Secret output exists', () => {

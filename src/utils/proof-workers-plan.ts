@@ -13,6 +13,7 @@ import {assertDeploymentSpecFields} from './deployment-spec-fields.js'
 import {digest, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {GPU_ARCHITECTURES, rentalEnvelope, rentalSeconds, resolveProofWorkers} from './proof-workers-config.js'
+import {specDstackController, specKubernetesTarget} from './spec-kubernetes-target.js'
 
 export interface WorkerCapacityPlan {
   config: Required<ProofWorkersConfig>
@@ -72,6 +73,7 @@ export function workerCommand(worker: ProverWorkerContractV1, publication: Proof
 
 export function capacityPlan(input: {generationId: string; imageCheck: ProofWorkerImageCheckV1; publication: ProofProgramPublicationV1; session: string; spec: DeploymentSpec; target: WorkerCapacityPlan['target']; tokenFile: string; worker: ProverWorkerContractV1}): WorkerCapacityPlan {
   const {imageCheck, publication, session, spec, worker} = input
+  if (spec.capacityManager) throw new Error('capacityManager owns GPU capacity; remove it and drain its workers before using the SDK launcher')
   if (!spec.proofWorkers) throw new Error('Declare proofWorkers in the deployment spec before planning GPU capacity')
   const config = resolveProofWorkers(spec.proofWorkers)
   if (!/^[\da-z][\da-z-]{0,23}$/.test(session)) throw new Error('Session must be a lowercase name of at most 24 characters')
@@ -106,9 +108,11 @@ export function workerControllerLocation(spec: DeploymentSpec, explicitContext?:
   if (result.error || result.status !== 0) throw new Error('Select a Kubernetes context before planning workers, or supply --kube-context')
   return result.stdout.trim()
 }): {context: string; namespace: string} {
-  const context = explicitContext ?? spec.preparation?.secretUpload?.kubeContext ?? currentContext()
+  specDstackController(spec)
+  const target = specKubernetesTarget(spec)
+  const context = explicitContext ?? target.kubeContext ?? currentContext()
   if (!context.trim()) throw new Error('Worker plan requires a nonempty Kubernetes context')
-  return {context, namespace: spec.dstackController?.monitoring?.namespace ?? 'dstack-system'}
+  return {context, namespace: target.namespace}
 }
 
 export function createWorkerCapacityPlan(root: string, session = 'initial', specFile?: string, kubeContext?: string): WorkerCapacityPlan {

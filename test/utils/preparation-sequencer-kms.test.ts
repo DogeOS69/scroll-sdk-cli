@@ -188,7 +188,7 @@ describe('production Bridge sequencer KMS', () => {
     expect(calls.some(args => /^(create|put|update|delete)/.test(args[1]))).to.equal(false)
   })
 
-  it('requests funding to the KMS public-key address without a sequencer WIF', async () => {
+  for (const sequencerVout of [0, 1]) it(`validates KMS wallet funding at vout ${sequencerVout} without an opt-in flag`, async () => {
     const fee = feeKey()
     process.env.DOGECOIN_FEE_WALLET_KEY = fee.toWIF()
     prepareSequencerKms(root, spec, runner())
@@ -204,27 +204,18 @@ describe('production Bridge sequencer KMS', () => {
     expect((waiting as AwaitingInput).details.fundingRequests?.[0].address).to.equal(publicKeyAddress(productionSequencer(root, spec).publicKey, 'testnet'))
     expect((waiting as AwaitingInput).details.fundingRequests?.[0].amountSats).to.equal(42_069_000)
 
-    expect((waiting as AwaitingInput).details.inputTemplate?.sequencer).to.deep.include({vout: 0})
-    fs.writeFileSync(path.join(root, '.scrollsdk/inputs/bridge-funding.json'), JSON.stringify({sequencer: {txid: 'a'.repeat(64), vout: 1}}))
-    let wrongOutput: unknown
-    try {await prepareProductionWallets(root, spec, async method => {
-      if (method === 'getblockchaininfo') return {chain: 'test'}
-      if (method === 'getblockcount') return 1000
-      throw new Error('Funding inspection should stop before transaction RPC')
-    })} catch (error) {wrongOutput = error}
+    expect((waiting as AwaitingInput).details.fundingRequests?.[0]).not.to.have.property('vout')
+    expect((waiting as AwaitingInput).details.inputTemplate?.sequencer).to.deep.include({vout: 'REPLACE_WITH_OUTPUT_INDEX'})
 
-    expect(wrongOutput).to.be.instanceOf(AwaitingInput)
-    expect(String(wrongOutput)).to.include('Initial sequencer funding must use output vout 0')
-    expect(fs.existsSync(path.join(root, '.data/production-wallet-funding.json'))).to.equal(false)
-
-    const requests = (waiting as AwaitingInput).details.fundingRequests!
+    const requests = [...(waiting as AwaitingInput).details.fundingRequests!]
+    if (sequencerVout !== 0) requests.reverse()
     const transaction = new Transaction()
     transaction.addInput(Buffer.alloc(32, 1), 0)
     for (const request of requests) transaction.addOutput(Buffer.from(bitcore.Script.fromAddress(request.address).toHex(), 'hex'), BigInt(request.amountSats))
     const txid = transaction.getId()
-    fs.writeFileSync(path.join(root, '.scrollsdk/inputs/bridge-funding.json'), JSON.stringify({feeWallet: {txid, vout: 1}, sequencer: {txid, vout: 0}}))
+    fs.writeFileSync(path.join(root, '.scrollsdk/inputs/bridge-funding.json'), JSON.stringify({feeWallet: {txid, vout: 1 - sequencerVout}, sequencer: {txid: `0x${txid}`, vout: String(sequencerVout)}}))
     fs.writeFileSync(path.join(root, '.data/setup_defaults.toml'), toml.stringify({attestation_pubkeys: [feeKey().toPublicKey().toString()], attestation_threshold: 1, fee_wallet_target_amount: 100_000_000}))
-    await prepareProductionWallets(root, spec, async (method, params) => {
+    const rpc = async (method: string, params: unknown[]) => {
       switch (method) {
         case 'getblockchaininfo': { return {chain: 'test'}
         }
@@ -249,9 +240,24 @@ describe('production Bridge sequencer KMS', () => {
         default: { throw new Error(`Unexpected RPC ${method}`)
         }
       }
-    })
+    }
+
+    if (sequencerVout !== 0) {
+      const input = path.join(root, '.scrollsdk/inputs/bridge-funding.json')
+      const correct = fs.readFileSync(input, 'utf8')
+      fs.writeFileSync(input, JSON.stringify({sequencer: {txid, vout: 0}}))
+      let mismatch: unknown
+      try {await prepareProductionWallets(root, spec, rpc)} catch (error) {mismatch = error}
+      expect(String(mismatch)).to.include('Funding output pays a different address')
+      expect(fs.existsSync(path.join(root, '.data/production-wallet-funding.json'))).to.equal(false)
+      fs.writeFileSync(input, correct)
+    }
+
+    await prepareProductionWallets(root, spec, rpc)
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.data/production-wallet-funding.json'), 'utf8')).sequencer.vout).to.equal(sequencerVout)
     const outputPath = path.join(root, '.data/output-withdrawal-processor.toml')
     const output = toml.parse(fs.readFileSync(outputPath, 'utf8'))
+    expect(output.genesis_sequencer_vout).to.equal(sequencerVout)
     expect(output.sequencer_signer_kms).to.deep.equal(productionSequencer(root, spec).kms)
     expect(output).not.to.have.property('sequencer_signer_key')
     expect(output.fee_signer_key).to.equal('$ENV:DOGECOIN_FEE_WALLET_KEY')
@@ -321,7 +327,7 @@ describe('production Bridge sequencer KMS', () => {
     const generated = generateValuesFiles(spec)['withdrawal-processor-production.yaml']
     expect(generated).not.to.include('DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY')
     delete spec.images
-    expect((yaml.load(generateValuesFiles(spec)['withdrawal-processor-production.yaml']) as any).image.tag).to.equal('v0.3.0-beta.6-kms')
+    expect((yaml.load(generateValuesFiles(spec)['withdrawal-processor-production.yaml']) as any).image.tag).to.equal('v0.3.0-beta.7')
     const installable = yaml.load(generated) as any
     installable.networkPolicy = {allowFrom: {proofCoordinator: [{podSelector: {matchLabels: {app: 'proof-coordinator'}}}], tso: [{podSelector: {matchLabels: {app: 'tso'}}}]}, enabled: true}
     fs.writeFileSync(valuesFile, yaml.dump(installable))

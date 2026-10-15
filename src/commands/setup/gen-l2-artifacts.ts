@@ -4,7 +4,6 @@ import { Command, Flags } from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
 import { ethers } from 'ethers'
-import * as yaml from 'js-yaml'
 import * as childProcess from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -12,6 +11,7 @@ import * as path from 'node:path'
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
 import { writeConfigs } from '../../utils/config-writer.js'
 import {inspectContractOwner} from '../../utils/contract-owner.js'
+import {writeContractsHelmValues} from '../../utils/contracts-helm-values.js'
 import {getContractsPlaceholderKey} from '../../utils/contracts-placeholder.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import {validateGenesisPredeploys} from '../../utils/genesis-predeploys.js'
@@ -357,28 +357,7 @@ export default class SetupGenL2Artifacts extends Command {
       }
     }
 
-    // Process config.toml and config-contracts.toml
-    const configFiles = [
-      { key: 'scrollConfig', source: 'config.public.toml', target: 'scroll-common-config.yaml' },
-      { key: 'scrollConfigContracts', source: 'config-contracts.toml', target: 'scroll-common-config-contracts.yaml' },
-    ]
-
-    for (const file of configFiles) {
-      const sourcePath = path.join(sourceDir, file.source)
-      const targetPath = path.join(targetDir, file.target)
-
-      if (fs.existsSync(sourcePath)) {
-        const content = fs.readFileSync(sourcePath, 'utf8')
-        const yamlContent = {
-          [file.key]: content,
-        }
-        const yamlString = yaml.dump(yamlContent, { indent: 2 })
-        fs.writeFileSync(targetPath, yamlString)
-        this.jsonCtx.log(chalk.green(`Processed file: ${file.target}`))
-      } else {
-        this.jsonCtx.log(chalk.yellow(`Source file not found: ${file.source}`))
-      }
-    }
+    writeContractsHelmValues(sourceDir, targetDir)
   }
 
   private resolveConfigEnvRefsInPlace(): void {

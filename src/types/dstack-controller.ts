@@ -17,6 +17,14 @@ export interface DstackControllerConfig {
     hosts?: string[]
     tls?: Array<{hosts: string[]; secretName: string}>
   }
+  /** Internal ALB with a DNS-validated ACM certificate; HTTPS terminates at the ALB. */
+  internalTls?: {
+    awsProfile?: string
+    certificateArn: string
+    hostname: string
+    inboundCidrs: string[]
+    subnets: string[]
+  }
   /** Native metrics and the monitor overlay are enabled unless explicitly disabled. */
   monitoring?: {
     alerts?: {enabled?: boolean; failedRunsThreshold?: number; unavailableFor?: string}
@@ -30,7 +38,7 @@ export interface DstackControllerConfig {
       unavailableFor?: string
     }
     interval?: string
-    /** Namespace used when installing the independent controller release. */
+    /** Derived from infrastructure.namespace in spec deployments; explicit values must match. */
     namespace?: string
     sampleLimit?: number
     scrapeTimeout?: string

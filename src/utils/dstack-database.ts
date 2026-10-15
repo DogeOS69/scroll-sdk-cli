@@ -3,10 +3,12 @@ import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
 import {writePrivateFile} from './dstack-credentials.js'
+import {specDstackController} from './spec-kubernetes-target.js'
 
 export function readDstackControllerConfig(file?: string, spec?: string): DstackControllerConfig | undefined {
   const target = path.resolve(spec ?? file ?? '.data/doge-config.toml')
@@ -15,7 +17,7 @@ export function readDstackControllerConfig(file?: string, spec?: string): Dstack
   let config: unknown
   try {
     const contents = fs.readFileSync(target, 'utf8')
-    config = (spec ? yaml.load(contents) as Record<string, unknown> : toml.parse(contents)).dstackController
+    config = spec ? specDstackController(yaml.load(contents) as DeploymentSpec) : toml.parse(contents).dstackController
   } catch {
     throw new Error('Cannot read dstack deployment configuration; contents omitted')
   }

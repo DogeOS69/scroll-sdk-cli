@@ -1,7 +1,7 @@
 import {isIP} from 'node:net'
 
 /** Validate explicit deployment peers before producing installable bridge values. */
-export function validateServiceNetworkPolicy(values: Record<string, any>, service: string): void {
+export function validateServiceNetworkPolicy(values: Record<string, any>, service: string, deferIngressValidation = false): void {
   if (!['tso-service', 'withdrawal-processor'].includes(service)) return
   const fail = (reason: string): never => {throw new Error(`${service}: networkPolicy ${reason}; edit values/${service}-production.yaml`)}
   const policy = values.networkPolicy
@@ -9,10 +9,13 @@ export function validateServiceNetworkPolicy(values: Record<string, any>, servic
   const groups = policy.allowFrom
   if (!groups || typeof groups !== 'object') fail('allowFrom is required')
   const required = service === 'tso-service' ? ['withdrawalProcessor', 'signers'] : ['tso']
-  if (service === 'tso-service' && values.ingress?.main?.enabled !== false) required.push('edge')
+  if (service === 'tso-service' && values.ingress?.main?.enabled !== false && !deferIngressValidation) required.push('edge')
   if (service === 'withdrawal-processor' && values.service?.main?.ports?.['proof-work']?.enabled) required.push('proofCoordinator')
   for (const group of required) if (!Array.isArray(groups[group]) || groups[group].length === 0) fail(`allowFrom.${group} must identify the required callers`)
   for (const [group, peers] of Object.entries(groups)) {
+    // ALB subnet inputs are operator-owned and may be unknown while baking
+    // proofs. Internal service peers and isolation remain mandatory.
+    if (service === 'tso-service' && group === 'edge' && deferIngressValidation) continue
     if (!Array.isArray(peers)) fail(`allowFrom.${group} must be a list`)
     for (const peer of peers as any[]) {
       if (peer?.ipBlock) {

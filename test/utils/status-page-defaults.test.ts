@@ -61,6 +61,45 @@ describe('status-page defaults from deployment sources', () => {
     expect(values.statusPage.publication.health.depositDeadlineSeconds).to.equal(undefined)
   })
 
+  it('monitors configured endpoints even when their ingresses and controllers are disabled', () => {
+    const ingress = (host: string) => ({enabled: false, hosts: [{host, paths: [{path: '/'}]}]})
+    write('frontends-production.yaml', {controller: {enabled: false}, ingress: {main: ingress('portal.example')}})
+    write('l2-reth-rpc-public-production.yaml', {controller: {enabled: false, replicas: 0}, ingress: {
+      main: ingress('rpc.example'), websocket: ingress('ws.example'),
+    }})
+    write('blockscout-production.yaml', {'blockscout-stack': {
+      blockscout: {ingress: {enabled: false, hostname: 'explorer-api.example'}},
+      frontend: {ingress: {enabled: false, hostname: 'explorer.example'}},
+    }})
+    const sourceFiles = ['frontends-production.yaml', 'l2-reth-rpc-public-production.yaml', 'blockscout-production.yaml']
+    const before = sourceFiles.map(name => fs.readFileSync(path.join(directory, name), 'utf8'))
+    generate()
+    const {catalog, generated} = values.statusPage
+    const endpoints = (key: string) => catalog.components.find((component: any) => component.key === key).endpoints
+    expect(endpoints('public-rpc')).to.deep.equal(['https://rpc.example/', 'wss://ws.example/'])
+    expect(endpoints('bridge-portal')).to.deep.equal(['https://portal.example/bridge'])
+    expect(endpoints('block-explorer')).to.deep.equal(['https://explorer.example/'])
+    expect(generated.probeConfig.explorerApiUrls).to.deep.equal(['https://explorer-api.example/'])
+    expect(sourceFiles.map(name => fs.readFileSync(path.join(directory, name), 'utf8'))).to.deep.equal(before)
+    values = yaml.load(yaml.dump(values))
+    expect(generate()).to.deep.equal([])
+  })
+
+  it('still requires safe hostnames and explicit routes for disabled ingress targets', () => {
+    const rpc = (host: string, paths = [{path: '/'}]) => write('l2-reth-rpc-public-production.yaml', {
+      ingress: {main: {enabled: false, hosts: [{host, paths}]}},
+    })
+    rpc('rpc.example?token=placeholder')
+    expect(generate).to.throw('hostname without credentials')
+    rpc('rpc.example', [])
+    expect(generate).to.throw('explicit external path')
+    write('l2-reth-rpc-public-production.yaml', {ingress: {main: {enabled: false}}})
+    expect(generate).to.throw('requires ingress hosts')
+    rpc('rpc.example')
+    write('blockscout-production.yaml', {'blockscout-stack': {frontend: {ingress: {enabled: false}}}})
+    expect(generate).to.throw('hostname must be a nonempty configured string')
+  })
+
   it('honors manual overrides and explicit opt-out', () => {
     values.statusPage.publication.probes = {bridgeChecks: [], sequencingMode: 'unconfigured'}
     generate()

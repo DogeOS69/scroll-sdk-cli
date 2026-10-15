@@ -85,7 +85,7 @@ describe('status-page generation and explicit Instatus apply', () => {
     })
   }
 
-  it('preserves disabled opt-in and excludes disabled WebSocket', () => {
+  it('preserves disabled opt-in and excludes a disabled WebSocket without configured hosts', () => {
     expect(reconcileScrollMonitorStatusPage({}, {} as any)).to.deep.equal([])
     expect(reconcileScrollMonitorStatusPage({statusPage: {enabled: false}}, {} as any)).to.deep.equal([])
     write('l2-reth-rpc-public-production.yaml', {ingress: {main: ingress('rpc.example'), websocket: {enabled: false}}})
@@ -95,7 +95,7 @@ describe('status-page generation and explicit Instatus apply', () => {
     expect(() => generate()).to.throw('before disabling')
   })
 
-  it('rejects disabled public ingress, traversal and unconfigured hosts without partial mutation', () => {
+  it('rejects traversal and unconfigured or unsafe hosts without partial mutation', () => {
     for (const configuration of [
       {ingress: {main: {enabled: false}}},
       {ingress: {main: ingress('rpc.scrollsdk')}},
@@ -160,6 +160,7 @@ describe('status-page generation and explicit Instatus apply', () => {
         configMapping: {},
         contractsConfig: {},
         dogeConfig: {network: 'testnet'},
+        flags: {},
         jsonCtx: {addWarning() {}, info() {}, logSuccess() {}},
         jsonMode: false,
         log() {},

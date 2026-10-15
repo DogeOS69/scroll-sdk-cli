@@ -2,6 +2,7 @@ import * as yaml from 'js-yaml'
 
 import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
+import {dstackInternalIngress, validateDstackInternalTls} from './dstack-internal-tls.js'
 import {reconcileDeploymentIngresses} from './public-service-ingress.js'
 
 export const DSTACK_MONITORING_VALUES_FILE = 'scroll-monitor-dstack.yaml'
@@ -171,7 +172,7 @@ export function validateDstackControllerConfig(input: unknown): void {
   const root = 'dstackController'
   const config = mapping(input, root, [
     'enabled', 'auth', 'credentialSecrets', 'database', 'defaultCredentialsEnabled', 'fullnameOverride', 'image',
-    'ingress', 'monitoring', 'nodeSelector', 'persistence', 'podAnnotations', 'replicaCount',
+    'ingress', 'internalTls', 'monitoring', 'nodeSelector', 'persistence', 'podAnnotations', 'replicaCount',
     'resources', 'serverConfig', 'serviceAccount', 'tolerations',
   ])
   if (config.enabled !== undefined) bool(config.enabled, `${root}.enabled`)
@@ -207,6 +208,10 @@ export function validateDstackControllerConfig(input: unknown): void {
   }
 
   validateIngress(config, root)
+  if (config.internalTls !== undefined) {
+    validateDstackInternalTls(config.internalTls as NonNullable<DstackControllerConfig['internalTls']>)
+    if (config.ingress !== undefined) throw new Error('Choose internalTls or operator-managed ingress, not both')
+  }
 
   validateTolerations(config, root)
 }
@@ -218,6 +223,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
   const overrides = {...config}
   delete overrides.enabled
   delete overrides.monitoring
+  delete overrides.internalTls
   const values = {
     ...overrides,
     auth: {existingSecret: 'dstack-controller-auth', key: 'admin-token', ...config.auth},
@@ -231,7 +237,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
       ? {extraEnv: [{name: 'AWS_EC2_METADATA_DISABLED', value: 'true'}]} : {}),
     ...(config.monitoring?.enabled === false ? {} : {fullnameOverride: config.fullnameOverride ?? 'dstack-controller'}),
     image: config.image ? {pullPolicy: 'IfNotPresent', tag: '', ...config.image} : {...DSTACK_CONTROLLER_IMAGE},
-    ingress: {className: 'alb', enabled: false, ...config.ingress},
+    ingress: config.internalTls ? dstackInternalIngress(config.internalTls) : {className: 'alb', enabled: false, ...config.ingress},
     monitoring: {
       auth: {existingSecret: 'dstack-controller-monitoring', key: 'token', ...config.monitoring?.auth},
       enabled: config.monitoring?.enabled ?? true,
@@ -258,7 +264,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
 export function generateDstackMonitoringValues(config?: DstackControllerConfig): string | undefined {
   validateDstackControllerConfig(config)
   if (!config || config.enabled === false) return undefined
-  const namespace = config.monitoring?.namespace ?? 'dstack-system'
+  const namespace = config.monitoring?.namespace ?? 'default'
   const enabled = config.monitoring?.enabled ?? true
   const values = {
     dstack: {

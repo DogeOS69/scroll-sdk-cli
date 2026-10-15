@@ -1,3 +1,4 @@
+import {resolveCapacityManager} from './capacity-manager.js'
 import {reconcileEthereumRpcSecrets} from './ethereum-rpc-secrets.js'
 import {reconcileMonitoringSlack} from './monitoring-slack.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
@@ -343,6 +344,7 @@ function resolveImage(
  */
 export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
+  if (normalizedSpec.capacityManager) resolveCapacityManager(normalizedSpec)
   if (normalizedSpec.bridge.freshGenesisInit !== undefined && typeof normalizedSpec.bridge.freshGenesisInit !== 'boolean') {
     throw new TypeError('bridge.freshGenesisInit must be a boolean')
   }
@@ -357,6 +359,7 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   )) throw new Error('DeploymentSpec proof enforcement requires active real proving')
 
   const files: GeneratedValuesFiles = {}
+  if (normalizedSpec.capacityManager) files['capacity-manager-production.yaml'] = yaml.dump({image: normalizedSpec.capacityManager.image, prepared: false})
   if (normalizedSpec.monitoring?.slack?.enabled && !monitoringTemplate) throw new Error('Slack generation requires values/scroll-monitor-production.yaml in the output directory or the selected SDK templates')
   if (monitoringTemplate) {
     const monitor = yaml.load(monitoringTemplate) as Record<string, any> ?? {}
@@ -406,6 +409,9 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   files['frontends-production.yaml'] = generateFrontendsValues(normalizedSpec)
   files['frontends-config.yaml'] = generateFrontendsConfigValues(normalizedSpec)
   files['blockscout-production.yaml'] = generateBlockscoutValues(normalizedSpec)
+
+  // Standard EVM preinstalls run before the DogeOS contracts deployment.
+  files['preinstalls-production.yaml'] = generatePreinstallsValues(normalizedSpec)
 
   // Contracts deployment
   files['contracts-production.yaml'] = generateContractsValues(normalizedSpec)
@@ -878,7 +884,7 @@ export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string 
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
     repository: 'dogeos69/withdrawal-processor',
-    tag: spec.preparation?.bridge.production?.sequencerKms ? 'v0.3.0-beta.6-kms' : CORE_DOCKER_DEFAULT_TAG
+    tag: CORE_DOCKER_DEFAULT_TAG
   })
 
   const values: Record<string, any> = {
@@ -1562,4 +1568,21 @@ function generateContractsValues(spec: DeploymentSpec): string {
   }
 
   return yaml.dump(values)
+}
+
+/** Bind the SDK preinstalls template to the deployment RPC and deployer Secret. */
+function generatePreinstallsValues(spec: DeploymentSpec): string {
+  const externalSecrets = generateExternalSecrets(
+    'preinstalls-secret-env',
+    getSecretProviderConfig(spec),
+    [{property: 'PRIV_KEY', remoteKey: 'preinstalls-secret-env', secretKey: 'PRIV_KEY'}],
+  )
+  return yaml.dump({
+    configMaps: {'preinstalls-env': {data: {L2_RPC_ENDPOINT}}},
+    envFrom: [
+      {secretRef: {name: 'preinstalls-secret-env'}},
+      {configMapRef: {name: 'preinstalls-env'}},
+    ],
+    ...(externalSecrets && {externalSecrets}),
+  })
 }

@@ -5,14 +5,16 @@ import path from 'node:path'
 
 import type {ProofMaterialsV1} from '../types/proof-materials.js'
 import type {ProofProgramPublicationV1} from '../types/proof-program-publication.js'
+import type {ProofDeploymentContract} from './proof-deployment-contract.js'
 import type {ValidatedProofTopologyBundle} from './proof-topology-compiler.js'
 
 import {PROOF_PROGRAM_PUBLICATION_SCHEMA} from '../types/proof-program-publication.js'
 import {readProofArtifactStore} from './artifact-stores.js'
 import {readProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
+import {resolveContractFile} from './proof-deployment-contract.js'
 import {immutableProofImage, readProofMaterials} from './proof-materials.js'
-import {PROOF_PUBLICATION_FILES, readProofSoftwareRelease} from './proof-software-release.js'
+import {PROOF_PUBLICATION_FILES, proofFileHash, proofRegularFile, readProofSoftwareRelease} from './proof-software-release.js'
 import {validateProofTopologyBundle} from './proof-topology-compiler.js'
 
 export const DEFAULT_PROOF_PROGRAM_PUBLICATION_RECEIPT = '.data/proof-program-publication-v1.json'
@@ -166,13 +168,32 @@ function sourceMap(
   ])
 }
 
-function bundleId(files: BundleFile[]): string {
+function bundleId(files: Array<Pick<BundleFile, 'relativePath' | 'sha256' | 'sizeBytes'>>): string {
   const hash = crypto.createHash('sha256')
   for (const file of [...files].sort((a, b) => a.relativePath.localeCompare(b.relativePath))) {
     hash.update(`${file.relativePath}\0${file.sha256}\0${file.sizeBytes}\n`)
   }
 
   return hash.digest('hex')
+}
+
+/** Compare only the eleven published program/protocol objects, never runtime revision. */
+export function assertProofPublicationContent(root: string, contract: ProofDeploymentContract, materials: ProofMaterialsV1, publication: ProofProgramPublicationV1): void {
+  if (!publication.files || typeof publication.files !== 'object' || Array.isArray(publication.files)
+    || Object.keys(publication.files).length !== EXPECTED_BUNDLE_PATHS.size
+    || Object.keys(publication.files).some(name => !EXPECTED_BUNDLE_PATHS.has(name))) throw new Error('Publication content must bind exactly the eleven canonical program/protocol files')
+  const topology = validateProofTopologyBundle(resolveContractFile(root, contract.topology.bundleDir), {preflightOnly: false})
+  const sources = sourceMap(root, materials, topology)
+  const files = [...sources].map(([relativePath, source]) => {
+    const file = proofRegularFile(source)
+    const sha256 = proofFileHash(file)
+    const sizeBytes = fs.statSync(file).size
+    const published = publication.files[relativePath]
+    if (!published || published.sha256 !== sha256 || published.sizeBytes !== sizeBytes
+      || published.key !== `${publication.artifactStore?.keyPrefix}/${relativePath}`) throw new Error(`Publication content differs from selected material: ${relativePath}; republish the current program bundle`)
+    return {relativePath, sha256, sizeBytes}
+  })
+  if (publication.bundleId !== bundleId(files)) throw new Error('Publication content bundle ID does not match its program/protocol files')
 }
 
 function trimSlash(value: string): string {

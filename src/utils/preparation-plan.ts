@@ -6,32 +6,40 @@ import path from 'node:path'
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
+import {resolveCapacityManager} from './capacity-manager.js'
 import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
+import {validateDstackAwsBackend} from './dstack-credentials.js'
 import {usesDstackPostgres} from './dstack-database.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
+import {needsPreparationPolicy} from './preparation-cubesigner-policy.js'
+import {usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
+import {PREPARATION_STAGES, type PreparationStage, stageCommand, stagedPreparationSteps} from './preparation-stages.js'
 import {rentalEnvelope, resolveProofWorkers} from './proof-workers-config.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
+import {specDstackController, specKubernetesTarget} from './spec-kubernetes-target.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
-export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; title: string}
-export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
+export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; stage?: PreparationStage; title: string}
+export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1' | 'scrollsdk/preparation/v2'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
 export interface PreparationState {
+  completedStage?: PreparationStage
   currentStep?: string
   files: Record<string, string>
+  nextStage?: PreparationStage
   planId: string
-  status: 'failed' | 'pending' | 'prepared' | 'recovery-required' | 'running' | 'waiting'
+  status: 'failed' | 'pending' | 'prepared' | 'recovery-required' | 'running' | 'stage-complete' | 'waiting'
   steps: Record<string, 'completed' | 'failed' | 'recovery-required' | 'running'>
   waiting?: AwaitingInput['details']
 }
 export const WORKFLOW_DIR = '.scrollsdk'
-export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
+export function preparationSteps(spec: DeploymentSpec, staged = false): PreparationStep[] {
   const p = spec.preparation!
   const steps: PreparationStep[] = []
   const add = (id: string, title: string, effect: PreparationStep['effect'] = 'local', retry: PreparationStep['retry'] = 'safe') => steps.push({effect, id, retry, title})
@@ -53,9 +61,18 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
   add('bridge-prepare', 'Compute protocol seed from genesis')
   if (p.bridge.mode === 'production') {
     add('ethereum-anchor', 'Validate and bind the selected Ethereum DA anchor', 'read')
-    add('production-wallets', 'Wait for and verify sequencer and fee-wallet funding', 'read')
-    add('bridge-info', 'Derive the namespace and final Bridge address')
-    add('production-funding', 'Wait for and verify marked Bridge funding', 'read')
+    if (usesManagedHelper(spec)) {
+      add('managed-helper-prepare', 'Prepare helper distribution with independently managed Bridge public keys')
+      add('managed-helper-funding', 'Wait for and verify helper funding', 'read')
+      add('managed-helper-setup', 'Broadcast helper distribution transaction', 'chain', 'reconcile')
+      add('bridge-info', 'Derive the namespace and final Bridge address')
+      add('managed-helper-fund', 'Broadcast marked Bridge funding from helper outputs', 'chain', 'reconcile')
+      add('managed-helper-verify', 'Verify helper distribution and marked Bridge funding', 'read')
+    } else {
+      add('production-wallets', 'Wait for and verify sequencer and fee-wallet funding', 'read')
+      add('bridge-info', 'Derive the namespace and final Bridge address')
+      add('production-funding', 'Wait for and verify marked Bridge funding', 'read')
+    }
   } else {
     add('helper-funding', 'Wait for and verify test-helper funding', 'read')
     add('helper-setup', 'Broadcast test-helper setup transaction', 'chain', 'reconcile')
@@ -63,6 +80,7 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
     add('helper-fund', 'Broadcast test-helper Bridge/deposit-seed transactions', 'chain', 'reconcile')
   }
 
+  if (staged && needsPreparationPolicy(spec)) add('cubesigner-policy-build', 'Export the release CubeSigner policy Wasm for governance review')
   add('protocol-context', 'Generate canonical protocol context')
   add('external-inputs', 'Import declared external runtime and policy inputs')
   if (p.proofRelease) {
@@ -81,7 +99,8 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
   add('secrets', 'Generate private runtime Secrets')
   if (spec.proofTopology?.enforcement === 'enforce') {
     add('deployment-kit', 'Export the signer deployment kit')
-    add('deployment-kit-published', 'Wait for the deployment kit publication record')
+    if (p.deploymentKitPublication?.mode === 's3') add('deployment-kit-published', 'Publish and verify the signer deployment kit in the selected S3 bucket', 'cloud')
+    else add('deployment-kit-published', 'Wait for the deployment kit publication record')
   }
 
   add('proof-check', 'Validate proof configuration and required evidence')
@@ -91,10 +110,15 @@ export function preparationSteps(spec: DeploymentSpec): PreparationStep[] {
     add('proof-workers-intent', `GPU capacity declared for separate proof-workers apply: ${workers.count} x ${workers.gpu}, ${workers.maxDurationHours}h, USD ${rentalEnvelope(workers)} rental envelope (no allocation now)`)
   }
 
-  return steps
+  if (spec.capacityManager) add('capacity-manager', 'Prepare Core capacity-manager values for separate Helm installation (no allocation now)')
+
+  return staged ? stagedPreparationSteps(steps) : steps
 }
 
 export function validatePreparation(spec: DeploymentSpec): void {
+  if (spec.capacityManager) resolveCapacityManager(spec)
+  specKubernetesTarget(spec)
+  specDstackController(spec)
   feeVaultRecipientHash(spec.contracts?.feeVaultDogeRecipientAddress ?? '', spec.dogecoin.network)
   const p = spec.preparation
   if (spec.proofWorkers) {
@@ -104,6 +128,10 @@ export function validatePreparation(spec: DeploymentSpec): void {
 
   specAwsSecretPrefix(spec)
   if (!p) throw new Error('preparation is required for setup plan; plain generate-from-spec remains available')
+  if (p.tsoAlbEdge && typeof p.tsoAlbEdge.enabled !== 'boolean') throw new Error('tsoAlbEdge.enabled must be boolean')
+  if (p.tsoAlbEdge?.enabled && (!spec.infrastructure.aws?.region || !spec.infrastructure.aws.eksClusterName || !specKubernetesTarget(spec).kubeContext)) throw new Error('tsoAlbEdge requires explicit AWS region, EKS cluster and Kubernetes context')
+  if (p.deploymentKitPublication && !['manual', 's3'].includes(p.deploymentKitPublication.mode)) throw new Error('deploymentKitPublication.mode must be manual or s3')
+  if (p.deploymentKitPublication?.mode === 's3' && (spec.proofTopology?.enforcement !== 'enforce' || !spec.proofArtifacts?.s3?.bucket)) throw new Error('S3 deployment kit publication requires enforcing proof topology and a selected proof artifacts bucket')
   if (!['helper', 'production'].includes(p.bridge?.mode)) throw new Error('preparation.bridge.mode must explicitly select production or helper')
   if (p.bridge.mode !== 'production' && p.bridge.production) throw new Error('Production Bridge inputs require preparation.bridge.mode: production')
   if (!p.bridge.image?.includes('@sha256:')) throw new Error('preparation.bridge.image must select an immutable bridge-genesis-tools digest')
@@ -127,13 +155,14 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.proofAws?.action === 'create' && (p.proofAws.coordinatorRoleName || p.proofAws.withdrawalRoleName)) throw new Error('Existing role names require proofAws.action: reuse')
   if (p.proofAws && !['direct-s3', 'existing-gateway', 'existing-public-s3'].includes(p.proofAws.publicReadMode)) throw new Error('Invalid proof public-read mode')
   if (p.secretUpload?.provider === 'aws' && !p.secretUpload.awsRegion && !spec.infrastructure.aws?.region) throw new Error('AWS Secret upload requires an explicit region in secretUpload or infrastructure.aws')
-  if (p.secretUpload && spec.dstackController?.enabled !== false && spec.dstackController && !p.secretUpload.kubeContext) throw new Error('Dstack Secret upload requires an explicit Kubernetes context')
+  if (p.secretUpload && spec.dstackController?.enabled !== false && spec.dstackController && !specKubernetesTarget(spec).kubeContext) throw new Error('Dstack Secret upload requires an explicit Kubernetes context')
   if (p.proofAws?.publicReadMode === 'existing-gateway' && !p.proofAws.publicEndpointUrl) throw new Error('Existing proof gateway requires publicEndpointUrl')
   if ((p.proofMaterials.mode !== 'existing' || p.proofMaterials.receipt) && resolveSpecProofStorage(spec).proofTopology?.active?.artifactStore.kind !== 's3_compatible') throw new Error('Topology derived from a material receipt requires the declared S3 proof artifact store')
   if (p.secretUpload && !['aws', 'vault'].includes(p.secretUpload.provider)) throw new Error('Secret upload provider must be aws or vault')
   if (spec.dstackController && spec.dstackController.enabled !== false && !p.dstack) throw new Error('Enabled dstack requires preparation.dstack with explicit import or external credentials mode')
   if (p.dstack && !['external', 'import'].includes(p.dstack.mode)) throw new Error('Dstack preparation mode must be import or external')
   if (p.dstack?.mode === 'import' && (!p.dstack.providers?.length || p.dstack.providers.includes('vastai') && !p.dstack.vastaiApiKeyFile && !p.dstack.vastaiApiKeyEnv || p.dstack.providers.includes('gcp') && !p.dstack.gcpServiceAccountFile)) throw new Error('Dstack import requires providers and their credential file or environment references')
+  if (p.dstack?.mode === 'import' && p.dstack.providers?.includes('aws')) validateDstackAwsBackend(p.dstack.aws)
   if (p.dstack?.vastaiApiKeyEnv && !/^[A-Z_a-z]\w*$/.test(p.dstack.vastaiApiKeyEnv)) throw new Error('Dstack vastaiApiKeyEnv must name an environment variable')
   if (p.dstack?.vastaiApiKeyEnv && p.dstack.vastaiApiKeyFile) throw new Error('Choose vastaiApiKeyEnv or vastaiApiKeyFile, not both')
   if (p.dstack?.databaseUrlEnv && !/^[A-Z_a-z]\w*$/.test(p.dstack.databaseUrlEnv)) throw new Error('Dstack databaseUrlEnv must name an environment variable')
@@ -141,7 +170,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (usesDstackPostgres(spec.dstackController) && !p.dstack?.initializeDatabase && !p.dstack?.databaseUrlEnv) throw new Error('PostgreSQL dstack requires initializeDatabase or databaseUrlEnv')
   if (p.dstack?.initializeDatabase !== undefined && typeof p.dstack.initializeDatabase !== 'boolean') throw new Error('initializeDatabase must be boolean')
   if (p.dstack && (!spec.dstackController || spec.dstackController.enabled === false)) throw new Error('Dstack preparation requires an enabled dstackController')
-  if (p.dstack?.providers?.some(provider => !['gcp', 'vastai'].includes(provider))) throw new Error('Unsupported dstack credential provider')
+  if (p.dstack?.providers?.some(provider => !['aws', 'gcp', 'vastai'].includes(provider))) throw new Error('Unsupported dstack credential provider')
   if (p.proofAws && (!spec.infrastructure.aws?.eksClusterName || !spec.infrastructure.aws.region)) throw new Error('Proof AWS provisioning requires an existing EKS cluster and region')
   if (p.bridge.mode === 'helper' && !spec.bridge.seedString?.trim()) throw new Error('Test-helper preparation requires bridge.seedString')
   if (p.bridge.mode === 'helper' && (spec.dogecoin.network === 'mainnet' || spec.metadata.environment === 'mainnet')) throw new Error('The deterministic helper is test-only; choose production Bridge preparation')
@@ -152,6 +181,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
 
     const policy = p.bridge.production
     if (!policy) throw new Error('preparation.bridge.production must declare independently managed Dogecoin wallets and recovery keys')
+    if (policy.funding !== undefined && !['external', 'helper'].includes(policy.funding)) throw new Error('production.funding must be helper or external')
     const anchor = policy.ethereumAnchor
     if (anchor?.blockTag !== undefined) {
       if (anchor.blockTag !== 'finalized' || anchor.blockNumber !== undefined || anchor.transactionIndex !== undefined) throw new Error('Use ethereumAnchor.blockTag: finalized alone, or explicit blockNumber and transactionIndex')
@@ -191,11 +221,15 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.bridge.fundingFile && !p.bridge.fundingFile.startsWith('.scrollsdk/inputs/')) throw new Error('Funding input must live under .scrollsdk/inputs/')
 }
 
+function operatorEditableArtifact(relative: string): boolean {
+  return relative === 'Makefile' || /^values\/.*\.ya?ml$/.test(relative)
+}
+
 function fingerprint(root: string): Record<string, string> {
   const files: Record<string, string> = {}
   const visit = (relative: string): void => {
     const file = localPath(root, relative)
-    if (!fs.existsSync(file) || relative === '.data/contracts-build') return
+    if (!fs.existsSync(file) || relative === '.data/contracts-build' || operatorEditableArtifact(relative)) return
     const stat = fs.lstatSync(file)
     if (stat.isDirectory()) for (const name of fs.readdirSync(file).sort()) visit(`${relative}/${name}`)
     else if (stat.isFile()) files[relative] = digest(fs.readFileSync(file))
@@ -203,11 +237,11 @@ function fingerprint(root: string): Record<string, string> {
   }
 
   const kits = fs.readdirSync(root).filter(name => DEPLOYMENT_KIT_DIRECTORY.test(name)).sort()
-  for (const name of ['config.toml', 'config-contracts.toml', 'Makefile', '.data', 'values', 'secrets', 'withdrawal-processor', 'proof-coordinator', 'eth-da-submitter', ...kits]) visit(name)
+  for (const name of ['genesis.json', 'genesis.yaml', 'config.toml', 'config-contracts.toml', 'Makefile', '.data', 'values', 'secrets', 'withdrawal-processor', 'proof-coordinator', 'eth-da-submitter', ...kits]) visit(name)
   return files
 }
 
-export async function createPreparationPlan(options: {envFile?: string; output: string; sdkDirectory: string; spec: string}): Promise<PreparationPlan> {
+export async function createPreparationPlan(options: {envFile?: string; output: string; sdkDirectory: string; spec: string; staged?: boolean}): Promise<PreparationPlan> {
   const envFile = options.envFile ? path.resolve(options.envFile) : undefined
   loadPreparationEnv(envFile)
   let spec: DeploymentSpec
@@ -219,6 +253,8 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   // Reject a missing/invalid withdrawal destination before SDK lookup, CubeSigner
   // authentication or proof-release downloads. Apply rechecks it on saved plans.
   feeVaultRecipientHash(spec.contracts?.feeVaultDogeRecipientAddress ?? '', spec.dogecoin.network)
+  // Persist the choice in new plans. Previously saved plans keep their original funding path.
+  if (spec.preparation?.bridge.mode === 'production' && spec.preparation.bridge.production) spec.preparation.bridge.production.funding ??= 'helper'
   spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
   spec = resolveCubesignerIdentity(spec)
   spec = await resolvePreparationProofRelease(spec, options.output)
@@ -229,13 +265,13 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   const root = path.resolve(options.output)
   if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw new Error('Deployment root cannot be a symlink')
   const specText = JSON.stringify(spec, null, 2) + '\n'
-  const body = {...(envFile ? {envFile} : {}), deploymentName: spec.metadata.name, schema: 'scrollsdk/preparation/v1' as const, sdkDirectory: fs.realpathSync(options.sdkDirectory), specHash: digest(specText), steps: preparationSteps(spec)}
+  const body = {...(envFile ? {envFile} : {}), deploymentName: spec.metadata.name, schema: options.staged ? 'scrollsdk/preparation/v2' as const : 'scrollsdk/preparation/v1' as const, sdkDirectory: fs.realpathSync(options.sdkDirectory), specHash: digest(specText), steps: preparationSteps(spec, options.staged)}
   const plan = {...body, id: digest(JSON.stringify(body))}
   const directory = path.join(root, WORKFLOW_DIR)
   if (fs.existsSync(path.join(directory, 'state.json'))) {
     const current = JSON.parse(fs.readFileSync(path.join(directory, 'plan.json'), 'utf8')) as PreparationPlan
     if (current.id === plan.id) return current
-    throw new Error('An existing preparation plan is immutable; supply external inputs and rerun apply, or choose a new deployment directory for a different spec')
+    throw new Error('An existing preparation plan is immutable; supply external inputs and rerun the same preparation command, or choose a new deployment directory for a different spec')
   }
 
   if (fs.existsSync(root) && fs.readdirSync(root).length > 0) throw new Error('setup plan requires an empty output directory')
@@ -244,7 +280,7 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   privateWrite(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
   privateWrite(path.join(directory, 'intent.json'), specText)
   writeJson(path.join(directory, 'plan.json'), plan)
-  writeJson(path.join(directory, 'state.json'), {files: {}, planId: plan.id, status: 'pending', steps: {}} satisfies PreparationState)
+  writeJson(path.join(directory, 'state.json'), {files: {}, ...(options.staged ? {nextStage: 'genesis' as const} : {}), planId: plan.id, status: 'pending', steps: {}} satisfies PreparationState)
   return plan
 }
 
@@ -259,31 +295,59 @@ const SIGNER_HANDOFF_STEPS = new Set(['charts-validated', 'signer-policy', 'sign
  */
 export function migrateSignerHandoffSteps(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
   if (!plan.steps.some(step => SIGNER_HANDOFF_STEPS.has(step.id))) return plan
-  const kitSteps = preparationSteps(spec).filter(step => step.id === 'deployment-kit' || step.id === 'deployment-kit-published')
-  const steps = plan.steps.flatMap(step => step.id === 'signer-policy' ? kitSteps : SIGNER_HANDOFF_STEPS.has(step.id) ? [] : [step])
+  const staged = plan.schema === 'scrollsdk/preparation/v2'
+  const current = preparationSteps(spec, staged)
+  const kitSteps = current.filter(step => step.id === 'deployment-kit' || step.id === 'deployment-kit-published')
+  const steps = plan.steps.flatMap(step => {
+    if (step.id === 'signer-policy') return kitSteps
+    if (staged && step.id === 'charts-validated') return current.filter(item => item.id === 'render-final')
+    return SIGNER_HANDOFF_STEPS.has(step.id) ? [] : [step]
+  })
   const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
   delete body.id
   return {...body, id: digest(JSON.stringify(body))}
 }
 
+/** Add only the local policy export to older staged plans, preserving every existing step. */
+export function migratePolicyBuildStep(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
+  if (plan.schema !== 'scrollsdk/preparation/v2' || !needsPreparationPolicy(spec) || plan.steps.some(step => step.id === 'cubesigner-policy-build')) return plan
+  const current = preparationSteps(spec, true)
+  if (JSON.stringify(current.filter(step => step.id !== 'cubesigner-policy-build')) !== JSON.stringify(plan.steps)) return plan
+  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps: current}
+  delete next.id
+  return {...next, id: digest(JSON.stringify(next))}
+}
+
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
-export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean} = {}): Promise<PreparationState> {
+export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage} = {}): Promise<PreparationState> {
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
   const root = fs.realpathSync(rootInput)
   const directory = localPath(root, WORKFLOW_DIR)
   let plan = JSON.parse(fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/plan.json`), 'utf8')) as PreparationPlan
   const text = fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/intent.json`), 'utf8')
   const {id, ...body} = plan
-  if (plan.schema !== 'scrollsdk/preparation/v1' || digest(JSON.stringify(body)) !== id || digest(text) !== plan.specHash) throw new Error('Preparation plan or frozen intent changed')
+  if (!['scrollsdk/preparation/v1', 'scrollsdk/preparation/v2'].includes(plan.schema) || digest(JSON.stringify(body)) !== id || digest(text) !== plan.specHash) throw new Error('Preparation plan or frozen intent changed')
   loadPreparationEnv(plan.envFile)
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
-  const migrated = migrateSignerHandoffSteps(plan, spec)
-  if (JSON.stringify(preparationSteps(spec)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
+  const staged = plan.schema === 'scrollsdk/preparation/v2'
+  const migrated = migratePolicyBuildStep(migrateSignerHandoffSteps(plan, spec), spec)
+  if (JSON.stringify(preparationSteps(spec, staged)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
   // A migration interrupted after writing state.json leaves state on the migrated id.
   if (state.planId !== id && state.planId !== migrated.id) throw new Error('Workflow state does not match plan')
+  if (options.stage && !staged) throw new Error('Stage commands require a new staged plan; resume this legacy plan with setup apply')
+  if (staged && !options.stage && (state.status !== 'prepared' || migrated.id !== id)) throw new Error(`Select a preparation stage: ${stageCommand(migrated.steps.find(step => state.steps[step.id] !== 'completed')?.stage ?? 'genesis', root)}`)
+  if (staged && options.refreshRuntime) throw new Error('Runtime refresh is a legacy apply operation; it is not a staged deployment operation')
+  if (options.stage) {
+    const index = PREPARATION_STAGES.indexOf(options.stage)
+    if (index < 0) throw new Error('Unknown preparation stage')
+    const missing = migrated.steps.find(step => PREPARATION_STAGES.indexOf(step.stage!) < index && state.steps[step.id] !== 'completed')
+    if (missing) throw new Error(`Prerequisite ${missing.stage} is incomplete. Run ${stageCommand(missing.stage!, root)}`)
+  }
+
+  if (staged) state.nextStage = migrated.steps.find(step => state.steps[step.id] !== 'completed')?.stage
   const lock = path.join(directory, 'apply.lock')
   // Never steal an ambiguous lock. An interrupted process leaves an explicit recovery record.
   let fd: number
@@ -293,19 +357,27 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     if (migrated.id !== id) {
       // State first, then the plan: a crash between them is recovered on the next run.
       for (const step of SIGNER_HANDOFF_STEPS) delete state.steps[step]
+      // Recheck the new publication evidence when a staged deployment renders.
+      if (staged && spec.proofTopology?.enforcement === 'enforce') delete state.steps['proof-check']
       state.planId = migrated.id
       writeJson(statePath, state)
       writeJson(localPath(root, `${WORKFLOW_DIR}/plan.json`), migrated)
       plan = migrated
     }
 
-    for (const [file, hash] of Object.entries(state.files)) if (!fs.existsSync(localPath(root, file)) || digest(fs.readFileSync(localPath(root, file))) !== hash) throw new Error(`Prepared artifact changed outside the workflow: ${file}`)
+    for (const [file, hash] of Object.entries(state.files)) {
+      // Also release hashes recorded by older CLI versions.
+      if (operatorEditableArtifact(file)) {delete state.files[file]; continue}
+      if (!fs.existsSync(localPath(root, file)) || digest(fs.readFileSync(localPath(root, file))) !== hash) throw new Error(`Prepared artifact changed outside the workflow: ${file}`)
+    }
+
     if (options.refreshRuntime) {
       refreshPreparationRuntime(root, plan, state, spec, options.dogecoinRoutingSpec)
       state.files = fingerprint(root); writeJson(statePath, state)
     }
 
     for (const step of plan.steps) {
+      if (options.stage && step.stage !== options.stage) continue
       if (state.steps[step.id] === 'completed') continue
       if (state.steps[step.id] === 'recovery-required' || state.steps[step.id] === 'running' && step.retry === 'reconcile') {
         state.status = 'recovery-required'; state.currentStep = step.id
@@ -314,7 +386,8 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       }
 
       progress(step)
-      state.status = 'running'; state.currentStep = step.id; delete state.waiting
+      state.status = 'running'; state.currentStep = step.id; delete state.waiting; delete state.completedStage
+      if (staged) state.nextStage = step.stage
       state.steps[step.id] = 'running'; writeJson(statePath, state)
       try {
         await runner.run(step, spec, root, plan)
@@ -336,7 +409,13 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       state.files = fingerprint(root); writeJson(statePath, state)
     }
 
-    state.status = 'prepared'; delete state.currentStep; delete state.waiting
+    state.status = plan.steps.every(step => state.steps[step.id] === 'completed') ? 'prepared' : 'stage-complete'
+    if (options.stage) {
+      state.completedStage = options.stage
+      state.nextStage = plan.steps.find(step => state.steps[step.id] !== 'completed')?.stage
+    }
+
+    delete state.currentStep; delete state.waiting
     writeJson(statePath, state)
     return state
   } finally {fs.unlinkSync(lock)}

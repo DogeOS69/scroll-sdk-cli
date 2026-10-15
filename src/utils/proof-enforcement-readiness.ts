@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import type {DogeConfig} from '../types/doge-config.js'
+import type {ProofProgramPublicationV1} from '../types/proof-program-publication.js'
 import type {PolicyReceiptReference} from './cubesigner-policy-receipts.js'
 import type {ProofDeploymentContract} from './proof-deployment-contract.js'
 
@@ -9,6 +10,7 @@ import {resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {deploymentKitBlockers} from './deployment-kit-record.js'
 import {readProofAwsConfig} from './proof-aws-config.js'
 import {readProofMaterials} from './proof-materials.js'
+import {assertProofPublicationContent} from './proof-program-publication.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
 function pinnedJson(root: string, reference: PolicyReceiptReference): Record<string, unknown> {
@@ -31,9 +33,9 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
   if (bindings.publication) {
     try {
       const publication = pinnedJson(root, bindings.publication)
+      // Runtime topology revisions are not a publication integrity boundary.
       if (publication.schema !== 'scrollsdk/proof-program-publication/v1'
-        || publication.proofTopologyBundleRevision !== contract.topology.bundleRevision
-        || publication.coreRevision !== materials.software.sourceRevisions?.dogeosCore) throw new Error('Publication release/topology mismatch')
+        || publication.coreRevision !== materials.software.sourceRevisions?.dogeosCore) throw new Error('Publication release mismatch')
       if (contract.artifactStoreReceipt) {
         const {config: aws} = readProofAwsConfig(root, contract.artifactStoreReceipt.path)
         const store = publication.artifactStore as Record<string, unknown>
@@ -42,6 +44,7 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
 
       const verification = publication.verification as Record<string, unknown> | undefined
       if (verification?.anonymousHttpReadback !== 'passed' || verification?.authenticatedS3Readback !== 'passed') throw new Error('Publication readback evidence is incomplete')
+      assertProofPublicationContent(root, contract, materials, publication as unknown as ProofProgramPublicationV1)
     } catch (error) { blockers.push(String(error)) }
   }
   else {blockers.push('Program-publication receipt is not bound to the deployment contract')}

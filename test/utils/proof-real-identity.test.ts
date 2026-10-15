@@ -158,6 +158,44 @@ describe('real bake worker identity import', () => {
     expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('explicit CubeSigner policy mode')
   })
 
+  it('allows runtime topology changes while retaining publication digest, release and readback checks', () => {
+    const prepared = prepareProofMaterials(fixture(root).options)
+    const file = path.join(root, 'publication.json')
+    const publication = {
+      coreRevision: 'c'.repeat(40), proofTopologyBundleRevision: 'old-runtime-topology',
+      schema: 'scrollsdk/proof-program-publication/v1',
+      verification: {anonymousHttpReadback: 'passed', authenticatedS3Readback: 'passed'},
+    }
+    const contract = {
+      enforcement: 'enforce', generation: 'real',
+      inputs: {materials: {path: prepared.receiptPath}, protocolContext: {sha256: hash('{}')}, publication: {path: 'publication.json', sha256: ''}},
+      mode: 'active', topology: {bundleRevision: 'new-runtime-topology'}, worker: {enabled: true},
+    } as ProofDeploymentContract
+    const config = {cubesigner: {mode: 'transport_only', roles: []}, network: 'testnet'} as unknown as DogeConfig
+    const save = () => {
+      const content = JSON.stringify(publication)
+      fs.writeFileSync(file, content)
+      contract.inputs!.publication!.sha256 = hash(content)
+    }
+
+    save()
+    const original = proofEnforcementReadiness(root, contract, config)
+    // Other missing deployment evidence still blocks readiness.
+    expect(original.ready).to.equal(false)
+    // This intentionally minimal receipt now lacks the canonical content evidence.
+    expect(original.blockers.join(' ')).to.include('Publication content must bind exactly')
+    expect(original.blockers.some(item => /revision|Evidence digest/.test(item))).to.equal(false)
+    fs.appendFileSync(file, ' ')
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('Evidence digest mismatch')
+    publication.coreRevision = 'd'.repeat(40)
+    save()
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('Publication release mismatch')
+    publication.coreRevision = 'c'.repeat(40)
+    publication.verification.anonymousHttpReadback = 'failed'
+    save()
+    expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('Publication readback evidence is incomplete')
+  })
+
   it('preserves the real bundle through receipt reload and selects it as the compiler input', () => {
     const input = fixture(root)
     const prepared = prepareProofMaterials(input.options)

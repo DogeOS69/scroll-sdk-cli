@@ -9,10 +9,13 @@ import {loadPreparationEnv} from './preparation-io.js'
 
 /** All provider endpoints are private, even when today's value is a public URL. */
 export const ETHEREUM_RPC_PLACEHOLDER = 'http://ethereum-rpc.invalid'
+export const DOGECOIN_RPC_CREDENTIAL_PLACEHOLDER = 'provided-by-runtime-secret'
 export const ETHEREUM_BEACON_PLACEHOLDER = 'http://ethereum-beacon.invalid'
 export const FEE_ORACLE_RPC_DEFAULT = 'https://ethereum-rpc.publicnode.com'
 
-export const ETHEREUM_RPC_KEYS: Record<string, Record<string, 'beacon' | 'execution' | 'fees'>> = {
+// PC's existing RPC Secret also owns Dogecoin auth, so rotating cluster RPC
+// credentials does not require baking a new proof-topology bundle.
+export const ETHEREUM_RPC_KEYS: Record<string, Record<string, 'beacon' | 'dogecoinPassword' | 'dogecoinUser' | 'execution' | 'fees'>> = {
   'eth-da-submitter': {DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: 'execution'},
   'fee-oracle': {DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL: 'fees'},
   'l1-interface': {
@@ -20,6 +23,8 @@ export const ETHEREUM_RPC_KEYS: Record<string, Record<string, 'beacon' | 'execut
     DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL: 'execution',
   },
   'proof-coordinator': {
+    DOGEOS_PROOF_COORDINATOR_MATERIALIZER__BRIDGE__DOGECOIN_RPC__PASS: 'dogecoinPassword',
+    DOGEOS_PROOF_COORDINATOR_MATERIALIZER__BRIDGE__DOGECOIN_RPC__USER: 'dogecoinUser',
     DOGEOS_PROOF_COORDINATOR_MATERIALIZER__BRIDGE__ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: 'beacon',
     DOGEOS_PROOF_COORDINATOR_MATERIALIZER__BRIDGE__ETHEREUM_DA__L1_RPC_URL: 'execution',
     DOGEOS_PROOF_COORDINATOR_MATERIALIZER__SCROLL_BATCH__SUBPROCESS__ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL: 'beacon',
@@ -126,7 +131,22 @@ export function ethereumRpcSecretLines(service: string, config: DogeConfig, sele
       ? {beacon: 'http://l1-devnet-lighthouse:5052', execution: 'http://l1-devnet:8545'}
       : {beacon: 'https://ethereum-sepolia-beacon-api.publicnode.com', execution: 'https://ethereum-sepolia-rpc.publicnode.com'}
   const sources = {beacon: config.ethereumDa?.beaconRpcUrl ?? defaults.beacon, execution: config.ethereumDa?.submitterRpcUrl ?? defaults.execution, fees: config.feeOracle?.ethereumRpcUrl ?? FEE_ORACLE_RPC_DEFAULT}
-  return Object.entries(keys).filter(([key]) => selectedKeys === undefined || selectedKeys.includes(key)).map(([key, source]) => `${key}=${JSON.stringify(resolveEthereumRpc(sources[source], `Ethereum ${source} RPC`))}\n`).join('')
+  return Object.entries(keys).filter(([key]) => selectedKeys === undefined || selectedKeys.includes(key)).map(([key, source]) => {
+    if (source === 'dogecoinUser' || source === 'dogecoinPassword') {
+      const field = source === 'dogecoinUser' ? 'username' : 'password'
+      const value = config.dogecoinClusterRpc?.[field]
+      if (typeof value !== 'string' || !value) throw new Error(`Dogecoin cluster RPC ${field} is required (value omitted)`)
+      const names = [...value.matchAll(/\$ENV:(\w+)/g)].map(match => match[1])
+      if (names.some(name => !process.env[name])) loadPreparationEnv(savedDeploymentEnvFile(process.cwd()), names)
+      const resolved = value.replaceAll(/\$ENV:(\w+)/g, (_, name: string) => {
+        if (!process.env[name]) throw new Error(`Set ${name} in private deployment.env`)
+        return process.env[name]!
+      })
+      return `${key}=${JSON.stringify(resolved)}\n`
+    }
+
+    return `${key}=${JSON.stringify(resolveEthereumRpc(sources[source], `Ethereum ${source} RPC`))}\n`
+  }).join('')
 }
 
 /** Sanitize the compiler's native input before it can be embedded in a bundle. */
@@ -144,6 +164,16 @@ export function sanitizeEthereumRpcToml(source: string): string {
 
       if (key === 'ethereum' && value.rpc_url !== undefined && value.rpc_url !== ETHEREUM_RPC_PLACEHOLDER) {value.rpc_url = ETHEREUM_RPC_PLACEHOLDER; changed = true}
       visit(value)
+    }
+  }
+
+  // The coordinator consumes the same runtime Dogecoin credentials as WP/L1.
+  // Never preserve an old password inside a compiler input or ConfigMap.
+  const dogecoin = parsed.materializer?.bridge?.dogecoin_rpc
+  if (dogecoin) for (const field of ['user', 'pass']) {
+    if (dogecoin[field] !== undefined && dogecoin[field] !== DOGECOIN_RPC_CREDENTIAL_PLACEHOLDER) {
+      dogecoin[field] = DOGECOIN_RPC_CREDENTIAL_PLACEHOLDER
+      changed = true
     }
   }
 

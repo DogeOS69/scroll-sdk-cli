@@ -13,11 +13,14 @@ import type {PreparationPlan} from '../../src/utils/preparation-plan.js'
 import {ExportDeploymentKitCommand} from '../../src/commands/setup/export-deployment-kit.js'
 import {writeDeploymentKit} from '../../src/utils/deployment-kit.js'
 import {deploymentKitBlockers, recordDeploymentKitPublication, withoutPendingDeploymentKit} from '../../src/utils/deployment-kit-record.js'
-import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from '../../src/utils/preparation-deployment-kit.js'
+import {awaitDeploymentKitPublication, exportPreparationDeploymentKit, publishPreparationDeploymentKit} from '../../src/utils/preparation-deployment-kit.js'
 import {AwaitingInput} from '../../src/utils/preparation-io.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 import {writeProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
+import {proofEnforcementReadiness} from '../../src/utils/proof-enforcement-readiness.js'
+import {readProofMaterials} from '../../src/utils/proof-materials.js'
 import {
+  assertProofPublicationContent,
   planProofProgramPublication,
   publishProofProgramBundle,
 } from '../../src/utils/proof-program-publication.js'
@@ -60,6 +63,7 @@ describe('real-proof program bundle publication', () => {
   let publisherInvocation: {args: string[]; env?: NodeJS.ProcessEnv} | undefined
 
   beforeEach(() => {
+    publisherInvocation = undefined
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-program-publication-'))
     core = path.join(root, 'core')
     published = new Map()
@@ -216,6 +220,62 @@ describe('real-proof program bundle publication', () => {
     proofAwsConfig: '.data/proof-aws.json',
     run,
     topologyBundle: '.data/generated/proof-topology',
+  })
+
+  it('accepts unchanged published content across a valid runtime topology revision and rejects changed program material', async () => {
+    const result = await publishProofProgramBundle({...common(), anonymousRead: async url => published.get(url)!, output: '.data/publication.json'})
+    const contract = {
+      generation: 'real', inputs: {materials: {path: common().materialsReceipt}, protocolContext: {sha256: '0'.repeat(64)}, publication: {path: '.data/publication.json', sha256: digest(fs.readFileSync(result.receiptPath))}},
+      mode: 'active', topology: {bundleDir: common().topologyBundle, bundleRevision: 'different-runtime-revision'}, worker: {enabled: true},
+    } as any
+    const config = {cubesigner: {mode: 'transport_only', roles: []}, network: 'testnet'} as unknown as DogeConfig
+    const check = () => proofEnforcementReadiness(root, contract, config).blockers.filter(item => /Publication|topology bundle/.test(item))
+    expect(check()).to.deep.equal([])
+    fs.appendFileSync(path.join(root, common().topologyBundle, 'withdrawal-processor.toml'), '\n# changed runtime endpoint\n')
+    rebindProofTopologyBundleRevision(path.join(root, common().topologyBundle))
+    expect(check()).to.deep.equal([])
+    const tag5 = path.join(root, common().topologyBundle, 'materials/program-manifests/l2-range-aggregation-topology-program.json')
+    fs.appendFileSync(tag5, '\nchanged program identity\n')
+    rebindProofTopologyBundleRevision(path.join(root, common().topologyBundle))
+    expect(check().join(' ')).to.include('Publication content differs from selected material: bridge/l2-range-aggregation-topology-program.json')
+  })
+
+  it('checks every canonical program/protocol file and the receipt object mapping and bundle ID', async () => {
+    const plan = planProofProgramPublication(common())
+    const result = await publishProofProgramBundle({...common(), anonymousRead: async url => published.get(url)!, output: '.data/publication.json'})
+    const materials = readProofMaterials(path.join(root, common().materialsReceipt), root)
+    const contract = {topology: {bundleDir: common().topologyBundle}} as any
+    const check = () => assertProofPublicationContent(root, contract, materials, result.receipt)
+    expect(check).not.to.throw()
+    for (const file of plan.files) {
+      const original = fs.readFileSync(file.source)
+      fs.appendFileSync(file.source, '\nchanged\n')
+      rebindProofTopologyBundleRevision(path.join(root, common().topologyBundle))
+      expect(check, file.relativePath).to.throw()
+      fs.writeFileSync(file.source, original)
+      rebindProofTopologyBundleRevision(path.join(root, common().topologyBundle))
+      expect(check, file.relativePath).not.to.throw()
+    }
+
+    const key = 'chunk/app.vmexe'
+    const entry = structuredClone(result.receipt.files[key])
+    result.receipt.files[key].key = 'wrong/object'
+    expect(check).to.throw('Publication content differs')
+    result.receipt.files[key] = entry
+    result.receipt.bundleId = '0'.repeat(64)
+    expect(check).to.throw('Publication content bundle ID')
+    result.receipt.bundleId = plan.bundleId
+    delete result.receipt.files[key]
+    expect(check).to.throw('exactly the eleven')
+  })
+
+  it('refuses publication source paths through a symlinked material directory', async () => {
+    const result = await publishProofProgramBundle({...common(), anonymousRead: async url => published.get(url)!, output: '.data/publication.json'})
+    const materials = readProofMaterials(path.join(root, common().materialsReceipt), root)
+    const directory = path.dirname(path.join(root, materials.software.artifacts!.chunkAppExe.path))
+    fs.renameSync(directory, `${directory}-original`)
+    fs.symlinkSync(`${directory}-original`, directory, 'dir')
+    expect(() => assertProofPublicationContent(root, {topology: {bundleDir: common().topologyBundle}} as any, materials, result.receipt)).to.throw('symlink')
   })
 
   it('plans a content-addressed 11-file release without calling the publisher', () => {
@@ -529,14 +589,15 @@ describe('real-proof program bundle publication', () => {
     }
   })
 
-  it('runs the two setup apply kit steps through the runner: wait, record, then resume as a no-op', async () => {
+  for (const staged of [false, true]) it(`runs kit steps through the ${staged ? 'proof-materials stage' : 'legacy apply'} runner: wait, record, then resume as a no-op`, async () => {
     deploymentKitFixture()
     const runner = new CommandPreparationRunner(async () => {throw new Error('no CLI subprocess for kit steps')})
-    const step = (id: string) => ({effect: 'local' as const, id, retry: 'safe' as const, title: id})
+    const step = (id: string) => ({effect: 'local' as const, id, retry: 'safe' as const, ...(staged ? {stage: 'proof-materials' as const} : {}), title: id})
     const run = async (id: string) => {try {await runner.run(step(id), {preparation: {bridge: {image: 'unused', mode: 'helper'}}} as unknown as DeploymentSpec, root, {} as PreparationPlan); return ''} catch (error) {return error instanceof AwaitingInput ? `waiting: ${error.message}` : String(error)}}
     expect(await run('deployment-kit')).to.equal('')
     expect(await run('deployment-kit-published')).to.match(/^waiting: Waiting for the deployment kit/)
     const request = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/inputs/deployment-kit/request.json'), 'utf8'))
+    expect(request.instructions).to.include(staged ? 'rerun scrollsdk setup proof-materials' : 'rerun scrollsdk setup apply')
     fs.writeFileSync(path.join(root, '.scrollsdk/inputs/deployment-kit/published.json'), JSON.stringify({manifest_sha256: request.manifestSha256, url: 'https://kits.example.com/k.tgz'}))
     expect(await run('deployment-kit-published')).to.equal('')
     const recorded = fs.readFileSync(path.join(root, '.data/doge-config.toml'))
@@ -544,6 +605,35 @@ describe('real-proof program bundle publication', () => {
     expect(await run('deployment-kit')).to.equal('')
     expect(await run('deployment-kit-published')).to.equal('')
     expect(fs.readFileSync(path.join(root, '.data/doge-config.toml')).equals(recorded)).to.equal(true)
+    expect(deploymentKitBlockers(root, contractFor(), readConfig())).to.deep.equal([])
+  })
+
+  it('automatically records only an anonymously verified S3 kit and preserves deployment configuration', async () => {
+    deploymentKitFixture()
+    fs.appendFileSync(path.join(root, '.data/doge-config.toml'), '\n[proofArtifacts.s3]\nbucket = "dogeos-proof-artifacts"\nregion = "us-east-1"\nkeyPrefix = "devnet/instance"\n')
+    const objects = new Map<string, Buffer>()
+    const aws = {json(args: string[]) {
+      const arg = (name: string) => args[args.indexOf(name) + 1]
+      if (args[1] === 'get-bucket-policy') return {Policy: '{"Statement":[]}'}
+      if (args[1] === 'get-object') {
+        const bytes = objects.get(arg('--key'))
+        if (!bytes) throw new Error('(NoSuchKey) missing')
+        fs.writeFileSync(args.at(-1)!, bytes)
+      } else if (args[1] === 'put-object') objects.set(arg('--key'), fs.readFileSync(arg('--body')))
+      else expect(args[1]).to.equal('put-bucket-policy')
+      return {}
+    }}
+    const file = path.join(root, '.data/doge-config.toml')
+    const before = fs.readFileSync(file, 'utf8')
+    let failure = ''
+    try {await publishPreparationDeploymentKit(root, undefined, {anonymousRead: async () => Buffer.from('wrong'), aws})} catch (error) {failure = String(error)}
+    expect(failure).to.include('Anonymous kit readback differs')
+    expect(fs.readFileSync(file, 'utf8')).to.equal(before)
+    expect(fs.existsSync(path.join(root, '.scrollsdk/inputs/deployment-kit/published.json'))).to.equal(false)
+    const publication = await publishPreparationDeploymentKit(root, undefined, {anonymousRead: async url => objects.get(new URL(url).pathname.split('/').slice(2).join('/'))!, aws})
+    expect(readConfig().attestationSigner!.deploymentKit!.url).to.equal(publication.url)
+    expect(readConfig().proof_topology?.enforcement).to.equal('enforce')
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/inputs/deployment-kit/published.json'), 'utf8')).manifest_sha256).to.equal(publication.manifest_sha256)
     expect(deploymentKitBlockers(root, contractFor(), readConfig())).to.deep.equal([])
   })
 

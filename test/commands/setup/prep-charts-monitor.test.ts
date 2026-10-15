@@ -208,6 +208,7 @@ describe('setup prep-charts scroll-monitor balance generation', () => {
             ingress: {GRAFANA_HOST: 'grafana.example.com'},
           },
           dogeConfig: {...config.dogeConfig, grafana: {adminPassword: 'nonfunctional-monitor-fixture'}},
+          flags: {},
           jsonCtx: {info() {}, logSuccess() {}},
           jsonMode: false,
           log(message: string) { output.push(message) },

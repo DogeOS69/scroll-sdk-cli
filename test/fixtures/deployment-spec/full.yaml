@@ -43,7 +43,7 @@ infrastructure:
 # dstackController:
 #   monitoring:
 #     enabled: true
-#     namespace: dstack-system
+#     namespace: default # Must match infrastructure.namespace
 #     auth: {existingSecret: dstack-controller-monitoring, key: token}
 #     interval: 30s
 #     scrapeTimeout: 10s

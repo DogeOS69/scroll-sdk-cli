@@ -5,8 +5,8 @@ For resumable orchestration of the full preparation sequence, see
 
 
 DeploymentSpec generation and `setup prep-charts` share the following inputs.
-The core service image fallback is `v0.3.0-beta.6`; explicit image overrides
-remain authoritative. Contracts use `dogeos-v0.3.0-rc.6`. Reth is independently
+The core service image fallback is `v0.3.0-beta.7`; explicit image overrides
+remain authoritative. Contracts use `dogeos-v0.3.0-rc.7`. Reth is independently
 released and still requires an explicit approved image tag.
 
 ## Frontend live deposit destination
@@ -59,7 +59,7 @@ The generated Reth values use 30,000,000 gas, a 2000 ms block interval and a
 1400 ms payload build window. Empty blocks are disabled by default
 (`reth.sequencer.allowEmptyBlocks: false`); the sequencer produces blocks when
 there is eligible work. The same genesis gas limit enters `config.toml`
-for rc.6 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
+for rc.7 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
 that file also sets the concrete Reth nodes' builder gas limit. If the field is
 absent from an older deployment, prep preserves its values setting. Prep does
 not rewrite the operator's existing block interval/build window or image pin.
@@ -270,8 +270,10 @@ templates fail before writing output. Use `--force` to regenerate existing files
 Direct values generation does not copy Makefile/native configuration helpers.
 Makefile node install/delete targets and required values follow the declared sequencer/bootnode counts. Review chart pins,
 enabled optional services and operational policy before installation. The optional
-capacity-manager service has no standard SDK release here; configuring dstack
-does not implicitly configure capacity management.
+capacity-manager service uses the independent SDK chart from PR #145. Select
+`capacityManager` explicitly and use matching SDK templates; configuring dstack
+alone does not enable it. Staged preparation generates its final values during
+`setup render`, with installation and GPU allocation remaining manual.
 
 `.data/spec-bootstrap.json` records the SDK revision, source template hashes and
 stages still requiring execution. Bootstrap does not create fake genesis,

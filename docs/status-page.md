@@ -372,6 +372,12 @@ SDK production examples provide all eight keys with `mode: automatic` and
 `rule.builtin: true`. Modes are `manual`, `observe`, `automatic`. Built-in rules
 cover public RPC, continuous sequencing, bridge browser/API, Blockscout freshness,
 official follower or optional external canary node sync, and new dogeos-core deposit/withdrawal/DA queue observations.
+Configured frontend, Public RPC (including WebSocket), and Blockscout ingress
+hosts are monitoring targets even when `ingress.enabled` is false or their
+releases are not installed. Generation requires valid hostnames and routes,
+but does not enable or deploy those services. Runtime probes determine their
+availability; disabling an ingress does not suppress an outage. An absent
+WebSocket entry or Blockscout backend hostname does not add an optional target.
 The SDK [publication guide](https://github.com/DogeOS69/scroll-sdk/blob/feat/dstack-controller-chart/docs/status-page-publication.md)
 defines their semantics, operational limits and runtime tests.
 

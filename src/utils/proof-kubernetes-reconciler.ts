@@ -22,6 +22,7 @@ import {WITHDRAWAL_NATIVE_CONFIG_RELPATH} from './withdrawal-config.js'
 export interface ReconcileProofKubernetesOptions {
   coordinatorConfigPath?: string
   coordinatorIngressHost?: string
+  deferIngressValidation?: boolean
   deploymentDir?: string
   ethereumDaBlobSource?: ProofTopologyEthereumDaBlobSource
   ethereumL1RpcUrl?: string
@@ -118,6 +119,7 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
     compilerImage: options.proofTopologyCompilerImage,
     coordinatorConfigPath,
     coordinatorIngressHost: options.coordinatorIngressHost,
+    deferIngressValidation: options.deferIngressValidation,
     deploymentDir,
     deploymentName: options.intent.deploymentName,
     ethereumDaBlobSource: options.ethereumDaBlobSource,

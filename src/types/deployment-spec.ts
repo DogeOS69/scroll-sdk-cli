@@ -1,5 +1,6 @@
 import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
 import type {MonitoringConfig} from '../utils/monitoring-slack.js'
+import type {CapacityManagerConfig} from './capacity-manager.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
 import type {PreparationConfig} from './preparation.js'
 import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
@@ -44,6 +45,8 @@ export interface DeploymentSpec {
 
   /** Bridge configuration */
   bridge: BridgeConfig
+  /** Core-managed capacity, prepared locally and installed separately with Helm. */
+  capacityManager?: CapacityManagerConfig
   /** Deprecated Celestia DA configuration retained for legacy specs only. */
   celestia?: CelestiaConfig
 
@@ -208,13 +211,16 @@ export interface InfrastructureConfig {
     secretsProject?: string
   }
 
+  /** Exact kubeconfig context name used by generated Makefile and Secret upload. */
+  kubeContext?: string
+
   /** Local development configuration */
   local?: {
     /** Use Kubernetes secrets directly instead of external secrets operator */
     useK8sSecrets?: boolean
   }
 
-  /** Kubernetes namespace */
+  /** Kubernetes namespace (defaults to default). */
   namespace?: string
 
   /** Cloud provider: aws, gcp, local */
