@@ -133,6 +133,7 @@ describe('immutable S3 deployment kit publication', () => {
         objects.set(key, fs.readFileSync(args[args.indexOf('--body') + 1]))
         throw new Error('(PreconditionFailed) concurrent publisher')
       }
+
       return aws.json(args)
     }}
     expect((await publishDeploymentKit(kit, store, undefined, {anonymousRead, aws: racing})).manifest_sha256).to.equal(kit.manifestSha256)
