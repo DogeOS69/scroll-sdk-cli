@@ -593,7 +593,9 @@ failure reports the same stage as the next command. A successfully printed JSON 
 Each completed step and the managed artifact hashes are saved before proceeding.
 Reruns preserve completed identities and artifacts. An apply lock excludes
 concurrent execution. Unexpected edits to recorded artifacts stop the run;
-external funding inputs remain editable under `.scrollsdk/inputs/`. Do not edit
+operator-owned `values/*.yaml` (including nested YAML files) and `Makefile` are
+excluded from hash locking, including hashes saved by older CLI versions. External
+funding inputs remain editable under `.scrollsdk/inputs/`. Do not edit
 generated TOML to bypass the state checks.
 
 The initial interface is for fresh deployments. Saved plans are immutable: the
@@ -1001,3 +1003,12 @@ the install preflight. Initial installations load it automatically. No provider
 API calls or GPU allocation occur during local render or offline tests. Live
 acceptance still needs provider availability, a real proof, restart adoption and
 confirmed instance cleanup.
+
+### Deferred: proof publication content comparison
+
+Operator decision (2026-10-15): do not compare the publication receipt's whole
+topology bundle revision with the current runtime topology. Service configuration
+edits must not require republishing unchanged proof programs. No replacement
+comparison of published program files or protocol materials is enabled for now.
+A future task should design and test that narrower comparison before enabling it.
+Existing proof-material integrity and receipt validation remain separate checks.

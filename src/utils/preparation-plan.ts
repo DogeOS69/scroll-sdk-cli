@@ -216,11 +216,15 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.bridge.fundingFile && !p.bridge.fundingFile.startsWith('.scrollsdk/inputs/')) throw new Error('Funding input must live under .scrollsdk/inputs/')
 }
 
+function operatorEditableArtifact(relative: string): boolean {
+  return relative === 'Makefile' || /^values\/.*\.ya?ml$/.test(relative)
+}
+
 function fingerprint(root: string): Record<string, string> {
   const files: Record<string, string> = {}
   const visit = (relative: string): void => {
     const file = localPath(root, relative)
-    if (!fs.existsSync(file) || relative === '.data/contracts-build') return
+    if (!fs.existsSync(file) || relative === '.data/contracts-build' || operatorEditableArtifact(relative)) return
     const stat = fs.lstatSync(file)
     if (stat.isDirectory()) for (const name of fs.readdirSync(file).sort()) visit(`${relative}/${name}`)
     else if (stat.isFile()) files[relative] = digest(fs.readFileSync(file))
@@ -356,7 +360,12 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       plan = migrated
     }
 
-    for (const [file, hash] of Object.entries(state.files)) if (!fs.existsSync(localPath(root, file)) || digest(fs.readFileSync(localPath(root, file))) !== hash) throw new Error(`Prepared artifact changed outside the workflow: ${file}`)
+    for (const [file, hash] of Object.entries(state.files)) {
+      // Also release hashes recorded by older CLI versions.
+      if (operatorEditableArtifact(file)) {delete state.files[file]; continue}
+      if (!fs.existsSync(localPath(root, file)) || digest(fs.readFileSync(localPath(root, file))) !== hash) throw new Error(`Prepared artifact changed outside the workflow: ${file}`)
+    }
+
     if (options.refreshRuntime) {
       refreshPreparationRuntime(root, plan, state, spec, options.dogecoinRoutingSpec)
       state.files = fingerprint(root); writeJson(statePath, state)

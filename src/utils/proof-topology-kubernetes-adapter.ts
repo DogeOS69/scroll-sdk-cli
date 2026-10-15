@@ -56,6 +56,7 @@ export interface ReconcileCompiledProofTopologyOptions {
   compilerImage?: string
   coordinatorConfigPath: string
   coordinatorIngressHost?: string
+  deferIngressValidation?: boolean
   deploymentDir: string
   deploymentName: string
   ethereumDaBlobSource?: ProofTopologyEthereumDaBlobSource
@@ -674,6 +675,7 @@ function configureCoordinatorValues(
   resourcesMountPath: string,
   l2GenesisJson: string,
   coordinatorIngressHost?: string,
+  deferIngressValidation = false,
 ): void {
   const values = readYaml(filePath)
   // Native compiler output is authoritative. Leaving old Figment variables in
@@ -706,7 +708,7 @@ function configureCoordinatorValues(
   values.ingress.main ||= {}
   // An explicit root host opts into public ingress; active mode alone does not.
   if (coordinatorIngressHost) {
-    values.ingress.main = buildProofCoordinatorIngress(coordinatorIngressHost, values.ingress.main)
+    values.ingress.main = buildProofCoordinatorIngress(coordinatorIngressHost, values.ingress.main, !deferIngressValidation)
   } else {
     values.ingress.main.enabled ??= false
   }
@@ -912,7 +914,7 @@ export function reconcileCompiledProofTopology(
 
   // Fail before invoking the compiler or replacing generated files.
   if (mode === 'active' && options.coordinatorIngressHost) {
-    buildProofCoordinatorIngress(options.coordinatorIngressHost, readYaml(coordinatorValuesPath).ingress?.main)
+    buildProofCoordinatorIngress(options.coordinatorIngressHost, readYaml(coordinatorValuesPath).ingress?.main, !options.deferIngressValidation)
   }
 
   const effectiveTopology: ProofTopologySpec = {
@@ -999,6 +1001,7 @@ export function reconcileCompiledProofTopology(
       resourcesMountPath,
       l2GenesisJson,
       options.coordinatorIngressHost,
+      options.deferIngressValidation,
     )
   }
 

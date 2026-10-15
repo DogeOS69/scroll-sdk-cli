@@ -389,6 +389,35 @@ describe('resumable preparation plan', () => {
     expect((await makePlan()).id).to.equal(plan.id)
   })
 
+  it('allows operator YAML and Makefile edits, including hashes saved by older CLI versions', async () => {
+    await makePlan()
+    let ready = false
+    const runner = {async run(step: {id: string}) {
+      if (step.id === 'bootstrap') {
+        fs.mkdirSync(path.join(deployment, 'values'), {recursive: true})
+        fs.writeFileSync(path.join(deployment, 'values/service-production.yaml'), 'enabled: true\n')
+        fs.writeFileSync(path.join(deployment, 'Makefile'), '# generated\n')
+      }
+
+      if (step.id === 'helper-funding' && !ready) throw new AwaitingInput({message: 'fund helper'})
+    }}
+    await applyPreparation(deployment, runner)
+    const statePath = path.join(deployment, '.scrollsdk/state.json')
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    for (const file of ['values/service-production.yaml', 'Makefile']) {
+      expect(state.files).not.to.have.property(file)
+      state.files[file] = createHash('sha256').update(fs.readFileSync(path.join(deployment, file))).digest('hex')
+      fs.appendFileSync(path.join(deployment, file), '# operator edit\n')
+    }
+
+    fs.writeFileSync(statePath, JSON.stringify(state))
+    ready = true
+    expect((await applyPreparation(deployment, runner)).status).to.equal('prepared')
+    const updated = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    expect(updated.files).not.to.have.property('values/service-production.yaml')
+    expect(updated.files).not.to.have.property('Makefile')
+  })
+
   it('locks SDK HEAD when omitted and keeps using it after checkout HEAD changes', async () => {
     const file = path.join(root, 'intent.yaml')
     const spec = yaml.load(fs.readFileSync(file, 'utf8')) as DeploymentSpec
@@ -784,6 +813,20 @@ describe('resumable preparation plan', () => {
     fs.writeFileSync(path.join(deployment, '.data/proof-materials-v1.json'), '{}')
     await runner.run(steps.find(step => step.id === 'charts-published')!, spec, deployment, plan)
     expect(calls[1]).to.include.members(['prep-charts', '--proof-materials-receipt', '.data/proof-materials-v1.json', '--proof-publication-receipt', '.data/proof-program-publication-v1.json'])
+    expect(calls[1]).not.to.include('--proof-preparation')
+    const chartStep = steps.find(step => step.id === 'charts-published')!
+    spec.identities!.bootnodes = []
+    for (const id of ['charts', 'charts-published']) {
+      await runner.run({...chartStep, id, stage: 'proof-materials'}, spec, deployment, plan)
+      expect(calls.at(-1)).to.include('--proof-preparation')
+    }
+
+    fs.writeFileSync(path.join(deployment, 'config.public.toml'), '[general]\nCHAIN_ID_L2 = 221122\n')
+    fs.writeFileSync(path.join(deployment, 'config-contracts.toml'), 'L2_MOAT_PROXY_ADDR = "0x0000000000000000000000000000000000000001"\n')
+    await runner.run({...chartStep, id: 'render-final', stage: 'render'}, spec, deployment, plan)
+    expect(fs.existsSync(path.join(deployment, 'values/scroll-common-config-contracts.yaml'))).to.equal(true)
+    expect(fs.existsSync(path.join(deployment, 'values/scroll-common-config.yaml'))).to.equal(true)
+    expect(calls.at(-1)).not.to.include('--proof-preparation')
   })
 
   it('resolves proof storage before DA permissions and applies only explicit public-read intent', async () => {

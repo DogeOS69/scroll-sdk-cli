@@ -77,12 +77,15 @@ describe('Core capacity manager', () => {
       spec.images = {services: {l2Rpc: {tag: 'nonfunctional-test'}}}
       delete spec.templates
       expect(() => planSpecBootstrap(spec, sdk)).to.throw('lacks capacity-manager templates')
-      fs.appendFileSync(path.join(sdk, 'examples/Makefile.example'), '\ninstall-capacity-manager:\n\t@true\n')
+      fs.appendFileSync(path.join(sdk, 'examples/Makefile.example'), '\nCAPACITY_MANAGER_CHART ?= oci://example.invalid/helm/capacity-manager\nCAPACITY_MANAGER_CHART_VERSION ?= 0.1.1\n.PHONY: install-capacity-manager\ninstall-capacity-manager:\n\t@true\n')
       fs.writeFileSync(path.join(sdk, 'examples/values/capacity-manager-production.yaml'), 'prepared: false\n')
       fs.writeFileSync(path.join(sdk, 'examples/values/capacity-manager-devnet-aws-l40s.yaml'), 'devnetOnly: true\n')
       execFileSync('git', ['-C', sdk, 'add', 'examples'])
       execFileSync('git', ['-C', sdk, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Add nonfunctional capacity templates'], {stdio: 'pipe'})
       const files = planSpecBootstrap(spec, sdk)
+      expect(files.Makefile).to.include('CAPACITY_MANAGER_CHART ?= oci://example.invalid/helm/capacity-manager\n')
+      expect(files.Makefile).to.include('CAPACITY_MANAGER_CHART_VERSION ?= 0.1.1\n')
+      expect(files.Makefile).to.include('.PHONY: install-capacity-manager\n')
       expect(files['values/capacity-manager-production.yaml']).to.equal('prepared: false\n')
       expect(files).not.to.have.property('values/capacity-manager-devnet-aws-l40s.yaml')
       delete spec.capacityManager

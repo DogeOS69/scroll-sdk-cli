@@ -128,7 +128,9 @@ function adaptNodeCounts(source: string, spec: DeploymentSpec): string {
     const start = lines.indexOf(`${name}:`)
     if (start < 0) throw new Error(`Pinned SDK Makefile lacks ${name}`)
     let end = start + 1
-    while (end < lines.length && !/^[a-z][\da-z-]*:/.test(lines[end])) end++
+    // Replace only this recipe. Global variables and directives between targets
+    // belong to the surrounding Makefile, not to the preceding node rule.
+    while (end < lines.length && (lines[end].trim() === '' || lines[end].startsWith('\t'))) end++
     lines.splice(start, end - start, ...body.trimEnd().split('\n'), '')
   }
 

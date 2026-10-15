@@ -39,6 +39,17 @@ describe('public service ingress controller policy', () => {
     expect(() => buildProofCoordinatorIngress('proof.example.invalid', {enabled: false})).to.throw('certificate-arn')
   })
 
+  it('defers proof preparation ingress inputs but rejects them on final validation', () => {
+    const input = {annotations: {[`${alb}certificate-arn`]: '<TODO>'}, enabled: true}
+    const frontend = reconcilePublicServiceIngress(input, 'frontends', false)
+    const coordinator = buildProofCoordinatorIngress('proof.example.invalid', input, false)
+    expect(frontend.enabled).to.equal(true)
+    expect(coordinator.enabled).to.equal(true)
+    expect(coordinator.annotations[`${alb}certificate-arn`]).to.equal('<TODO>')
+    expect(() => reconcilePublicServiceIngress(frontend, 'frontends')).to.throw('certificate-arn')
+    expect(() => buildProofCoordinatorIngress('proof.example.invalid', coordinator)).to.throw('certificate-arn')
+  })
+
   it('defaults an unspecified L1 devnet edge to disabled and validates an explicit opt-in', () => {
     const values: any = {ingress: {main: {annotations: {[`${alb}certificate-arn`]: '<TODO>'}, hosts: [{host: 'l1.example.invalid'}], ingressClassName: 'alb'}}}
     expect(() => reconcileDeploymentIngresses(values, 'l1-devnet')).not.to.throw()

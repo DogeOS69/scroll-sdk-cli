@@ -1248,6 +1248,7 @@ export default class SetupPrepCharts extends Command {
       description: 'Run without prompts. Auto-applies all detected changes.',
     }),
     'proof-materials-receipt': Flags.string({description: 'Selected real proof-materials receipt to bind into the deployment contract'}),
+    'proof-preparation': Flags.boolean({default: false, description: 'Prepare intermediate proof configuration; defer ingress and status-page deployment inputs to setup render', hidden: true}),
     'proof-publication-receipt': Flags.string({description: 'Selected program-publication receipt to bind into the deployment contract'}),
     'proof-topology-compiler-binary': Flags.string({
       description: 'Development-only local dogeos-proof-topology binary; production uses the digest-pinned configured image',
@@ -2047,7 +2048,7 @@ export default class SetupPrepCharts extends Command {
           values.ingress.className = existing.ingress.className ?? values.ingress.className
         }
 
-        reconcileDeploymentIngresses(values, 'dstack-controller')
+        reconcileDeploymentIngresses(values, 'dstack-controller', !this.flags['proof-preparation'])
         // Keep the generated header and byte stability when no operator overlay applies.
         if (!isDeepStrictEqual(values, yaml.load(content))) content = yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})
       }
@@ -2594,7 +2595,7 @@ export default class SetupPrepCharts extends Command {
           l2ChainId: configuredL2ChainId,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
         })
-        monitorChanges.push(...reconcileScrollMonitorStatusPage(productionYaml, {
+        if (!this.flags['proof-preparation']) monitorChanges.push(...reconcileScrollMonitorStatusPage(productionYaml, {
           chainId: configuredL2ChainId,
           environment: productionYaml.statusPage?.environment,
           networkName: this.getConfigValue('general.CHAIN_NAME_L2'),
@@ -3303,8 +3304,8 @@ export default class SetupPrepCharts extends Command {
 
       {
         const previous = JSON.stringify(productionYaml)
-        reconcileDeploymentIngresses(productionYaml, chartName)
-        validateServiceNetworkPolicy(productionYaml, chartName)
+        reconcileDeploymentIngresses(productionYaml, chartName, !this.flags['proof-preparation'])
+        validateServiceNetworkPolicy(productionYaml, chartName, this.flags['proof-preparation'])
         if (previous !== JSON.stringify(productionYaml)) {
           changes.push({key: 'ingress', newValue: 'reconciled controller settings', oldValue: 'previous controller settings'})
           updated = true
@@ -3459,7 +3460,7 @@ export default class SetupPrepCharts extends Command {
   private reconcileDogecoinValues(productionYaml: any): Array<{key: string; newValue: string; oldValue: string}> {
     const changes: Array<{key: string; newValue: string; oldValue: string}> = []
     const oldIngress = JSON.stringify(productionYaml.ingress)
-    reconcileDeploymentIngresses(productionYaml, 'dogecoin')
+    reconcileDeploymentIngresses(productionYaml, 'dogecoin', !this.flags['proof-preparation'])
     if (oldIngress !== JSON.stringify(productionYaml.ingress)) changes.push({key: 'ingress', newValue: 'ALB', oldValue: 'previous controller settings'})
     const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(this.dogeConfig)
     const isRegtest = this.dogeConfig.network === "regtest";
@@ -3536,6 +3537,7 @@ export default class SetupPrepCharts extends Command {
       coordinatorIngressHost: typeof coordinatorIngressHost === 'string'
         ? coordinatorIngressHost
         : undefined,
+      deferIngressValidation: this.flags['proof-preparation'],
       deploymentDir: process.cwd(),
       ethereumDaBlobSource: proofTopologyEthereumDaBlobSource(this.dogeConfig.ethereumDa),
       ethereumL1RpcUrl: this.dogeConfig.ethereumDa?.submitterRpcUrl,

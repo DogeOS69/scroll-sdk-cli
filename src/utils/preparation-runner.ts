@@ -11,6 +11,7 @@ import type {PreparationPlan, PreparationRunner, PreparationStep} from './prepar
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {prepareCapacityManager} from './capacity-manager.js'
+import {writeContractsHelmValues} from './contracts-helm-values.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
@@ -245,10 +246,15 @@ export class CommandPreparationRunner implements PreparationRunner {
         // before compiling that binding, never between compilation and export.
         await prepareGrafanaAdmin(root)
         const args = ['prep-charts', '-N', '--skip-auth-check', '--skip-l2-contract-deployment-block']
+        // Proof preparation needs compiled service configuration, not a ready
+        // HTTPS edge. The final render still validates deployment ingress.
+        if (step.stage === 'proof-materials') args.push('--proof-preparation')
         const receipt = p.proofMaterials.receipt ?? '.data/proof-materials-v1.json'
         if (fs.existsSync(path.resolve(root, receipt))) args.push('--proof-materials-receipt', receipt)
         if (p.proofPublication && step.id !== 'charts') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
-        await command(args); break
+        await command(args)
+        if (step.id === 'render-final') writeContractsHelmValues(root)
+        break
       }
 
       case 'proof-publish': {

@@ -1,7 +1,7 @@
 import {reconcilePublicServiceIngress} from './public-service-ingress.js'
 
 /** Build the public prover route without overriding the operator's controller. */
-export function buildProofCoordinatorIngress(host: string, existing: Record<string, any> = {}): Record<string, any> {
+export function buildProofCoordinatorIngress(host: string, existing: Record<string, any> = {}, validate = true): Record<string, any> {
   return reconcilePublicServiceIngress({
     ...existing,
     enabled: true,
@@ -9,5 +9,5 @@ export function buildProofCoordinatorIngress(host: string, existing: Record<stri
       host,
       paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}],
     }],
-  }, 'proof-coordinator')
+  }, 'proof-coordinator', validate)
 }

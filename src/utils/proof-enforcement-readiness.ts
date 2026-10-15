@@ -31,9 +31,10 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
   if (bindings.publication) {
     try {
       const publication = pinnedJson(root, bindings.publication)
+      // Runtime topology revisions are not a publication integrity boundary.
+      // Content-specific publication comparison is deferred; see docs/spec-preparation.md.
       if (publication.schema !== 'scrollsdk/proof-program-publication/v1'
-        || publication.proofTopologyBundleRevision !== contract.topology.bundleRevision
-        || publication.coreRevision !== materials.software.sourceRevisions?.dogeosCore) throw new Error('Publication release/topology mismatch')
+        || publication.coreRevision !== materials.software.sourceRevisions?.dogeosCore) throw new Error('Publication release mismatch')
       if (contract.artifactStoreReceipt) {
         const {config: aws} = readProofAwsConfig(root, contract.artifactStoreReceipt.path)
         const store = publication.artifactStore as Record<string, unknown>

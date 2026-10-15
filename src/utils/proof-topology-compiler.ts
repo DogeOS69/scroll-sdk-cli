@@ -12,7 +12,7 @@ import type {
   ProofTopologySpec,
 } from '../types/proof-topology.js'
 
-import {ETHEREUM_BEACON_PLACEHOLDER, ETHEREUM_RPC_PLACEHOLDER, resolveEthereumRpc, sanitizeEthereumRpcToml} from './ethereum-rpc-secrets.js'
+import {DOGECOIN_RPC_CREDENTIAL_PLACEHOLDER, ETHEREUM_BEACON_PLACEHOLDER, ETHEREUM_RPC_PLACEHOLDER, resolveEthereumRpc, sanitizeEthereumRpcToml} from './ethereum-rpc-secrets.js'
 import {removeRetiredBatchWitnessSources} from './proof-coordinator-config.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
 
@@ -661,8 +661,10 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
       fs.writeFileSync(target, sanitizeEthereumRpcToml(fs.readFileSync(target, 'utf8')), {mode: 0o600})
     }
 
+    // Match Ethereum's projection: compiler output holds placeholders, while
+    // gen-secrets exports current credentials to proof-coordinator-rpc-env.
     const bridgePasswordName = 'dogecoin-rpc-password'
-    if (options.bridge) fs.writeFileSync(path.join(inputDir, bridgePasswordName), options.bridge.dogecoinRpcPassword, {mode: 0o600})
+    if (options.bridge) fs.writeFileSync(path.join(inputDir, bridgePasswordName), DOGECOIN_RPC_CREDENTIAL_PLACEHOLDER, {mode: 0o600})
     const mountedInput = (name: string): string => container ? `/input/${name}` : path.join(inputDir, name)
     const {deployment} = options.proofTopology
     const proofWorkBind = deployment.proofWorkBind ?? '0.0.0.0:9300'
@@ -695,7 +697,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
           dogecoin_network: options.bridge.dogecoinNetwork,
           dogecoin_rpc_password_file: mountedInput(bridgePasswordName),
           dogecoin_rpc_url: options.bridge.dogecoinRpcUrl,
-          dogecoin_rpc_user: options.bridge.dogecoinRpcUser,
+          dogecoin_rpc_user: DOGECOIN_RPC_CREDENTIAL_PLACEHOLDER,
         }} : {}),
       },
       proof_work_token_file: deployment.proofWorkTokenFile ?? '/app/secrets/proof-work-token',

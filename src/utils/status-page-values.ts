@@ -12,7 +12,7 @@ const PROVISIONING_FILE = 'instatus-contact-points.yaml'
 const GROUPS: Record<string, string> = {devnet: 'Devnet', mainnet: 'Mainnet', testnet: 'Testnet'}
 const BRAND = 'https://raw.githubusercontent.com/DogeOS69/web-images/main'
 const CATALOG = [
-  ['public-rpc', 'Public RPC', 'Official HTTP JSON-RPC and enabled WebSocket interfaces.'],
+  ['public-rpc', 'Public RPC', 'Configured official HTTP JSON-RPC and WebSocket interfaces.'],
   ['sequencing', 'Transaction Sequencing', 'Inclusion of accepted transactions in new blocks.'],
   ['deposits', 'Deposits', 'DOGE deposits after the required confirmations.'],
   ['withdrawals', 'Withdrawals', 'DOGE withdrawal processing and confirmation.'],
@@ -63,9 +63,8 @@ function readValues(directory: string, filename: unknown, field: string): Record
   }
 }
 
-function enabled(value: unknown, field: string): boolean {
+function validateEnabled(value: unknown, field: string): void {
   if (value !== undefined && typeof value !== 'boolean') throw new Error(`${field} must be a boolean`)
-  return value !== false
 }
 
 function endpoint(host: unknown, scheme: string, suffix: string, field: string): string {
@@ -84,10 +83,11 @@ function ingressUrls(source: any, key: string, scheme: string, suffix: string, f
   const entry = mapping(ingress[key], `${field}.ingress.${key}`)
   // Missing WebSocket configuration does not opt into a nonexistent interface.
   if (optional && ingress[key] === undefined) return []
-  if (!enabled(entry.enabled, `${field}.ingress.${key}.enabled`)) {
-    if (optional) return []
-    throw new Error(`${field} selects a disabled ingress`)
-  }
+  // Deployment enablement does not decide whether an expected endpoint is monitored.
+  // Keep configured targets even when their ingress/release is not deployed.
+  validateEnabled(entry.enabled, `${field}.ingress.${key}.enabled`)
+  // A disabled optional interface with no host configuration declares no target.
+  if (optional && entry.enabled === false && entry.hosts === undefined) return []
 
   if (!Array.isArray(entry.hosts) || entry.hosts.length === 0) throw new Error(`${field} requires ingress hosts`)
   return [...new Set(entry.hosts.map((host: any) => {
@@ -176,7 +176,8 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
   const rpcUrls = ingressUrls(rpc, 'main', sources.scheme, '/', 'publicRpc')
   const wsUrls = ingressUrls(rpc, 'websocket', sources.scheme === 'https' ? 'wss' : 'ws', '/', 'publicRpc', true)
   const explorerIngress = explorer['blockscout-stack']?.frontend?.ingress
-  if (!explorerIngress || !enabled(explorerIngress.enabled, 'blockscout frontend ingress.enabled')) throw new Error('statusPage requires an enabled Blockscout frontend ingress')
+  if (!explorerIngress) throw new Error('statusPage requires configured Blockscout frontend ingress metadata')
+  validateEnabled(explorerIngress.enabled, 'blockscout frontend ingress.enabled')
   const explorerUrl = endpoint(explorerIngress.hostname, sources.scheme, '/', 'Blockscout frontend ingress.hostname')
 
   config.grafana = {
@@ -205,7 +206,8 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
   }
 
   const backendIngress = explorer['blockscout-stack']?.blockscout?.ingress
-  const explorerApiUrls = backendIngress?.enabled === true && backendIngress.hostname
+  validateEnabled(backendIngress?.enabled, 'blockscout backend ingress.enabled')
+  const explorerApiUrls = backendIngress?.hostname
     ? [endpoint(backendIngress.hostname, sources.scheme, '/', 'Blockscout backend ingress.hostname')] : []
   // Optional sources are explicitly selected deployment files, not guessed domains
   // or inactive sequencer replicas. Only non-secret evidence enters the catalog.
