@@ -34,8 +34,15 @@ describe('test contracts (L2 and preinstalls)', () => {
   let absent: Set<string>
   let storage: Map<string, bigint>
   let getterResults: Map<string, null | string>
+  let dockerExitCode: number
+  let dockerOutput: string
+  let dockerPath: string
 
-  const run = (flags: string[] = []) => execFileAsync(process.execPath, [cli, 'test', 'contracts', ...flags], {cwd: dir, timeout: 30_000})
+  const run = (flags: string[] = []) => execFileAsync(process.execPath, [cli, 'test', 'contracts', ...flags], {
+    cwd: dir,
+    env: {...process.env, MOCK_DOCKER_EXIT: String(dockerExitCode), MOCK_DOCKER_OUTPUT: dockerOutput, PATH: dockerPath},
+    timeout: 30_000,
+  })
   const expectFailure = async () => {
     try {
       await run()
@@ -51,6 +58,16 @@ describe('test contracts (L2 and preinstalls)', () => {
 
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-l2-contracts-'))
+    dockerExitCode = 0
+    dockerOutput = '[ok] image runtime codehash verification'
+    dockerPath = path.join(dir, 'bin')
+    fs.mkdirSync(dockerPath)
+    fs.writeFileSync(path.join(dockerPath, 'docker'), `#!${process.execPath}
+      const fs = require('node:fs');
+      fs.writeFileSync('docker-call.json', JSON.stringify({args: process.argv.slice(2), rpc: process.env.SCROLLSDK_CHECK_RPC_URL}));
+      console.log(process.env.MOCK_DOCKER_OUTPUT);
+      process.exit(Number(process.env.MOCK_DOCKER_EXIT));
+    `, {mode: 0o700})
     calls = []
     absent = new Set(preinstalledContracts.filter(contract => contract.optional).map(contract => contract.address!.toLowerCase()))
     storage = new Map([
@@ -136,6 +153,14 @@ describe('test contracts (L2 and preinstalls)', () => {
 
         const {stderr, stdout} = await run(pod ? ['--pod'] : [])
         expect(stdout).to.include('37 passed, 0 failed, 7 optional absent.')
+        expect(stdout).to.include('=== dogeos-preinstalls image verification ===')
+          .and.to.include('[ok] Preinstalls image verification passed.')
+        const dockerCall = JSON.parse(fs.readFileSync(path.join(dir, 'docker-call.json'), 'utf8'))
+        expect(dockerCall.rpc).to.equal(rpcUrl)
+        expect(dockerCall.args).to.deep.equal([
+          'run', '--rm', '--network', 'host', '--entrypoint', 'bash', '--env', 'SCROLLSDK_CHECK_RPC_URL',
+          'dogeos69/preinstalls:v0.2.1', '-c', 'exec bash /app/lib/verify.sh "$SCROLLSDK_CHECK_RPC_URL"',
+        ])
         const coreStart = stdout.indexOf('=== scroll-contracts (16 contracts) ===')
         const preinstallsStart = stdout.indexOf('=== dogeos-preinstalls (28 contracts) ===')
         expect(coreStart).to.be.greaterThan(-1)
@@ -231,6 +256,57 @@ describe('test contracts (L2 and preinstalls)', () => {
       .and.to.include('=== dogeos-preinstalls (28 contracts) ===')
       .and.to.include('21 passed, 0 failed, 7 optional absent.')
       .and.to.include('Overall: 36 passed, 1 failed, 7 optional absent.')
+      .and.to.include('[ok] Preinstalls image verification passed.')
+  })
+
+  it('fails if CLI checks pass but the image verifier fails', async () => {
+    dockerExitCode = 1
+    dockerOutput = '[diff] Permit2: no expected codehash for chain id 221122'
+    expect(await expectFailure()).to.include('37 passed, 0 failed, 7 optional absent.')
+      .and.to.include('no expected codehash for chain id 221122')
+      .and.to.include('[failed] Preinstalls image verification failed (exit 1).')
+  })
+
+  it('reports Docker failures instead of skipping image verification', async () => {
+    dockerExitCode = 125
+    dockerOutput = 'Cannot connect to the Docker daemon'
+    expect(await expectFailure()).to.include('Cannot connect to the Docker daemon')
+      .and.to.include('[failed] Preinstalls image verification failed (exit 125).')
+  })
+
+  it('fails clearly when Docker is not installed', async () => {
+    fs.unlinkSync(path.join(dockerPath, 'docker'))
+    expect(await expectFailure()).to.include('Check that Docker is installed and available.')
+      .and.to.include('[failed] Preinstalls image verification failed (execution error).')
+  })
+
+  it('accepts an explicit preinstalls image', async () => {
+    const image = 'example.invalid/preinstalls@sha256:' + 'a'.repeat(64)
+    const {stdout} = await run(['--preinstalls-image', image])
+    const dockerCall = JSON.parse(fs.readFileSync(path.join(dir, 'docker-call.json'), 'utf8'))
+    expect(dockerCall.args).to.include(image)
+    expect(stdout).to.include(`Image: ${image}`)
+  })
+
+  it('redacts RPC credentials from image output and keeps the URL out of Docker arguments', async () => {
+    const endpoint = new URL(rpcUrl)
+    endpoint.username = 'fake-rpc-user'
+    endpoint.password = 'fake-rpc-password'
+    endpoint.pathname = '/fake-private-path'
+    endpoint.searchParams.set('key', 'fake-api-token')
+    const secretRpc = endpoint.toString()
+    fs.writeFileSync(path.join(dir, 'config.toml'), toml.stringify({accounts: {OWNER_ADDR: owner}, frontend: {EXTERNAL_RPC_URI_L2: secretRpc}}))
+    dockerExitCode = 1
+    dockerOutput = `RPC: ${secretRpc} (chain id 221122)\nrequestUrl: ${secretRpc}\npassword: fake-rpc-password\nkey: fake-api-token`
+    const output = await expectFailure()
+    for (const secret of [secretRpc, 'fake-rpc-user', 'fake-rpc-password', 'fake-private-path', 'fake-api-token']) {
+      expect(output).not.to.include(secret)
+    }
+
+    const dockerCall = JSON.parse(fs.readFileSync(path.join(dir, 'docker-call.json'), 'utf8'))
+    expect(dockerCall.rpc).to.equal(secretRpc)
+    expect(JSON.stringify(dockerCall.args)).not.to.include(secretRpc)
+    expect(output).to.include('[redacted]')
   })
 
   it('reports a missing L2 RPC without requiring an L1 RPC', async () => {

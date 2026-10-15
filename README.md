@@ -2511,12 +2511,13 @@ Test L2 contracts and preinstalls by checking deployment, initialization and own
 
 ```
 USAGE
-  $ scrollsdk test contracts [-c <value>] [-n <value>] [-p]
+  $ scrollsdk test contracts [-c <value>] [-n <value>] [-p] [--preinstalls-image <value>]
 
 FLAGS
   -c, --config=<value>     [default: ./config.toml] Path to config.toml file
   -n, --contracts=<value>  [default: ./config-contracts.toml] Path to config-contracts.toml file
   -p, --pod                Run inside Kubernetes pod
+      --preinstalls-image  [default: dogeos69/preinstalls:v0.2.1] Image for runtime codehash verification
 
 DESCRIPTION
   Test L2 contracts and preinstalls by checking deployment, initialization and ownership
@@ -2546,9 +2547,29 @@ proxy initialization flags and the queue messenger, oracle whitelist, and fee
 vault adapter references. Ownership checks apply to the eight owned core
 contracts. Missing required addresses/code, failed checks, and unreadable
 initialization/ownership cause exit status 1. Optional missing preinstalls are
-reported separately. Preinstall runtime codehash verification is available via
-`make verify RPC_URL=<l2-rpc>` in `dogeos-preinstalls`; this CLI checks their
-presence only. It does not verify every deployment parameter or proxy upgrade.
+reported separately. These native CLI checks do not compare runtime codehashes.
+
+After both groups, a separate **preinstalls image verification** step runs
+`/app/lib/verify.sh` from `dogeos69/preinstalls:v0.2.1`, overriding the image's
+default deployment entrypoint. It uses the same L2 RPC and verifies runtime
+codehashes using the image's chain-specific expectations. It runs even if the
+native CLI checks report missing or misconfigured contracts; either phase
+failing causes a nonzero command exit. The original CLI catalogs and checks
+remain in place.
+
+Docker must be available. The verifier container uses host networking, so the
+Docker host must be able to reach the chosen RPC, including internal endpoints
+selected with `--pod`. No private key or deployment volume is passed to the
+container. RPC credentials in verifier output are redacted. Use
+`--preinstalls-image <repository:tag-or-digest>` to select the verifier image
+matching your deployment; the default matches the SDK preinstalls chart.
+
+The default image has codehash expectations for chain IDs 1, 31337, 1122005 and
+6281971. An unsupported chain ID fails verification. Confirm that the RPC
+reports the intended chain ID; supporting a new network requires an image with
+expected hashes for Permit2 and EntryPoint v0.8/v0.9.
+This command does not query explorer source-verification status or validate
+every deployment parameter, proxy implementation, or genesis storage value.
 
 _See code: [src/commands/test/contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/contracts.ts)_
 

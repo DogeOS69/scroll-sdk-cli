@@ -8,6 +8,7 @@ import {DeployedContract, contracts} from '../../data/contracts.js'
 import {preinstalledContracts} from '../../data/preinstalled-contracts.js'
 import {parseTomlConfig} from '../../utils/config-parser.js'
 import {addressLink} from '../../utils/onchain/index.js'
+import {PREINSTALLS_CHECK_IMAGE, checkPreinstallsImage} from '../../utils/preinstalls-image-check.js'
 
 type ContractResult = {
   contract: DeployedContract
@@ -33,6 +34,10 @@ export default class TestContracts extends Command {
       char: 'p',
       default: false,
       description: 'Run inside Kubernetes pod',
+    }),
+    'preinstalls-image': Flags.string({
+      default: PREINSTALLS_CHECK_IMAGE,
+      description: 'Preinstalls image used for the additional runtime codehash check (requires Docker)',
     }),
   }
 
@@ -100,7 +105,15 @@ export default class TestContracts extends Command {
     }
 
     this.log(`\nOverall: ${totals.passed} passed, ${totals.failures} failed, ${totals.optionalAbsent} optional absent.`)
-    if (totals.failures > 0) this.error('L2 contract checks failed.', {exit: 1})
+    this.log(chalk.bold('\n=== dogeos-preinstalls image verification ==='))
+    this.log(`Image: ${flags['preinstalls-image']}`)
+    const imageCheck = await checkPreinstallsImage(flags['preinstalls-image'], rpcUrl)
+    if (imageCheck.output.trim()) this.log(imageCheck.output.trim())
+    const imagePassed = imageCheck.exitCode === 0
+    this.log(imagePassed
+      ? chalk.green('[ok] Preinstalls image verification passed.')
+      : chalk.red(`[failed] Preinstalls image verification failed (${imageCheck.exitCode === null ? 'execution error' : `exit ${imageCheck.exitCode}`}).`))
+    if (totals.failures > 0 || !imagePassed) this.error('L2 contract checks failed.', {exit: 1})
     this.log(chalk.green('All required L2 contract and preinstall checks passed.'))
   }
 
