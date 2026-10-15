@@ -1046,8 +1046,10 @@ endpoint. Rendering preserves this operator-owned URL and rejects the old HTTP
 ClusterIP default, which Core rejects outside IP loopback addresses. HTTP
 `localhost` is also rejected. Intermediate proof preparation defers this runtime
 input until final render. A private HTTPS proxy or internal ingress must have
-working routing and a trusted certificate, including a renewal mechanism; the CLI
-does not provision TLS or copy certificates. Verify connectivity from the manager
+working routing and a trusted certificate, including a renewal mechanism. The
+optional `dstackController.internalTls` integration below generates an internal
+ALB using ACM-managed renewal; existing operator-managed proxies remain supported.
+Verify connectivity from the manager
 Pod before accepting capacity readiness. Changing a previously prepared endpoint
 still requires draining the old manager and archiving its local capacity plan.
 
@@ -1059,6 +1061,52 @@ edits must not require republishing unchanged proof programs. No replacement
 comparison of published program files or protocol materials is enabled for now.
 A future task should design and test that narrower comparison before enabling it.
 Existing proof-material integrity and receipt validation remain separate checks.
+
+## Internal dstack HTTPS with managed certificate renewal
+
+For AWS deployments, `dstackController.internalTls` generates an internal ALB
+Ingress and binds capacity-manager to its HTTPS hostname. This is an opt-in
+alternative to an operator-managed HTTPS endpoint. It is mutually exclusive with
+`dstackController.ingress` and owns the generated controller ingress, including
+replacing stale annotations in existing values.
+
+```yaml
+dstackController:
+  internalTls:
+    hostname: dstack.example.invalid
+    certificateArn: arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000
+    subnets: [subnet-aaaaaaaa, subnet-bbbbbbbb]
+    inboundCidrs: [10.20.0.0/16] # Replace with the manager callers' restricted CIDRs.
+```
+
+Replace all example identifiers with your own public references. Select subnets
+in at least two availability zones of the EKS VPC; ensure the controller can
+create an internal ALB and its backend security-group rules. The certificate must
+be in `infrastructure.aws.region`. `prep-charts` calls only ACM DescribeCertificate
+to require an issued, unexpired Amazon-managed certificate covering the hostname,
+with successful DNS validation for every domain. Imported certificates and email
+validation are rejected for this mode. Optional `internalTls.awsProfile` selects
+the read profile. Pure `generate-from-spec` remains offline; perform `prep-charts`
+before installing the controller.
+
+Install with the generated `make install-dstack-controller`, then bind the
+hostname to the internal ALB's DNS name in DNS visible to the manager. This does
+not require a public controller endpoint. The ALB terminates TLS and forwards
+HTTP within the VPC to dstack; it is not end-to-end pod TLS. AWS ALB charges apply
+when installed. No certificate private key is copied to Kubernetes. ACM manages
+renewal and ALB certificate replacement while the certificate remains attached
+and its public DNS validation CNAMEs remain present. Keep those validation records
+and monitor ACM renewal events; a local render cannot prove future renewal or
+live reachability. See [ACM DNS renewal requirements](https://docs.aws.amazon.com/acm/latest/userguide/dns-renewal-validation.html).
+
+The manager retains normal certificate verification. Final preparation rejects
+controller values that disagree with the selected internal edge. Existing plans
+without `internalTls` continue to preserve their operator-supplied HTTPS endpoint.
+Moving an already prepared manager to a different endpoint still requires draining
+it and archiving its local capacity plan before preparing its replacement. This
+feature does not migrate the existing devnet proxy, install resources, modify DNS,
+or allocate workers during preparation.
+
 ## TSO ALB subnet discovery
 
 Set `preparation.tsoAlbEdge.enabled: true` to reconcile the TSO edge peers during

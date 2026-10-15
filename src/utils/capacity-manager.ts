@@ -11,6 +11,7 @@ import type {ProofWorkerImageCheckV1} from '../types/proof-worker-image-check.js
 import type {ProverWorkerContractV1} from './proof-topology-compiler.js'
 
 import {validateDstackAwsBackend} from './dstack-credentials.js'
+import {assertDstackInternalIngress} from './dstack-internal-tls.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
 import {DEFAULT_PROOF_DEPLOYMENT_CONTRACT, readProofDeploymentContract, resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {workerCommand} from './proof-workers-plan.js'
@@ -121,7 +122,8 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   const dstackNamespace = specKubernetesTarget(spec).namespace
   const dstackName = controller.fullnameOverride ?? 'dstack-controller'
   const existing = yaml.load(fs.readFileSync(file, 'utf8')) as any
-  projected.manager.dstack.serverUrl = capacityManagerDstackUrl(existing.manager?.dstack?.serverUrl)
+  if (spec.dstackController?.internalTls) assertDstackInternalIngress(controller, spec.dstackController.internalTls)
+  projected.manager.dstack.serverUrl = capacityManagerDstackUrl(spec.dstackController?.internalTls ? `https://${spec.dstackController.internalTls.hostname}` : existing.manager?.dstack?.serverUrl)
   projected.dstackAuth = controller.auth
   if (!controller.auth?.existingSecret || !controller.auth?.key) throw new Error('Dstack auth Secret reference is required')
   projected.wpAuth = {existingSecret: coordinator.persistence.secrets.name, key: 'proof-work-token'}

@@ -28,6 +28,7 @@ import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
+import {verifyDstackAcmCertificate} from '../../utils/dstack-internal-tls.js'
 import {type EthereumDaRuntimeConfig, ethereumDaRuntimeEnv} from '../../utils/ethereum-da-runtime.js'
 import {ETHEREUM_RPC_KEYS, proofCoordinatorRpcKeys, readEthereumRpcSecretStore, reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {frontendDepositEnv, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
@@ -2033,6 +2034,7 @@ export default class SetupPrepCharts extends Command {
   }
 
   private async processDstackControllerValues(valuesDir: string): Promise<{skipped: number; updated: number}> {
+    verifyDstackAcmCertificate(this.dstackController)
     const files = [
       [DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues(this.dstackController)],
       [DSTACK_MONITORING_VALUES_FILE, generateDstackMonitoringValues(this.dstackController)],
@@ -2045,7 +2047,7 @@ export default class SetupPrepCharts extends Command {
       if (name === DSTACK_CONTROLLER_VALUES_FILE) {
         const values = yaml.load(content) as any
         const existing = fs.existsSync(target) ? yaml.load(fs.readFileSync(target, 'utf8')) as any : undefined
-        if (existing?.ingress) {
+        if (existing?.ingress && !this.dstackController?.internalTls) {
           values.ingress.annotations = {...values.ingress.annotations, ...existing.ingress.annotations}
           values.ingress.className = existing.ingress.className ?? values.ingress.className
         }

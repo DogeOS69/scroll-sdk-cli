@@ -52,6 +52,7 @@ export function specDstackController(spec: DeploymentSpec): DstackControllerConf
   const config = spec.dstackController
   if (!config || config.enabled === false) return config
   const {namespace} = specKubernetesTarget(spec)
+  if (config.internalTls && config.internalTls.certificateArn.split(':')[3] !== spec.infrastructure.aws?.region) throw new Error('dstack internalTls certificate and infrastructure AWS region must match')
   if (config.monitoring?.namespace && config.monitoring.namespace !== namespace) {
     throw new Error('dstackController.monitoring.namespace must match infrastructure.namespace; spec deployments use one namespace')
   }

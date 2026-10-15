@@ -1,12 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Exercise the command's staged generation pass. */
 import {expect} from 'chai'
+import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import sinon from 'sinon'
 
 import PrepCharts from '../../../src/commands/setup/prep-charts.js'
+import {AwsCliRunner} from '../../../src/utils/aws-cli.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues} from '../../../src/utils/dstack-controller-values.js'
 import {GenerationTransaction} from '../../../src/utils/generation-transaction.js'
+import {internalTls} from '../../utils/dstack-internal-tls.test.js'
 
 describe('setup prep-charts dstack controller', () => {
   let directory: string
@@ -112,6 +116,29 @@ describe('setup prep-charts dstack controller', () => {
     await command.processDstackControllerValues(values)
     expect(fs.readFileSync(path.join(values, DSTACK_CONTROLLER_VALUES_FILE), 'utf8')).to.include(certificate)
     expect(fs.readFileSync(path.join(values, DSTACK_CONTROLLER_VALUES_FILE), 'utf8')).not.to.include('<TODO>')
+  })
+
+  it('checks managed certificate renewal and removes stale public ingress overrides before generation', async () => {
+    const values = path.join(directory, 'values')
+    await command.processDstackControllerValues(values)
+    const target = path.join(values, DSTACK_CONTROLLER_VALUES_FILE)
+    const existing = yaml.load(fs.readFileSync(target, 'utf8')) as any
+    existing.ingress.annotations['alb.ingress.kubernetes.io/scheme'] = 'internet-facing'
+    existing.ingress.annotations['alb.ingress.kubernetes.io/group.name'] = 'old-public-group'
+    fs.writeFileSync(target, yaml.dump(existing))
+    const before = fs.readFileSync(target, 'utf8')
+    command.dstackController.internalTls = internalTls
+    const read = sinon.stub(AwsCliRunner.prototype, 'json').throws(new Error('FAKE_PROVIDER_DETAIL'))
+    try {
+      try {await command.processDstackControllerValues(values); expect.fail('must reject')} catch (error) {expect(String(error)).to.include('provider details omitted')}
+      expect(fs.readFileSync(target, 'utf8')).to.equal(before)
+      read.returns({Certificate: {DomainValidationOptions: [{ValidationMethod: 'DNS', ValidationStatus: 'SUCCESS'}], NotAfter: (Date.now() + 86_400_000) / 1000, Status: 'ISSUED', SubjectAlternativeNames: [internalTls.hostname], Type: 'AMAZON_ISSUED'}})
+      await command.processDstackControllerValues(values)
+      const generated = yaml.load(fs.readFileSync(target, 'utf8')) as any
+      expect(generated.ingress.annotations['alb.ingress.kubernetes.io/scheme']).to.equal('internal')
+      expect(generated.ingress.annotations).not.to.have.property('alb.ingress.kubernetes.io/group.name')
+      expect(await command.processDstackControllerValues(values)).to.deep.equal({skipped: 2, updated: 0})
+    } finally {read.restore()}
   })
 
 })
