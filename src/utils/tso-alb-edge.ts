@@ -3,6 +3,7 @@ import * as yaml from 'js-yaml'
 import {execFileSync} from 'node:child_process'
 import fs from 'node:fs'
 import {isIPv4} from 'node:net'
+import path from 'node:path'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
@@ -19,12 +20,13 @@ export interface TsoEdgeDependencies {
 }
 
 /** Only remote reads. The caller decides whether to commit this local projection. */
-export function planTsoAlbEdge(root: string, spec: DeploymentSpec, dependencies: TsoEdgeDependencies = {}): {receipt: Record<string, unknown>; values: Record<string, any>} {
+export function planTsoAlbEdge(root: string, spec: DeploymentSpec, dependencies: TsoEdgeDependencies = {}, valuesDirectory = 'values'): {receipt: Record<string, unknown>; values: Record<string, any>} {
   const input = spec.preparation?.tsoAlbEdge
   const awsConfig = spec.infrastructure.aws
   const {kubeContext, namespace} = specKubernetesTarget(spec)
   if (!input?.enabled || !awsConfig?.region || !awsConfig.eksClusterName || !kubeContext) throw new Error('TSO ALB discovery requires enabled preparation.tsoAlbEdge and explicit AWS cluster, region and Kubernetes context')
-  const values = yaml.load(fs.readFileSync(localPath(root, 'values/tso-service-production.yaml'), 'utf8')) as any
+  const valuesFile = path.join(valuesDirectory, 'tso-service-production.yaml')
+  const values = yaml.load(fs.readFileSync(localPath(root, valuesFile), 'utf8')) as any
   const ingress = values?.ingress?.main
   if (ingress?.enabled !== true || (ingress.ingressClassName ?? 'alb') !== 'alb') throw new Error('TSO ALB discovery requires an enabled ALB ingress')
   const scheme = ingress.annotations?.['alb.ingress.kubernetes.io/scheme'] ?? 'internet-facing'
@@ -48,6 +50,7 @@ export function planTsoAlbEdge(root: string, spec: DeploymentSpec, dependencies:
   if (fs.existsSync(file)) {
     try {previous = JSON.parse(fs.readFileSync(file, 'utf8'))} catch {throw new Error('Invalid TSO ALB discovery receipt')}
     if (previous.schema !== 'scrollsdk/tso-alb-edge/v1' || previous.cluster !== awsConfig.eksClusterName || previous.region !== awsConfig.region || previous.namespace !== namespace || previous.vpc !== vpc || !Array.isArray(previous.managedCidrs) || !Array.isArray(previous.subnets) || !Array.isArray(previous.actualSubnets)) throw new Error('TSO ALB discovery receipt belongs to another target or is malformed')
+    if ((previous.valuesFile ?? 'values/tso-service-production.yaml') !== valuesFile) throw new Error('TSO ALB discovery receipt belongs to another values directory')
   }
 
   const name = input.ingressName ?? values.global?.fullnameOverride ?? values.fullnameOverride ?? 'tso-service'
@@ -119,16 +122,16 @@ export function planTsoAlbEdge(root: string, spec: DeploymentSpec, dependencies:
   values.networkPolicy.allowFrom.edge = [...preserved, ...managedCidrs.map(cidr => ({ipBlock: {cidr}}))]
   ingress.annotations ??= {}; ingress.annotations[SUBNETS] = [...selected].sort().join(',')
   validateServiceNetworkPolicy(values, 'tso-service')
-  return {receipt: {actualSubnets: actual.sort(), cluster: awsConfig.eksClusterName, managedCidrs, namespace, region: awsConfig.region, schema: 'scrollsdk/tso-alb-edge/v1', subnets: [...selected].sort(), vpc}, values}
+  return {receipt: {actualSubnets: actual.sort(), cluster: awsConfig.eksClusterName, managedCidrs, namespace, region: awsConfig.region, schema: 'scrollsdk/tso-alb-edge/v1', subnets: [...selected].sort(), valuesFile, vpc}, values}
 }
 
 /** Run inside prep-charts' filesystem transaction, never in proof preparation. */
-export function reconcileTsoAlbEdge(root: string, dependencies?: TsoEdgeDependencies): void {
+export function reconcileTsoAlbEdge(root: string, dependencies?: TsoEdgeDependencies, valuesDirectory = 'values'): void {
   const intent = localPath(root, '.scrollsdk/intent.json')
   if (!fs.existsSync(intent)) return
   const spec = JSON.parse(fs.readFileSync(intent, 'utf8')) as DeploymentSpec
   if (!spec.preparation?.tsoAlbEdge?.enabled) return
-  const result = planTsoAlbEdge(root, spec, dependencies)
-  privateWrite(localPath(root, 'values/tso-service-production.yaml'), yaml.dump(result.values, {lineWidth: -1, noRefs: true}))
+  const result = planTsoAlbEdge(root, spec, dependencies, valuesDirectory)
+  privateWrite(localPath(root, path.join(valuesDirectory, 'tso-service-production.yaml')), yaml.dump(result.values, {lineWidth: -1, noRefs: true}))
   writeJson(localPath(root, RECEIPT), result.receipt)
 }

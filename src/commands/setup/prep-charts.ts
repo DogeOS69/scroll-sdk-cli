@@ -1393,7 +1393,7 @@ export default class SetupPrepCharts extends Command {
       }
 
       process.chdir(transaction.stagingRoot)
-      if (!this.flags['proof-preparation']) reconcileTsoAlbEdge(transaction.stagingRoot)
+      if (!this.flags['proof-preparation']) reconcileTsoAlbEdge(transaction.stagingRoot, undefined, path.relative(transaction.stagingRoot, stagedValuesDir))
       generation = await this.generateCharts(stagedValuesDir)
       if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
       process.chdir(deploymentRoot)

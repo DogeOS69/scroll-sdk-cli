@@ -114,4 +114,15 @@ describe('TSO ALB edge discovery', () => {
     reconcileTsoAlbEdge(root, {aws: {json() {throw new Error('unexpected AWS read')}}, kubectl() {throw new Error('unexpected Kubernetes read')}})
     expect(calls).to.deep.equal([])
   })
+  it('honors custom prep-charts values directories and binds ownership to the selected file', () => {
+    fs.writeFileSync(path.join(root, '.scrollsdk/intent.json'), JSON.stringify(spec))
+    const original = fs.readFileSync(path.join(root, 'values/tso-service-production.yaml'))
+    fs.mkdirSync(path.join(root, 'custom-values'))
+    fs.writeFileSync(path.join(root, 'custom-values/tso-service-production.yaml'), original)
+    reconcileTsoAlbEdge(root, dependencies(), 'custom-values')
+    expect(fs.readFileSync(path.join(root, 'values/tso-service-production.yaml')).equals(original)).to.equal(true)
+    const custom = yaml.load(fs.readFileSync(path.join(root, 'custom-values/tso-service-production.yaml'), 'utf8')) as any
+    expect(custom.ingress.main.annotations[annotation]).to.equal('subnet-a1,subnet-a3')
+    expect(() => reconcileTsoAlbEdge(root, dependencies())).to.throw('another values directory')
+  })
 })
