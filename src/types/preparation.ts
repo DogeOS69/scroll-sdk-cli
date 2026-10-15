@@ -75,4 +75,6 @@ export interface PreparationConfig {
   /** Approved software release; plan validates the manifest and derives image pins. */
   proofRelease?: {manifest?: string; sha256?: string; version?: string}
   secretUpload?: {awsPrefix?: string; awsRegion?: string; kubeContext?: string; namespace?: string; provider: 'aws' | 'vault'}
+  /** Discover and pin TSO ALB subnets and render their CIDRs during final chart preparation. */
+  tsoAlbEdge?: {awsProfile?: string; enabled: boolean; ingressName?: string}
 }

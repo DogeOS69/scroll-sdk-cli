@@ -128,6 +128,8 @@ export function validatePreparation(spec: DeploymentSpec): void {
 
   specAwsSecretPrefix(spec)
   if (!p) throw new Error('preparation is required for setup plan; plain generate-from-spec remains available')
+  if (p.tsoAlbEdge && typeof p.tsoAlbEdge.enabled !== 'boolean') throw new Error('tsoAlbEdge.enabled must be boolean')
+  if (p.tsoAlbEdge?.enabled && (!spec.infrastructure.aws?.region || !spec.infrastructure.aws.eksClusterName || !specKubernetesTarget(spec).kubeContext)) throw new Error('tsoAlbEdge requires explicit AWS region, EKS cluster and Kubernetes context')
   if (p.deploymentKitPublication && !['manual', 's3'].includes(p.deploymentKitPublication.mode)) throw new Error('deploymentKitPublication.mode must be manual or s3')
   if (p.deploymentKitPublication?.mode === 's3' && (spec.proofTopology?.enforcement !== 'enforce' || !spec.proofArtifacts?.s3?.bucket)) throw new Error('S3 deployment kit publication requires enforcing proof topology and a selected proof artifacts bucket')
   if (!['helper', 'production'].includes(p.bridge?.mode)) throw new Error('preparation.bridge.mode must explicitly select production or helper')

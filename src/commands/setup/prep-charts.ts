@@ -67,6 +67,7 @@ import {
 } from '../../utils/signer-roles.js'
 import {specDstackController} from '../../utils/spec-kubernetes-target.js'
 import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
+import {reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
 import {tsoSignerNetwork} from '../../utils/tso-signer-network.js'
 import {
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
@@ -1391,6 +1392,7 @@ export default class SetupPrepCharts extends Command {
       }
 
       process.chdir(transaction.stagingRoot)
+      if (!this.flags['proof-preparation']) reconcileTsoAlbEdge(transaction.stagingRoot)
       generation = await this.generateCharts(stagedValuesDir)
       if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
       process.chdir(deploymentRoot)

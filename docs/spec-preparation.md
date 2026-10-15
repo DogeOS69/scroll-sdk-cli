@@ -1059,3 +1059,28 @@ edits must not require republishing unchanged proof programs. No replacement
 comparison of published program files or protocol materials is enabled for now.
 A future task should design and test that narrower comparison before enabling it.
 Existing proof-material integrity and receipt validation remain separate checks.
+## TSO ALB subnet discovery
+
+Set `preparation.tsoAlbEdge.enabled: true` to reconcile the TSO edge peers during
+final `prep-charts`. This requires an explicit `infrastructure.aws.region`,
+`infrastructure.aws.eksClusterName` and Kubernetes context. Optional `awsProfile`
+and `ingressName` select the AWS profile and nonstandard Ingress resource name.
+Proof preparation does not perform this discovery.
+
+The CLI verifies that the context addresses the selected EKS cluster. For an
+existing ALB it reads its actual subnets. Before ALB creation, it selects one
+eligible role-tagged subnet per availability zone and pins those exact subnet IDs
+in `alb.ingress.kubernetes.io/subnets`; it does not treat all public VPC subnets as
+the load balancer's source. Explicit subnet annotations take precedence. Subnets
+must belong to the selected VPC and span at least two availability zones.
+
+Generated CIDRs and subnet ownership are recorded in `.scrollsdk/tso-alb-edge.json`.
+On regeneration, a changed live ALB updates the previous generated annotation;
+operator-edited annotations remain intentional subnet selections. During a pending
+subnet migration, both current and desired subnet CIDRs remain allowed until AWS
+reports the move. Only previously
+generated peers are replaced. Additional edge peers and internal service peers
+are preserved, including an operator CIDR overlapping an ALB subnet. Values and
+the receipt participate in the same generation transaction. Discovery uses only
+AWS describe calls and Kubernetes reads. Applying the rendered NetworkPolicy and
+verifying CNI enforcement remain deployment acceptance steps.
