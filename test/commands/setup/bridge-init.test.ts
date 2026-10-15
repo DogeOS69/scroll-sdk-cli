@@ -141,7 +141,7 @@ describe('setup bridge-init protocol seed generation', () => {
       eth_chain_id: 32_382,
       key_rotation_min_grace_wf_txs: 100,
       l2_chain_id: 412_346,
-      min_deposit_sats: 100_000,
+      min_deposit_sats: 100_000_000,
     })
     expect(result.protocol).not.to.have.property('celestia_namespace')
     expect(result.chain_anchors).not.to.have.property('initial_celestia_height')

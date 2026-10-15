@@ -1586,7 +1586,7 @@ describe('deployment-spec-generator', () => {
         eth_chain_id: 11_155_111,
         key_rotation_min_grace_wf_txs: 100,
         l2_chain_id: 412_346,
-        min_deposit_sats: 100_000,
+        min_deposit_sats: 100_000_000,
       });
     });
 

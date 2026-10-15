@@ -174,7 +174,7 @@ export function buildEthereumDaProtocolSeedConfig(
   protocolConfig.l2_chain_id = l2ChainId
   protocolConfig.eth_chain_id = ethChainId
   protocolConfig.key_rotation_min_grace_wf_txs ??= 100
-  protocolConfig.min_deposit_sats ??= 100_000
+  protocolConfig.min_deposit_sats ??= 100_000_000
   protocolConfig.deposit_queue_transform ??= {}
   protocolConfig.deposit_queue_transform.l1_scroll_messenger_address = helpers.getContractAddress(
     inputs.contractsConfig,
