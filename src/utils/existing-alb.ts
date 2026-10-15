@@ -183,6 +183,18 @@ export function verifyExistingAlbTargetHealth(spec: DeploymentSpec, aws: Pick<Aw
   return healthy
 }
 
+type SelectedRoute = {group: string; host: string; listener: string; name: string; path: string; priority: number}
+
+/** Supported paths are exact matches or prefixes ending in /*. Narrower routes must win. */
+function verifySelectedRoutePriorities(routes: SelectedRoute[]): void {
+  for (const broad of routes) for (const narrow of routes) {
+    if (broad.group === narrow.group || broad.listener !== narrow.listener || broad.host !== narrow.host) continue
+    if (broad.path.endsWith('/*') && narrow.path.startsWith(broad.path.slice(0, -1)) && broad.priority <= narrow.priority) {
+      fail(`${broad.name}: listener priority ${broad.priority} for ${broad.path} shadows ${narrow.name} at ${narrow.path}; place the narrower route first`)
+    }
+  }
+}
+
 /** Read-only checks against explicitly selected resources. No AWS create/delete APIs. */
 export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, string>, aws: Pick<AwsCliRunner, 'json'> = new AwsCliRunner()): {bindings: string[]; loadBalancers: number} {
   validateExistingAlb(spec)
@@ -212,6 +224,7 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
   }
 
   const endpoints = new Map<string, {certificates: any[]; lb: any; otherRules: any[]; rules: any[]}>()
+  const selectedRoutes: SelectedRoute[] = []
   for (const [name, endpoint] of Object.entries(config!.endpoints)) {
     const lb = read(['elbv2', 'describe-load-balancers', '--load-balancer-arns', endpoint.loadBalancerArn]).LoadBalancers?.[0]
     if (!lb || lb.LoadBalancerArn !== endpoint.loadBalancerArn || lb.Type !== 'application' || lb.State?.Code !== 'active' || lb.VpcId !== cluster.resourcesVpcConfig.vpcId) fail(`${name}: ALB must be active and in the selected EKS VPC`)
@@ -257,6 +270,8 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
     if (name === 'tso-service' && expected.some(route => route.paths.some(value => !['/health', '/signer', '/signer/*'].includes(value)))) fail('TSO may expose only /health and /signer paths')
     const covered = new Set<string>()
     for (const rule of rules.filter(rule => actionGroups(rule.Actions ?? []).includes(binding.targetGroupArn))) {
+      const priority = Number(rule.Priority)
+      if (!Number.isInteger(priority) || priority < 1 || priority > 50_000) fail(`${name}: forwarding rule needs a numeric listener priority`)
       const groups = actionGroups(rule.Actions)
       const conditions = rule.Conditions ?? []
       const hosts = conditions.find((condition: any) => condition.Field === 'host-header')
@@ -268,11 +283,13 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
       for (const host of hostValues) for (const pattern of pathValues) {
         if (!expected.some(route => route.host === host && route.paths.includes(pattern))) fail(`${name}: listener exposes a host/path outside the generated ingress policy`)
         covered.add(`${host}:${pattern}`)
+        selectedRoutes.push({group: binding.targetGroupArn, host: host.toLowerCase(), listener: endpoint.listenerArn, name, path: pattern, priority})
       }
     }
 
     if (expected.some(route => route.paths.some(pattern => !covered.has(`${route.host}:${pattern}`)))) fail(`${name}: missing listener rule for a generated host/path`)
   }
 
+  verifySelectedRoutePriorities(selectedRoutes)
   return {bindings: Object.keys(config!.bindings), loadBalancers: new Set(Object.values(config!.endpoints).map(endpoint => endpoint.loadBalancerArn)).size}
 }

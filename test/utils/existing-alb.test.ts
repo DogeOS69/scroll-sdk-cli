@@ -33,7 +33,7 @@ function provider() {
     'describe-listener-certificates': {Certificates: [{CertificateArn: certificateArn}]},
     'describe-listeners': {Listeners: [listener]},
     'describe-load-balancers': {LoadBalancers: [{LoadBalancerArn: loadBalancerArn, Scheme: 'internet-facing', State: {Code: 'active'}, Type: 'application', VpcId: 'vpc-example'}]},
-    'describe-rules': {Rules: [{Actions: [{TargetGroupArn: targetGroupArn, Type: 'forward'}], Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['tso.example.invalid']}}, {Field: 'path-pattern', PathPatternConfig: {Values: ['/health', '/signer', '/signer/*']}}]}]},
+    'describe-rules': {Rules: [{Actions: [{TargetGroupArn: targetGroupArn, Type: 'forward'}], Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['tso.example.invalid']}}, {Field: 'path-pattern', PathPatternConfig: {Values: ['/health', '/signer', '/signer/*']}}], Priority: '10'}]},
     'describe-tags': {TagDescriptions: [{Tags: []}]},
     'describe-target-groups': {TargetGroups: [{HealthCheckEnabled: true, HealthCheckPath: '/health', HealthCheckPort: 'traffic-port', HealthCheckProtocol: 'HTTP', LoadBalancerArns: [loadBalancerArn], Matcher: {HttpCode: '200'}, Protocol: 'HTTP', TargetGroupArn: targetGroupArn, TargetType: 'ip', VpcId: 'vpc-example'}]},
   }
@@ -155,6 +155,34 @@ describe('existing ALB lifecycle', () => {
     values['tso-service-production.yaml'] = yaml.dump(changed)
     expect(() => verifyExistingAlb(spec(), values, provider())).to.throw('stale values')
   })
+
+  for (const [apiPath, frontendFirst] of [['/api', true], ['/api', false], ['/api/v2', true], ['/api/v2', false]] as const) {
+    it(`${frontendFirst ? 'rejects' : 'accepts'} overlapping Blockscout ${apiPath} routes with frontend ${frontendFirst ? 'first' : 'last'}`, () => {
+      const input = spec()
+      const frontendGroup = targetGroupArn.replace('2222222222222222', '3333333333333333')
+      input.infrastructure.aws!.alb!.bindings = {
+        'blockscout-api': {endpoint: 'public', serviceRef: {name: 'api', port: 80}, targetGroupArn},
+        'blockscout-frontend': {endpoint: 'public', serviceRef: {name: 'frontend', port: 80}, targetGroupArn: frontendGroup},
+      }
+      const ingress = (route: string) => ({enabled: true, hostname: 'explorer.example.invalid', paths: [{path: route, pathType: 'Prefix'}]})
+      const values = {'blockscout-production.yaml': yaml.dump({'blockscout-stack': {blockscout: {ingress: ingress(apiPath)}, frontend: {ingress: ingress('/')}}})}
+      projectExistingAlb(values, input)
+      const aws = provider()
+      const baseRule = aws.responses['describe-rules'].Rules[0]
+      const rule = (group: string, paths: string[], priority: string) => ({
+        ...baseRule, Actions: [{TargetGroupArn: group, Type: 'forward'}], Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['explorer.example.invalid']}}, {Field: 'path-pattern', PathPatternConfig: {Values: paths}}],
+        Priority: priority,
+      })
+      // Response ordering must not substitute for AWS priority ordering.
+      aws.responses['describe-rules'].Rules = [rule(targetGroupArn, [apiPath, `${apiPath}/*`], frontendFirst ? '20' : '10'), rule(frontendGroup, ['/*'], frontendFirst ? '10' : '20')]
+      const json = (args: string[]) => args[1] === 'describe-target-groups'
+        ? {TargetGroups: [{...aws.responses['describe-target-groups'].TargetGroups[0], HealthCheckPath: '/', TargetGroupArn: args[3]}]}
+        : aws.json(args)
+      const verify = () => verifyExistingAlb(input, values, {json})
+      if (frontendFirst) expect(verify).to.throw('shadows blockscout-api')
+      else expect(verify()).to.deep.equal({bindings: ['blockscout-api', 'blockscout-frontend'], loadBalancers: 1})
+    })
+  }
 
   it('requires registered healthy targets for runtime checks', () => {
     for (const targets of [[], [{TargetHealth: {State: 'unhealthy'}}], [{TargetHealth: {State: 'healthy'}}, {TargetHealth: {State: 'initial'}}]]) {
