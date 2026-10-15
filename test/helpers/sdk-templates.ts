@@ -6,7 +6,6 @@ import path from 'node:path'
 /** Disposable committed SDK: deliberately distinctive policies catch lost merges. */
 export function createSdkFixture(directory: string): string {
   const templates: Record<string, unknown> = {
-    'alb-bindings-production.yaml': {bindings: {}},
     'eth-da-submitter-production.yaml': {configMaps: {env: {data: {
       DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_OPEN_L2_TIME: '2h',
       DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_UNCOMPRESSED_CHUNK_BYTES_SIZE: '123011',
@@ -37,6 +36,12 @@ export function createSdkFixture(directory: string): string {
     }
   }
 
+  for (const chart of ['blockbook', 'blockscout', 'dogecoin', 'dstack-controller', 'frontends', 'l1-devnet', 'l1-interface', 'l2-reth', 'proof-coordinator', 'scroll-monitor', 'tso-service']) {
+    const target = path.join(directory, 'charts', chart, 'templates/targetgroupbindings.yaml')
+    fs.mkdirSync(path.dirname(target), {recursive: true})
+    fs.writeFileSync(target, '# Nonfunctional chart capability fixture\n')
+  }
+
   for (const [file, contents] of Object.entries(templates)) {
     const target = path.join(directory, 'examples/values', file)
     fs.mkdirSync(path.dirname(target), {recursive: true})
@@ -51,6 +56,6 @@ export function createSdkFixture(directory: string): string {
 
   fs.writeFileSync(path.join(directory, 'examples/Makefile.example'), ['install-l2-reth-sequencer:', '\t@true', 'delete-l2-reth-sequencer:', '\t@true', 'install-l2-reth-bootnode:', '\t@true', 'delete-l2-reth-bootnode:', '\t@true'].join('\n'))
   const git = (...args: string[]) => execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', stdio: 'pipe'}).trim()
-  git('init'); git('add', 'examples'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Nonfunctional SDK templates')
+  git('init'); git('add', 'examples', 'charts'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Nonfunctional SDK templates')
   return git('rev-parse', 'HEAD')
 }

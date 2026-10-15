@@ -117,12 +117,13 @@ describe('spec values runtime policy across entry points', () => {
 
     for (let repeat = 0; repeat < 2; repeat++) {
       await run(mode, directory, '--sdk-dir', sdk, '--force')
-      const {bindings} = read(directory, 'alb-bindings')
-      expect(Object.keys(bindings)).to.have.length(index)
+      expect(fs.existsSync(path.join(directory, 'values/alb-bindings-production.yaml'))).to.equal(false)
       for (const name of Object.keys(spec.infrastructure.aws!.alb.bindings)) {
         const entry = ALB_SERVICES[name]
         const document = yaml.load(fs.readFileSync(path.join(directory, 'values', entry.file), 'utf8')) as any
         expect(entry.ingress.reduce((value, key) => value[key], document)).to.include({enabled: false, existingAlbBinding: name})
+        const binding = spec.infrastructure.aws!.alb.bindings[name]
+        expect(document.targetGroupBindings[name]).to.deep.equal({serviceRef: binding.serviceRef, targetGroupARN: binding.targetGroupArn, targetType: 'ip'})
       }
     }
   })

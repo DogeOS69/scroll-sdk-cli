@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and AWS responses. */
 import * as yaml from 'js-yaml'
+import {execFileSync} from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -7,8 +8,8 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {AwsCliRunner} from './aws-cli.js'
 import {deploymentIngresses} from './public-service-ingress.js'
+import {resolveSdkRevision} from './spec-bootstrap.js'
 
-export const ALB_BINDINGS_FILE = 'alb-bindings-production.yaml'
 // Binding keys select an existing SDK ingress, so hosts/paths have one source.
 export const ALB_SERVICES: Record<string, {file: string; ingress: string[]}> = {
   'blockbook': {file: 'blockbook-production.yaml', ingress: ['ingress']},
@@ -81,7 +82,22 @@ export function suppressExistingAlbIngress(values: any, file: string, spec?: Dep
     const entry = ALB_SERVICES[name]
     if (entry?.file !== file) continue
     const ingress = entry.ingress.reduce((value, key) => value?.[key], values)
-    if (object(ingress)) Object.assign(ingress, {enabled: false, existingAlbBinding: name})
+    if (object(ingress)) {
+      Object.assign(ingress, {enabled: false, existingAlbBinding: name})
+      if (name === 'dstack-controller') ingress.annotations = {...ingress.annotations, 'alb.ingress.kubernetes.io/scheme': 'internal'}
+    }
+  }
+}
+
+/** Check the actual chart templates at the same committed SDK revision. */
+export function validateExistingAlbSdk(sdkDirectory: string, spec: DeploymentSpec): void {
+  if (!spec.infrastructure.aws?.alb) return
+  const revision = resolveSdkRevision(sdkDirectory, spec.templates?.sdkRevision)
+  for (const name of Object.keys(spec.infrastructure.aws.alb.bindings)) {
+    const chart = name.startsWith('l2-reth-') ? 'l2-reth' : name.startsWith('blockscout-') ? 'blockscout' : name
+    try {
+      execFileSync('git', ['-C', sdkDirectory, 'cat-file', '-e', `${revision}:charts/${chart}/templates/targetgroupbindings.yaml`], {stdio: 'pipe'})
+    } catch {fail(`${name}: selected SDK revision lacks application-owned targetGroupBindings; select the paired SDK release`)}
   }
 }
 
@@ -92,7 +108,8 @@ export function projectExistingAlb(files: Record<string, string>, spec: Deployme
   if (!config) {
     for (const [file, content] of Object.entries(files)) {
       if (!file.endsWith('.yaml')) continue
-      if (deploymentIngresses(yaml.load(content) as any ?? {}).some(ingress => ingress.existingAlbBinding)) fail('cannot remove alb configuration while values still reference existing ALB bindings')
+      const values = yaml.load(content) as any ?? {}
+      if (Object.keys(values.targetGroupBindings ?? {}).length > 0 || deploymentIngresses(values).some(ingress => ingress.existingAlbBinding)) fail('cannot remove alb configuration while values still reference existing ALB bindings')
     }
 
     return
@@ -103,24 +120,27 @@ export function projectExistingAlb(files: Record<string, string>, spec: Deployme
     existingAlbIngress(projected, name)
     const entry = ALB_SERVICES[name]
     const values: any = yaml.load(projected[entry.file])
-    const ingress = entry.ingress.reduce((value, key) => value[key], values)
-    ingress.enabled = false
-    ingress.existingAlbBinding = name
+    suppressExistingAlbIngress(values, entry.file, spec)
+    const binding = config.bindings[name]
+    values.targetGroupBindings ??= {}
+    values.targetGroupBindings[name] = {serviceRef: binding.serviceRef, targetGroupARN: binding.targetGroupArn, targetType: 'ip'}
     projected[entry.file] = yaml.dump(values, {lineWidth: -1, noRefs: true})
   }
 
   for (const [file, content] of Object.entries(projected)) {
     if (!file.endsWith('.yaml')) continue
-    for (const ingress of deploymentIngresses(yaml.load(content) as any ?? {})) {
+    const values = yaml.load(content) as any ?? {}
+    for (const name of Object.keys(values.targetGroupBindings ?? {})) {
+      if (!Object.hasOwn(config.bindings, name) || ALB_SERVICES[name].file !== file) fail(`${file}: stale or misplaced targetGroupBindings entry`)
+    }
+
+    for (const ingress of deploymentIngresses(values)) {
       const name = ingress.existingAlbBinding
       if (name && (!Object.hasOwn(config.bindings, name) || ALB_SERVICES[name].file !== file)) fail(`${file}: stale or misplaced existing ALB binding`)
       if (ingress.enabled !== false) fail(`${file}: enabled ingress has no existing ALB binding; select a binding or explicitly disable this ingress`)
     }
   }
 
-  projected[ALB_BINDINGS_FILE] = yaml.dump({bindings: Object.fromEntries(Object.entries(config.bindings).map(([name, binding]) => [name, {
-    serviceRef: binding.serviceRef, targetGroupARN: binding.targetGroupArn, targetType: 'ip',
-  }]))}, {lineWidth: -1, noRefs: true})
   Object.assign(files, projected)
 }
 

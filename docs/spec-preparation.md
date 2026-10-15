@@ -883,6 +883,11 @@ the compiler Worker contract without additional input files or path flags.
 
 ## ALB edges, internal isolation and workload permissions
 
+For existing ALBs, use [existing ALB mode](existing-alb.md). Application charts
+own their bindings, while ALBs, certificates and forwarding rules remain
+externally managed. The managed-Ingress annotation workflow below applies to
+legacy deployments; it does not configure external ALBs.
+
 The current SDK examples require AWS Load Balancer Controller for HTTPS;
 ingress-nginx and cert-manager are not required. Set issued ACM certificate
 ARNs on enabled ingress values, or run `setup tls --certificate-arn
@@ -1103,6 +1108,9 @@ This is an offline integrity gate; it does not re-fetch remote objects or claim
 that a GPU worker is operational.
 
 ## Internal dstack HTTPS with managed certificate renewal
+
+This managed-Ingress option cannot be combined with `infrastructure.aws.alb`.
+For existing ALBs, configure an internal endpoint and `dstackController.ingress.hosts`.
 
 For AWS deployments, `dstackController.internalTls` generates an internal ALB
 Ingress and binds capacity-manager to its HTTPS hostname. This is an opt-in

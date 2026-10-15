@@ -8,13 +8,13 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
     env:
-      SDK_ALB_CHART: ${{ github.workspace }}/.test-sdk/charts/alb-bindings
+      SDK_ALB_CHARTS: ${{ github.workspace }}/.test-sdk/charts
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: 3bdb1ba2facc66a38b023492349eff531a35a235
+          ref: 2e0443db1a30e2fd9747e61e978f53530cb8d793
           path: .test-sdk
       - uses: azure/setup-helm@v4.3.0
         with:

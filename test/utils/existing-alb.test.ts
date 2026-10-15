@@ -7,7 +7,7 @@ import path from 'node:path'
 
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
-import {ALB_BINDINGS_FILE, projectExistingAlb, projectExistingAlbDirectory, suppressExistingAlbIngress, validateExistingAlb, verifyExistingAlb, verifyExistingAlbTargetHealth} from '../../src/utils/existing-alb.js'
+import {projectExistingAlb, projectExistingAlbDirectory, suppressExistingAlbIngress, validateExistingAlb, validateExistingAlbSdk, verifyExistingAlb, verifyExistingAlbTargetHealth} from '../../src/utils/existing-alb.js'
 import {reconcileDeploymentIngresses} from '../../src/utils/public-service-ingress.js'
 
 const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
@@ -46,7 +46,8 @@ describe('existing ALB lifecycle', () => {
     const values: Record<string, string> = files()
     projectExistingAlb(values, spec())
     expect((yaml.load(values['tso-service-production.yaml']) as any).ingress.main).to.include({enabled: false, existingAlbBinding: 'tso-service'})
-    expect(yaml.load(values[ALB_BINDINGS_FILE])).to.deep.equal({bindings: {'tso-service': {serviceRef: {name: 'tso-service', port: 3000}, targetGroupARN: targetGroupArn, targetType: 'ip'}}})
+    expect((yaml.load(values['tso-service-production.yaml']) as any).targetGroupBindings).to.deep.equal({'tso-service': {serviceRef: {name: 'tso-service', port: 3000}, targetGroupARN: targetGroupArn, targetType: 'ip'}})
+    expect(Object.keys(values)).to.deep.equal(['tso-service-production.yaml'])
     const first = {...values}
     projectExistingAlb(values, spec())
     expect(values).to.deep.equal(first)
@@ -132,9 +133,9 @@ describe('existing ALB lifecycle', () => {
   it('does not silently repair tampered values during verification', () => {
     const values: Record<string, string> = files()
     projectExistingAlb(values, spec())
-    const changed = yaml.load(values[ALB_BINDINGS_FILE]) as any
-    changed.bindings['tso-service'].serviceRef.name = 'unrelated'
-    values[ALB_BINDINGS_FILE] = yaml.dump(changed)
+    const changed = yaml.load(values['tso-service-production.yaml']) as any
+    changed.targetGroupBindings['tso-service'].serviceRef.name = 'unrelated'
+    values['tso-service-production.yaml'] = yaml.dump(changed)
     expect(() => verifyExistingAlb(spec(), values, provider())).to.throw('stale values')
   })
 
@@ -154,21 +155,49 @@ describe('existing ALB lifecycle', () => {
     expect(run).not.to.throw('private-provider-response')
   })
 
-  it('renders real SDK TargetGroupBindings from CLI output without Ingress, hooks or keep annotations', function () {
-    if (!process.env.SDK_ALB_CHART) this.skip()
+  it('requires binding templates in the pinned SDK commit, not just the working tree', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alb-sdk-contract-'))
+    const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], {stdio: 'pipe'})
+    try {
+      git('init')
+      git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'fixture')
+      const template = path.join(root, 'charts/tso-service/templates/targetgroupbindings.yaml')
+      fs.mkdirSync(path.dirname(template), {recursive: true})
+      fs.writeFileSync(template, '# Nonfunctional capability fixture\n')
+      expect(() => validateExistingAlbSdk(root, spec())).to.throw('selected SDK revision lacks')
+      git('add', 'charts/tso-service/templates/targetgroupbindings.yaml')
+      git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'chart fixture')
+      expect(() => validateExistingAlbSdk(root, spec())).not.to.throw()
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  it('rejects stale bindings even if their ingress marker was removed', () => {
+    const values = files()
+    projectExistingAlb(values, spec())
+    const changed = yaml.load(values['tso-service-production.yaml']) as any
+    delete changed.ingress.main.existingAlbBinding
+    changed.targetGroupBindings.foreign = changed.targetGroupBindings['tso-service']
+    values['tso-service-production.yaml'] = yaml.dump(changed)
+    expect(() => projectExistingAlb(values, spec())).to.throw('stale or misplaced targetGroupBindings')
+    const input = spec()
+    delete input.infrastructure.aws!.alb
+    expect(() => projectExistingAlb(values, input)).to.throw('cannot remove alb configuration')
+  })
+
+  it('renders the application and its binding in one SDK Helm release without Ingress', function () {
+    if (!process.env.SDK_ALB_CHARTS) this.skip()
     const values: Record<string, string> = files()
     projectExistingAlb(values, spec())
-    const output = execFileSync('helm', ['template', 'alb-bindings', process.env.SDK_ALB_CHART!, '-n', 'example', '-f', '-'], {encoding: 'utf8', input: values[ALB_BINDINGS_FILE]})
+    const output = execFileSync('helm', ['template', 'tso-service', path.join(process.env.SDK_ALB_CHARTS!, 'tso-service'), '-n', 'example', '-f', '-'], {encoding: 'utf8', input: values['tso-service-production.yaml']})
     const docs = yaml.loadAll(output).filter(Boolean) as any[]
-    expect(docs).to.have.length(1)
-    expect(docs[0].kind).to.equal('TargetGroupBinding')
-    expect(docs[0].metadata.namespace).to.equal('example')
-    expect(docs[0].metadata.annotations).to.equal(undefined)
-    expect(docs[0].spec).to.deep.equal({serviceRef: {name: 'tso-service', port: 3000}, targetGroupARN: targetGroupArn, targetType: 'ip'})
-    const application = execFileSync('helm', ['template', 'tso-service', path.join(process.env.SDK_ALB_CHART!, '../tso-service'), '-n', 'example', '-f', '-'], {encoding: 'utf8', input: values['tso-service-production.yaml']})
-    const workload = yaml.loadAll(application).filter(Boolean) as any[]
-    expect(workload.some(item => item.kind === 'Ingress')).to.equal(false)
-    const service = workload.find(item => item.kind === 'Service' && item.metadata.name === 'tso-service')
+    const bindings = docs.filter(item => item.kind === 'TargetGroupBinding')
+    expect(bindings).to.have.length(1)
+    expect(bindings[0].metadata.namespace).to.equal('example')
+    expect(bindings[0].metadata.labels['app.kubernetes.io/instance']).to.equal('tso-service')
+    expect(bindings[0].metadata.annotations).to.equal(undefined)
+    expect(bindings[0].spec).to.deep.equal({serviceRef: {name: 'tso-service', port: 3000}, targetGroupARN: targetGroupArn, targetType: 'ip'})
+    expect(docs.some(item => item.kind === 'Ingress')).to.equal(false)
+    const service = docs.find(item => item.kind === 'Service' && item.metadata.name === 'tso-service')
     expect(service.spec.type ?? 'ClusterIP').to.equal('ClusterIP')
     expect(service.spec.ports.some((port: any) => port.port === 3000)).to.equal(true)
   })
