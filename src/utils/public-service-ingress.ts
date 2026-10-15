@@ -2,13 +2,18 @@
 const ALB = 'alb.ingress.kubernetes.io/'
 const NGINX = 'nginx.ingress.kubernetes.io/'
 export type PublicIngressService = string
+export const OPERATOR_NGINX_OPT_IN = 'SCROLLSDK_ALLOW_OPERATOR_NGINX_INGRESS'
 
 /** Controller, certificates and edge policy belong to operator values, not spec. */
 export function reconcilePublicServiceIngress(existing: Record<string, any>, service: PublicIngressService, validate = true): Record<string, any> {
   const ingress = structuredClone(existing)
   const annotations = {...ingress.annotations}
   const controller = ingress.ingressClassName || annotations['kubernetes.io/ingress.class'] || 'alb'
-  if (controller !== 'alb') throw new Error(`${service}: ingress controller ${controller} is unsupported; select alb and configure ACM/subnet annotations in values before regeneration`)
+  // Explicit opt-in for clusters whose public edge is an operator-owned
+  // ingress-nginx + cert-manager setup (the AWS regtest cluster has no ALB
+  // controller). The edge is left exactly as the operator configured it.
+  if (controller === 'nginx' && process.env[OPERATOR_NGINX_OPT_IN] === '1') return ingress
+  if (controller !== 'alb') throw new Error(`${service}: ingress controller ${controller} is unsupported; select alb and configure ACM/subnet annotations in values before regeneration (or set ${OPERATOR_NGINX_OPT_IN}=1 to keep an operator-owned nginx edge unchanged)`)
   ingress.ingressClassName = controller
   delete annotations['kubernetes.io/ingress.class']
   if (controller === 'alb') {

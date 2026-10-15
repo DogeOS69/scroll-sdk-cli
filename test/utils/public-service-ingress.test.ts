@@ -27,6 +27,18 @@ describe('public service ingress controller policy', () => {
     expect(() => reconcilePublicServiceIngress(merged.ingress.main, 'tso-service')).to.throw('unsupported')
   })
 
+  it('keeps an operator-owned nginx edge unchanged only with the explicit opt-in', () => {
+    const nginx = {annotations: {'cert-manager.io/cluster-issuer': 'letsencrypt', 'nginx.ingress.kubernetes.io/proxy-body-size': '4m'}, enabled: true, hosts: [{host: 'rpc.example.invalid'}], ingressClassName: 'nginx', tls: [{hosts: ['rpc.example.invalid'], secretName: 'rpc-tls'}]}
+    expect(() => reconcilePublicServiceIngress(nginx, 'l2-reth-rpc-public')).to.throw('unsupported')
+    process.env.SCROLLSDK_ALLOW_OPERATOR_NGINX_INGRESS = '1'
+    try {
+      expect(reconcilePublicServiceIngress(nginx, 'l2-reth-rpc-public')).to.deep.equal(nginx)
+      expect(() => reconcilePublicServiceIngress({...nginx, ingressClassName: 'traefik'}, 'frontends')).to.throw('unsupported')
+    } finally {
+      delete process.env.SCROLLSDK_ALLOW_OPERATOR_NGINX_INGRESS
+    }
+  })
+
   for (const value of [undefined, '<TODO>', '$ENV:ACM_CERTIFICATE', 'REPLACE_WITH_CERTIFICATE', 'not-an-arn']) {
     it(`rejects unresolved required ACM input (${value}) before preparation`, () => {
       expect(() => reconcilePublicServiceIngress({...base(), annotations: {[`${alb}certificate-arn`]: value}}, 'tso-service')).to.throw('issued ACM certificate ARN')
