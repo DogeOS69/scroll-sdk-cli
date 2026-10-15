@@ -1392,7 +1392,7 @@ export default class SetupPrepCharts extends Command {
 
       process.chdir(transaction.stagingRoot)
       generation = await this.generateCharts(stagedValuesDir)
-      prepareCapacityManagerIfSelected(transaction.stagingRoot)
+      if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
       process.chdir(deploymentRoot)
       changedFiles = transaction.commit().changedFiles
     } catch (error) {

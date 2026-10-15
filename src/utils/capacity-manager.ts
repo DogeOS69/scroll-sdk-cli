@@ -21,6 +21,17 @@ export const CAPACITY_MANAGER_VALUES = 'values/capacity-manager-production.yaml'
 export const CAPACITY_MANAGER_PLAN = '.scrollsdk/capacity-manager/plan.json'
 const architectures = {A100: '80', A6000: '86', L4: '89', L40S: '89', RTX3090: '86', RTX4090: '89'}
 
+/** Match Core's transport boundary and preserve the operator's TLS endpoint. */
+export function capacityManagerDstackUrl(value: unknown): string {
+  const fail = (): never => {throw new Error('capacity-manager: set manager.dstack.serverUrl in values/capacity-manager-production.yaml to a verified HTTPS controller endpoint (HTTP is allowed only on an IP loopback address)')}
+  if (typeof value !== 'string' || !value || /[\s\\]|<[^>]+>|\$env:/i.test(value)) return fail()
+  let url: URL
+  try {url = new URL(value)} catch {return fail()}
+  const loopback = /^127(?:\.\d+){3}$/.test(url.hostname) || url.hostname === '[::1]'
+  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) || !url.hostname || url.username || url.password || value.includes('?') || value.includes('#')) return fail()
+  return value
+}
+
 export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<NonNullable<CapacityManagerConfig['fleet']>>} & Required<Omit<CapacityManagerConfig, 'fleet'>> {
   const input = spec.capacityManager
   if (!input) throw new Error('Declare capacityManager in the deployment spec')
@@ -109,7 +120,8 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   specDstackController(spec)
   const dstackNamespace = specKubernetesTarget(spec).namespace
   const dstackName = controller.fullnameOverride ?? 'dstack-controller'
-  projected.manager.dstack.serverUrl = `http://${dstackName}.${dstackNamespace}.svc:${controller.service?.port ?? 3000}`
+  const existing = yaml.load(fs.readFileSync(file, 'utf8')) as any
+  projected.manager.dstack.serverUrl = capacityManagerDstackUrl(existing.manager?.dstack?.serverUrl)
   projected.dstackAuth = controller.auth
   if (!controller.auth?.existingSecret || !controller.auth?.key) throw new Error('Dstack auth Secret reference is required')
   projected.wpAuth = {existingSecret: coordinator.persistence.secrets.name, key: 'proof-work-token'}

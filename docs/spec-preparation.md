@@ -1004,6 +1004,17 @@ API calls or GPU allocation occur during local render or offline tests. Live
 acceptance still needs provider availability, a real proof, restart adoption and
 confirmed instance cleanup.
 
+Before final render, set `manager.dstack.serverUrl` in
+`values/capacity-manager-production.yaml` to the controller's verified HTTPS
+endpoint. Rendering preserves this operator-owned URL and rejects the old HTTP
+ClusterIP default, which Core rejects outside IP loopback addresses. HTTP
+`localhost` is also rejected. Intermediate proof preparation defers this runtime
+input until final render. A private HTTPS proxy or internal ingress must have
+working routing and a trusted certificate, including a renewal mechanism; the CLI
+does not provision TLS or copy certificates. Verify connectivity from the manager
+Pod before accepting capacity readiness. Changing a previously prepared endpoint
+still requires draining the old manager and archiving its local capacity plan.
+
 ### Deferred: proof publication content comparison
 
 Operator decision (2026-10-15): do not compare the publication receipt's whole

@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {assertSdkWorkersRetired, buildCapacityManagerValues, capacityManagerFleets, prepareCapacityManager, resolveCapacityManager} from '../../src/utils/capacity-manager.js'
+import {assertSdkWorkersRetired, buildCapacityManagerValues, capacityManagerDstackUrl, capacityManagerFleets, prepareCapacityManager, resolveCapacityManager} from '../../src/utils/capacity-manager.js'
 import {writeJson} from '../../src/utils/preparation-io.js'
 import {preparationSteps} from '../../src/utils/preparation-plan.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
@@ -30,6 +30,14 @@ function fixture() {
 }
 
 describe('Core capacity manager', () => {
+  it('requires Core-compatible controller transport without disclosing rejected URLs', () => {
+    for (const url of ['https://controller.example.invalid', 'https://controller.example.invalid:8443/api/', 'http://127.0.0.1:3000', 'http://127.1.2.3:3000', 'http://[::1]:3000']) expect(capacityManagerDstackUrl(url)).to.equal(url)
+    for (const url of [undefined, '', 'http://dstack-controller.chain.svc:3000', 'http://localhost:3000', 'http://192.0.2.1:3000', 'ftp://controller.example.invalid', 'https://user:FAKE_PASSWORD@controller.example.invalid', 'https://controller.example.invalid/?token=FAKE_TOKEN', 'https://controller.example.invalid/#fragment', 'https://<TODO>', 'https://controller.example.invalid?']) {
+      expect(() => capacityManagerDstackUrl(url)).to.throw('verified HTTPS controller endpoint')
+      try {capacityManagerDstackUrl(url)} catch (error) {expect((error as Error).message).not.to.include('FAKE_')}
+    }
+  })
+
   it('binds imported controller project/backend to capacity intent without extra operator commands', async () => {
     const {spec} = fixture()
     spec.preparation!.bridge = {image: 'example.invalid/bridge:offline', mode: 'production'}
@@ -126,11 +134,22 @@ describe('Core capacity manager', () => {
       writeJson(path.join(root, '.data/proof-worker-image-check-v1.json'), input.imageCheck)
       fs.mkdirSync(path.join(root, 'values'))
       const save = (service: string, value: any) => fs.writeFileSync(path.join(root, `values/${service}-production.yaml`), yaml.dump(value))
-      save('capacity-manager', {dstackAuth: {existingSecret: 'capacity-manager-dstack-auth'}, fullnameOverride: 'capacity-manager', manager: {scaleDownOnShutdown: false}, persistence: {size: '4Gi'}})
+      save('capacity-manager', {dstackAuth: {existingSecret: 'capacity-manager-dstack-auth'}, fullnameOverride: 'capacity-manager', manager: {dstack: {serverUrl: 'https://controller.example.invalid'}, scaleDownOnShutdown: false}, persistence: {size: '4Gi'}})
       save('proof-coordinator', {persistence: {secrets: {name: 'deployment-proof-secrets'}}})
       save('dstack-controller', {auth: {existingSecret: 'controller-auth', key: 'admin-token'}, fullnameOverride: 'dstack-controller', service: {port: 3000}})
       save('withdrawal-processor', {networkPolicy: {allowFrom: {proofCoordinator: [{podSelector: {matchLabels: {app: 'coordinator'}}}]}, enabled: true}})
       const contract: any = {components: {proofCoordinator: {valuesFile: 'values/proof-coordinator-production.yaml'}, withdrawalProcessor: {valuesFile: 'values/withdrawal-processor-production.yaml'}}, generation: 'real', generationId: 'test-generation', inputs: {publication: {path: '.data/publication.json'}}, mode: 'active', worker: {contractFile: '.data/worker.json'}}
+      const managerPath = path.join(root, 'values/capacity-manager-production.yaml')
+      const original = fs.readFileSync(managerPath, 'utf8')
+      const wpPath = path.join(root, 'values/withdrawal-processor-production.yaml')
+      const originalWp = fs.readFileSync(wpPath, 'utf8')
+      const invalid = original.replace('https://controller.example.invalid', 'http://dstack-controller.chain.svc:3000')
+      fs.writeFileSync(managerPath, invalid)
+      expect(() => prepareCapacityManager(root, () => contract)).to.throw('verified HTTPS controller endpoint')
+      expect(fs.readFileSync(managerPath, 'utf8')).to.equal(invalid)
+      expect(fs.readFileSync(wpPath, 'utf8')).to.equal(originalWp)
+      expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
+      fs.writeFileSync(managerPath, original)
       const result = prepareCapacityManager(root, () => contract)
       const first = fs.readFileSync(result.valuesFile, 'utf8')
       const fleet = yaml.load(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/fleets/aws-l4.yaml'), 'utf8')) as any
@@ -142,7 +161,7 @@ describe('Core capacity manager', () => {
       expect(values.dstackAuth).to.deep.equal({existingSecret: 'controller-auth', key: 'admin-token'})
       expect(values.wpAuth.existingSecret).to.equal('deployment-proof-secrets')
       expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8')).workerSecret).to.equal('dedicated-worker-secret')
-      expect(values.manager.dstack.serverUrl).to.equal('http://dstack-controller.chain.svc:3000')
+      expect(values.manager.dstack.serverUrl).to.equal('https://controller.example.invalid')
       const wp = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any
       expect(wp.networkPolicy.allowFrom.proofCoordinator).to.have.length(1)
       expect(wp.networkPolicy.allowFrom.capacityManager[0].podSelector.matchLabels).to.deep.equal({'app.kubernetes.io/name': 'capacity-manager'})
