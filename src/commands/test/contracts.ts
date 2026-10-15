@@ -55,9 +55,9 @@ export default class TestContracts extends Command {
     }
 
     // Legacy L1 and retired gateway entries in config-contracts.toml are ignored.
-    // Canonical preinstall addresses are fixed and cannot be overridden by config.
+    // Canonical genesis/preinstall addresses are fixed and cannot be overridden by config.
     const groups = [
-      {contracts: contracts.map(contract => ({...contract, address: contractAddresses[contract.name]})), name: 'scroll-contracts'},
+      {contracts: contracts.map(contract => ({...contract, address: contract.address ?? contractAddresses[contract.name]})), name: 'scroll-contracts'},
       {contracts: preinstalledContracts, name: 'dogeos-preinstalls'},
     ]
     const totals = {failures: 0, optionalAbsent: 0, passed: 0}

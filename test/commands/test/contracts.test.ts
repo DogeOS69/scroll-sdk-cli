@@ -14,7 +14,11 @@ import {preinstalledContracts} from '../../../src/data/preinstalled-contracts.js
 const execFileAsync = promisify(execFile)
 const cli = path.resolve('bin/run.js')
 const owner = '0x0000000000000000000000000000000000000001'
-const addresses = Object.fromEntries(contracts.map((contract, index) => [contract.name, `0x${(index + 100).toString(16).padStart(40, '0')}`]))
+const addresses = Object.fromEntries(contracts.filter(contract => !contract.address).map((contract, index) => [contract.name, `0x${(index + 100).toString(16).padStart(40, '0')}`]))
+const genesisAddresses = {
+  BLOCK_HASH_HISTORY_ADDR: '0x0000f90827f1c53a10cb7a02335b175320002935',
+  L2_NATIVE_DOGE_TOKEN_ADDR: '0x530000000000000000000000000000000000d09e',
+}
 const fixedAddress = (name: string) => preinstalledContracts.find(contract => contract.name === name)!.address!.toLowerCase()
 const word = (value: bigint | string) => ethers.zeroPadValue(typeof value === 'bigint' ? ethers.toBeHex(value) : value, 32)
 type RpcCall = {id: number} & (
@@ -119,31 +123,38 @@ describe('test contracts (L2 and preinstalls)', () => {
         if (legacyL1) {
           fs.writeFileSync(path.join(dir, 'config-contracts.toml'), toml.stringify({
             ...addresses,
+            BLOCK_HASH_HISTORY_ADDR: 'unused-genesis-override',
             L1_SCROLL_CHAIN_PROXY_ADDR: 'unused-l1-address',
             L2_BASCULE_MOCK_VERIFIER_ADDR: 'unused-retired-address',
             L2_ETH_GATEWAY_PROXY_ADDR: 'unused-retired-address',
             L2_GATEWAY_ROUTER_PROXY_ADDR: 'unused-retired-address',
+            L2_NATIVE_DOGE_TOKEN_ADDR: 'unused-genesis-override',
             L2_WETH_GATEWAY_PROXY_ADDR: 'unused-retired-address',
             Permit2: 'unused-override',
           }))
         }
 
         const {stderr, stdout} = await run(pod ? ['--pod'] : [])
-        expect(stdout).to.include('35 passed, 0 failed, 7 optional absent.')
-        const coreStart = stdout.indexOf('=== scroll-contracts (14 contracts) ===')
+        expect(stdout).to.include('37 passed, 0 failed, 7 optional absent.')
+        const coreStart = stdout.indexOf('=== scroll-contracts (16 contracts) ===')
         const preinstallsStart = stdout.indexOf('=== dogeos-preinstalls (28 contracts) ===')
         expect(coreStart).to.be.greaterThan(-1)
         expect(preinstallsStart).to.be.greaterThan(coreStart)
         const coreOutput = stdout.slice(coreStart, preinstallsStart)
         const preinstallOutput = stdout.slice(preinstallsStart, stdout.indexOf('Overall:'))
-        expect(coreOutput).to.include('[ok] L2_MOAT_PROXY_ADDR').and.to.include('14 passed, 0 failed, 0 optional absent.')
+        expect(coreOutput).to.include('[ok] L2_MOAT_PROXY_ADDR').and.to.include('16 passed, 0 failed, 0 optional absent.')
         expect(coreOutput).not.to.include('Multicall3')
+        for (const [name, address] of Object.entries(genesisAddresses)) {
+          expect(coreOutput).to.include(`[ok] ${name} (${address}): Deployed`)
+          expect(calls.some(call => call.method === 'eth_call' && call.params[0].to === address)).to.equal(false)
+        }
+
         expect(preinstallOutput).to.include('[ok] Multicall3').and.to.include('21 passed, 0 failed, 7 optional absent.')
         expect(preinstallOutput).not.to.include('L2_MOAT_PROXY_ADDR')
         expect(stdout).not.to.include('L1_SCROLL_CHAIN_PROXY_ADDR').and.not.to.include('GATEWAY').and.not.to.include('BASCULE')
         expect(stderr).not.to.include('JsonRpcProvider failed to detect network')
         expect(calls.filter(call => call.method === 'eth_getCode').map(call => call.params[0])).to.have.members([
-          ...Object.values(addresses), ...preinstalledContracts.map(contract => contract.address!.toLowerCase()),
+          ...Object.values(addresses), ...Object.values(genesisAddresses), ...preinstalledContracts.map(contract => contract.address!.toLowerCase()),
         ])
         expect(calls.filter(call => call.method === 'eth_getStorageAt').map(call => call.params[0])).to.have.members([
           addresses.L2_DOGEOS_MESSENGER_PROXY_ADDR, addresses.L2_MOAT_PROXY_ADDR, addresses.L2_SYSTEM_CONFIG_PROXY_ADDR,
@@ -156,6 +167,15 @@ describe('test contracts (L2 and preinstalls)', () => {
     }
   }
 
+  for (const [name, address] of Object.entries(genesisAddresses)) {
+    it(`fails when the genesis predeploy ${name} is missing on chain`, async () => {
+      absent.add(address)
+      expect(await expectFailure()).to.include(`[failed] ${name}`).and.to.include('Contract not deployed')
+        .and.to.include('15 passed, 1 failed, 0 optional absent.')
+        .and.to.include('Overall: 36 passed, 1 failed, 7 optional absent.')
+    })
+  }
+
   it('fails when a required preinstall is missing', async () => {
     absent.add(fixedAddress('Multicall3'))
     expect(await expectFailure()).to.include('[failed] Multicall3').and.to.include('Contract not deployed')
@@ -163,13 +183,13 @@ describe('test contracts (L2 and preinstalls)', () => {
 
   it('requires the six eip155 Safe contracts when their factory is deployed', async () => {
     absent.delete(fixedAddress('SafeSingletonFactory'))
-    expect(await expectFailure()).to.include('36 passed, 6 failed, 0 optional absent.')
+    expect(await expectFailure()).to.include('38 passed, 6 failed, 0 optional absent.')
   })
 
   it('accepts a complete Safe eip155 deployment', async () => {
     absent.clear()
     const {stdout} = await run()
-    expect(stdout).to.include('42 passed, 0 failed, 0 optional absent.')
+    expect(stdout).to.include('44 passed, 0 failed, 0 optional absent.')
   })
 
   it('does not mistake the Moat owner for its initialization flag', async () => {
@@ -207,10 +227,10 @@ describe('test contracts (L2 and preinstalls)', () => {
   it('fails for core addresses with no deployed code', async () => {
     absent.add(addresses.L2_FEE_VAULT_MOAT_ADAPTER_ADDR)
     expect(await expectFailure()).to.include('[failed] L2_FEE_VAULT_MOAT_ADAPTER_ADDR').and.to.include('Contract not deployed')
-      .and.to.include('13 passed, 1 failed, 0 optional absent.')
+      .and.to.include('15 passed, 1 failed, 0 optional absent.')
       .and.to.include('=== dogeos-preinstalls (28 contracts) ===')
       .and.to.include('21 passed, 0 failed, 7 optional absent.')
-      .and.to.include('Overall: 34 passed, 1 failed, 7 optional absent.')
+      .and.to.include('Overall: 36 passed, 1 failed, 7 optional absent.')
   })
 
   it('reports a missing L2 RPC without requiring an L1 RPC', async () => {

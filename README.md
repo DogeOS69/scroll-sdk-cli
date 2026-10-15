@@ -2526,9 +2526,14 @@ Progress, contract results, and pass/fail/optional-absent counts are grouped by
 repository (`scroll-contracts` and `dogeos-preinstalls`), followed by an overall
 summary. A failed contract check in one group does not skip the other group.
 
-Checks the 14 L2 contracts deployed by `scroll-contracts`' Docker `deploy.sh`,
-using addresses from `config-contracts.toml`. Legacy L1 contracts and retired
-Gateway/Bascule entries are ignored. L1 RPC configuration is not required.
+The `scroll-contracts` group checks 16 L2 contracts: the 14 contracts deployed
+or reused and configured by Docker `deploy.sh`, using addresses from
+`config-contracts.toml`, plus the genesis-only NativeDogeToken and EIP-2935
+BlockHashHistory at their fixed canonical addresses. The latter two require no
+config entries and are checked for code presence, without owner or proxy
+initialization checks. This does not compare live storage against genesis.
+Legacy L1 contracts and retired Gateway/Bascule entries are ignored. L1 RPC
+configuration is not required.
 
 Also checks the 21 required canonical addresses from `dogeos-preinstalls`,
 including Multicall3, CreateX, Arachnid, Permit2, nine canonical Safe v1.3.0
