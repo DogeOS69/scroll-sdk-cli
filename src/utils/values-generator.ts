@@ -676,7 +676,7 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
             confirmerPollIntervalMs: 12_000,
             fetchLimit: 128,
             finalizationDepth: 64,
-            l2Confirmations: 0,
+            l2Confirmations: 1,
             l2RpcUrl: L2_RPC_ENDPOINT,
             maxBlobBaseFeeWei: '50000000000',
             submitterDbPath: '/app/data/submitter.sqlite',
@@ -912,7 +912,7 @@ export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string 
       // DogeOS Indexer
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__RPC_URL', value: L2_RPC_ENDPOINT },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__START_BLOCK', value: '0' },
-      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__CONFIRMATIONS', value: '12' },
+      { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__CONFIRMATIONS', value: '1' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__POLL_INTERVAL_MS', value: '1000' },
       { name: 'DOGEOS_WITHDRAWAL_DOGEOS_INDEXER__LOG_QUERY_BATCH_SIZE', value: '10000' },
       // Ethereum DA resolver/indexer inputs for AdvanceL2 builder v2.
