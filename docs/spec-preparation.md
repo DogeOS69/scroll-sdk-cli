@@ -697,6 +697,31 @@ confirmation, AWS permissions, real proofs or cluster deployment acceptance.
 
 ## Generated proof identities and external completion evidence
 
+Signer-kit publication can run automatically inside `setup proof-materials` for
+new plans with `preparation.deploymentKitPublication: {mode: s3}` (optional
+`awsProfile`). The plan marks this as a cloud operation. The selected
+`proofArtifacts.s3` bucket and region determine the destination; each kit uses
+`deployment-kits/<version>/`, separate from the proof prefix. The publisher
+validates the canonical five files, creates a deterministic `.tar.gz`, uploads
+only missing objects with a no-overwrite condition, and rejects conflicting
+existing bytes. It preserves unrelated bucket policy statements and owns one
+HTTPS-only `s3:GetObject` grant for the exact version prefix. It does not change
+public-access blocks or grant listing, writes or deletes to anonymous users.
+The publishing host needs GNU tar and an AWS CLI supporting S3 `IfNoneMatch`.
+
+All six objects must pass authenticated and anonymous HTTPS byte comparisons
+before the CLI records `published.json` and the doge-config publication entry.
+The result prints the version, archive URL and manifest SHA-256 for Governance;
+it does not post to Governance. Interrupted publication can be retried. Bucket
+policy updates are re-read before writing, but S3 offers no policy compare-and-swap;
+serialize concurrent bucket-policy administration during publication.
+
+Omission or `mode: manual` preserves existing plans and their manual publication
+inbox. For an already planned deployment, run `scrollsdk setup publish-deployment-kit`
+from the generated directory to inspect the local kit/destination, then add
+`--apply` to publish it explicitly. A subsequent stage resume consumes the saved
+receipt. Both modes use the same canonical kit and readiness checks.
+
 The SDK starter uses `preparation.proofRelease: {version: v0.3.0-beta.6}` plus
 `proofMaterials: {mode: real}`. Plan obtains the manifest and checksum from the official core GitHub release and
 pins all five proof images. Missing releases/assets fail before resource changes;

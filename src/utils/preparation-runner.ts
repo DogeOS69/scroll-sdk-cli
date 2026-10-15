@@ -274,7 +274,11 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'deployment-kit': {await exportPreparationDeploymentKit(root); break}
-      case 'deployment-kit-published': {await awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup proof-materials' : 'scrollsdk setup apply'); break}
+      case 'deployment-kit-published': {
+        await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup proof-materials' : 'scrollsdk setup apply'));
+        break
+      }
+
       case 'proof-check': {await command(['proof-config-check']); break}
       case 'secret-upload': {
         const upload = p.secretUpload ?? (spec.infrastructure.provider === 'aws' ? {provider: 'aws' as const} : undefined)

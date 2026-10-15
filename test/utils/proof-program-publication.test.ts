@@ -13,7 +13,7 @@ import type {PreparationPlan} from '../../src/utils/preparation-plan.js'
 import {ExportDeploymentKitCommand} from '../../src/commands/setup/export-deployment-kit.js'
 import {writeDeploymentKit} from '../../src/utils/deployment-kit.js'
 import {deploymentKitBlockers, recordDeploymentKitPublication, withoutPendingDeploymentKit} from '../../src/utils/deployment-kit-record.js'
-import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from '../../src/utils/preparation-deployment-kit.js'
+import {awaitDeploymentKitPublication, exportPreparationDeploymentKit, publishPreparationDeploymentKit} from '../../src/utils/preparation-deployment-kit.js'
 import {AwaitingInput} from '../../src/utils/preparation-io.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 import {writeProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
@@ -545,6 +545,35 @@ describe('real-proof program bundle publication', () => {
     expect(await run('deployment-kit')).to.equal('')
     expect(await run('deployment-kit-published')).to.equal('')
     expect(fs.readFileSync(path.join(root, '.data/doge-config.toml')).equals(recorded)).to.equal(true)
+    expect(deploymentKitBlockers(root, contractFor(), readConfig())).to.deep.equal([])
+  })
+
+  it('automatically records only an anonymously verified S3 kit and preserves deployment configuration', async () => {
+    deploymentKitFixture()
+    fs.appendFileSync(path.join(root, '.data/doge-config.toml'), '\n[proofArtifacts.s3]\nbucket = "dogeos-proof-artifacts"\nregion = "us-east-1"\nkeyPrefix = "devnet/instance"\n')
+    const objects = new Map<string, Buffer>()
+    const aws = {json(args: string[]) {
+      const arg = (name: string) => args[args.indexOf(name) + 1]
+      if (args[1] === 'get-bucket-policy') return {Policy: '{"Statement":[]}'}
+      if (args[1] === 'get-object') {
+        const bytes = objects.get(arg('--key'))
+        if (!bytes) throw new Error('(NoSuchKey) missing')
+        fs.writeFileSync(args.at(-1)!, bytes)
+      } else if (args[1] === 'put-object') objects.set(arg('--key'), fs.readFileSync(arg('--body')))
+      else expect(args[1]).to.equal('put-bucket-policy')
+      return {}
+    }}
+    const file = path.join(root, '.data/doge-config.toml')
+    const before = fs.readFileSync(file, 'utf8')
+    let failure = ''
+    try {await publishPreparationDeploymentKit(root, undefined, {anonymousRead: async () => Buffer.from('wrong'), aws})} catch (error) {failure = String(error)}
+    expect(failure).to.include('Anonymous kit readback differs')
+    expect(fs.readFileSync(file, 'utf8')).to.equal(before)
+    expect(fs.existsSync(path.join(root, '.scrollsdk/inputs/deployment-kit/published.json'))).to.equal(false)
+    const publication = await publishPreparationDeploymentKit(root, undefined, {anonymousRead: async url => objects.get(new URL(url).pathname.split('/').slice(2).join('/'))!, aws})
+    expect(readConfig().attestationSigner!.deploymentKit!.url).to.equal(publication.url)
+    expect(readConfig().proof_topology?.enforcement).to.equal('enforce')
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/inputs/deployment-kit/published.json'), 'utf8')).manifest_sha256).to.equal(publication.manifest_sha256)
     expect(deploymentKitBlockers(root, contractFor(), readConfig())).to.deep.equal([])
   })
 

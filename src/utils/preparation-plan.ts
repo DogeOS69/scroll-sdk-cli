@@ -99,7 +99,8 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   add('secrets', 'Generate private runtime Secrets')
   if (spec.proofTopology?.enforcement === 'enforce') {
     add('deployment-kit', 'Export the signer deployment kit')
-    add('deployment-kit-published', 'Wait for the deployment kit publication record')
+    if (p.deploymentKitPublication?.mode === 's3') add('deployment-kit-published', 'Publish and verify the signer deployment kit in the selected S3 bucket', 'cloud')
+    else add('deployment-kit-published', 'Wait for the deployment kit publication record')
   }
 
   add('proof-check', 'Validate proof configuration and required evidence')
@@ -127,6 +128,8 @@ export function validatePreparation(spec: DeploymentSpec): void {
 
   specAwsSecretPrefix(spec)
   if (!p) throw new Error('preparation is required for setup plan; plain generate-from-spec remains available')
+  if (p.deploymentKitPublication && !['manual', 's3'].includes(p.deploymentKitPublication.mode)) throw new Error('deploymentKitPublication.mode must be manual or s3')
+  if (p.deploymentKitPublication?.mode === 's3' && (spec.proofTopology?.enforcement !== 'enforce' || !spec.proofArtifacts?.s3?.bucket)) throw new Error('S3 deployment kit publication requires enforcing proof topology and a selected proof artifacts bucket')
   if (!['helper', 'production'].includes(p.bridge?.mode)) throw new Error('preparation.bridge.mode must explicitly select production or helper')
   if (p.bridge.mode !== 'production' && p.bridge.production) throw new Error('Production Bridge inputs require preparation.bridge.mode: production')
   if (!p.bridge.image?.includes('@sha256:')) throw new Error('preparation.bridge.image must select an immutable bridge-genesis-tools digest')

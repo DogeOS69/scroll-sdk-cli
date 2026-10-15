@@ -786,6 +786,19 @@ describe('resumable preparation plan', () => {
     expect(() => validatePreparation(spec)).not.to.throw()
   })
 
+  it('marks automatic kit publication as a cloud effect and routes it through the explicit apply command', async () => {
+    const spec = fixture()
+    spec.proofTopology!.enforcement = 'enforce'
+    spec.preparation!.deploymentKitPublication = {awsProfile: 'fixture-profile', mode: 's3'}
+    const step = preparationSteps(spec, true).find(step => step.id === 'deployment-kit-published')!
+    expect(step).to.include({effect: 'cloud', stage: 'proof-materials'})
+    const calls: string[][] = []
+    await new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)}).run(step, spec, deployment, {} as PreparationPlan)
+    expect(calls).to.deep.equal([['publish-deployment-kit', '--apply', '--aws-profile', 'fixture-profile']])
+    delete spec.preparation!.deploymentKitPublication
+    expect(preparationSteps(spec, true).find(step => step.id === 'deployment-kit-published')!.effect).to.equal('local')
+  })
+
   it('selects explicit proof AWS effects and retains publication during evidence regeneration', async () => {
     const spec = fixture()
     spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-west-2'}
