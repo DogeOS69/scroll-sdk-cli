@@ -15,6 +15,7 @@ describe('setup prep-charts dstack controller', () => {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prep-dstack-'))
     command = Object.assign(Object.create(PrepCharts.prototype), {
       dstackController: {enabled: true},
+      flags: {},
       jsonCtx: {logSuccess() {}},
       nonInteractive: true,
     })

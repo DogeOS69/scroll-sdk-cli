@@ -87,6 +87,7 @@ describe('setup prep-charts Dogecoin bootstrap', () => {
   it('preserves absent, empty and explicit storage in the reconciliation used by both modes', () => {
     const command: any = Object.assign(Object.create(PrepCharts.prototype), {
       dogeConfig: {dogecoinClusterRpc: {username: 'fixture-user'}, network: 'regtest'},
+      flags: {},
     })
     for (const input of [{}, {storage: {}}, {storage: {size: ''}}, {storage: {size: '1Ti', storageClass: 'custom'}}]) {
       const generated: any = structuredClone(input)

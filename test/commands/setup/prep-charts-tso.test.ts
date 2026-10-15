@@ -30,6 +30,7 @@ describe('setup prep-charts ALB edges', () => {
       Object.assign(command, {
         configData: {general: {CHAIN_ID_L2: 1234}, ingress: {PROOF_COORDINATOR_HOST: 'proof.example.invalid', TSO_HOST: 'tso.example.invalid'}},
         dogeConfig: {ethereumRpcSecretStore: {prefix: 'dogeos/fixture/default/bridge', provider: 'aws'}, network: 'testnet'},
+        flags: {},
         jsonCtx: {info() {}, logSuccess() {}},
         jsonMode: true,
         log() {},
@@ -51,6 +52,18 @@ describe('setup prep-charts ALB edges', () => {
       invalid.ingress.main.annotations['alb.ingress.kubernetes.io/certificate-arn'] = '<TODO>'
       fs.writeFileSync(file, yaml.dump(invalid))
       let error: unknown
+      try {await command.processProductionYaml(directory)} catch (error_) {error = error_}
+      expect(String(error)).to.include('issued ACM certificate ARN')
+      command.flags['proof-preparation'] = true
+      if (service === 'tso-service') {
+        invalid.networkPolicy.allowFrom.edge = [{ipBlock: {cidr: '<TODO>'}}]
+        fs.writeFileSync(file, yaml.dump(invalid))
+      }
+
+      await command.processProductionYaml(directory)
+      expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).ingress.main.annotations['alb.ingress.kubernetes.io/certificate-arn']).to.equal('<TODO>')
+      command.flags['proof-preparation'] = false
+      error = undefined
       try {await command.processProductionYaml(directory)} catch (error_) {error = error_}
       expect(String(error)).to.include('issued ACM certificate ARN')
     } finally {

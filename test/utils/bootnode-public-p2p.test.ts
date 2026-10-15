@@ -69,6 +69,7 @@ describe('spec bootnode public P2P allowlist', () => {
       fs.writeFileSync(file, yaml.dump({resources: {requests: {cpu: '42m'}}, reth: {p2pExternal: {enabled: false}}, role: 'bootnode'}))
       const key = Wallet.createRandom().privateKey.slice(2)
       const command: any = Object.create(PrepCharts.prototype)
+      command.flags = {}
       command.dogeConfig = {bootnodePublicP2p: [entry()], bootnodeReth: {instances: [{index: 1, nodekey: {privateKey: key, secretMode: 'external-secret'}}]}, network: 'testnet'}
       command.getConfigValue = (name: string) => name === 'general.CHAIN_ID_L2' ? 221_122 : name === 'contracts.overrides.L2_TX_FEE_VAULT' ? '0x5300000000000000000000000000000000000005' : undefined
       command.jsonMode = true; command.nonInteractive = true
