@@ -625,6 +625,14 @@ Other spec changes are not imported. The runtime override is recorded in private
 
 ## Contracts configuration source
 
+Final `setup render` packages the current `config.public.toml` and
+`config-contracts.toml` into `values/scroll-common-config.yaml` and
+`values/scroll-common-config-contracts.yaml`. These are the two TOML wrappers
+consumed by the contracts Helm release. Packaging validates both sources before
+replacing either wrapper and does not regenerate genesis or read private
+`config.toml` into Helm values. The legacy `setup gen-l2-artifacts` path uses
+the same packaging helper, including when a custom values directory is selected.
+
 The contracts portion of generated `config.toml` follows
 [`docker/templates/config.toml` at contracts rc.5](https://github.com/DogeOS69/scroll-contracts/blob/be94674ec64383c1cea61770e64d3b1586bd298e/docker/templates/config.toml),
 checked against that revision's `Configuration.sol`, `GenerateGenesis.s.sol` and
