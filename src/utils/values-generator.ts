@@ -342,7 +342,7 @@ function resolveImage(
  * Project DeploymentSpec inputs; callers merge these into committed SDK values
  * with mergeBootstrapValues to retain runtime policy and operator overrides.
  */
-export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string): GeneratedValuesFiles {
+export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string, options: {bootstrap?: boolean} = {}): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
   if (normalizedSpec.capacityManager) resolveCapacityManager(normalizedSpec)
   if (normalizedSpec.bridge.freshGenesisInit !== undefined && typeof normalizedSpec.bridge.freshGenesisInit !== 'boolean') {
@@ -394,7 +394,7 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
 
   // CubeSigner provides the TEE key. Attestation signers provide attestation keys.
   if (normalizedSpec.signing.cubesigner) {
-    files['cubesigner-signer-production.yaml'] = generateCubesignerValues(normalizedSpec)
+    files['cubesigner-signer-production.yaml'] = generateCubesignerValues(normalizedSpec, options.bootstrap)
   }
 
   // Proof coordination is the only coordinator role in the O3O topology.
@@ -1019,9 +1019,17 @@ export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string 
 /**
  * Generate CubeSigner Signer values
  */
-function generateCubesignerValues(spec: DeploymentSpec): string {
+function generateCubesignerValues(spec: DeploymentSpec, bootstrap = false): string {
   const secretConfig = getSecretProviderConfig(spec)
-  const policyResolution = resolveCubesignerPolicy({keys: (spec.signing?.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.keyId, materialId: key.materialId, roleId: role.roleId}))), network: spec.dogecoin.network, selection: spec.signing?.cubesigner})
+  const selection = spec.signing?.cubesigner
+  // A new Bridge cannot have protocol-bound policy receipts before genesis.
+  // Bootstrap emits an incomplete production configuration; runtime generation
+  // remains strict. Never ignore provided receipts or legacy policy evidence.
+  const pendingPolicy = bootstrap && selection?.mode === 'production_verifier_key_policy'
+    && !selection.policyReceipts && !selection.productionPolicy
+  const policyResolution: ReturnType<typeof resolveCubesignerPolicy> = pendingPolicy
+    ? {mode: 'production_verifier_key_policy', warnings: ['CubeSigner policy receipts are pending; this bootstrap configuration is not ready for deployment']}
+    : resolveCubesignerPolicy({keys: (spec.signing?.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.keyId, materialId: key.materialId, roleId: role.roleId}))), network: spec.dogecoin.network, selection: spec.signing?.cubesigner})
   const productionPolicy = policyResolution.policy
 
   const image = resolveImage(spec, 'cubesignerSigner', {

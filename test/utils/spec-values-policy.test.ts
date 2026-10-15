@@ -53,6 +53,46 @@ describe('spec values runtime policy across entry points', () => {
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
 
+  for (const network of ['mainnet', 'testnet'] as const) {
+    it(`bootstraps ${network} before policy receipts exist without downgrading enforcement`, async () => {
+      spec.dogecoin.network = network
+      spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet).toAddress().toString()
+      spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
+      const directory = path.join(root, 'deployment')
+      await run('--bootstrap', directory, '--sdk-dir', sdk)
+      expect(fs.existsSync(path.join(directory, 'config.toml'))).to.equal(true)
+      const values = read(directory, 'cubesigner-signer')
+      const env = Object.fromEntries(values.env.map((item: any) => [item.name, item.value]))
+      expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy')
+      expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER).to.equal('')
+      expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST).to.equal('')
+      expect(values.probes.readiness.spec.httpGet.path).to.equal('/ready')
+      expect(fs.readFileSync(path.join(directory, '.data/doge-config.toml'), 'utf8')).to.include('production_verifier_key_policy')
+
+      // Reusing bootstrap output must not let runtime rendering bypass receipts.
+      const before = fs.readFileSync(path.join(directory, 'values/cubesigner-signer-production.yaml'), 'utf8')
+      for (const mode of ['--with-values', '--values-only']) {
+        let error: unknown
+        try {await run(mode, directory, '--sdk-dir', sdk, '--force')} catch (error_) {error = error_}
+        expect(String(error)).to.include('requires release and attachment receipts')
+        expect(fs.readFileSync(path.join(directory, 'values/cubesigner-signer-production.yaml'), 'utf8')).to.equal(before)
+      }
+    })
+  }
+
+  it('does not ignore supplied invalid policy receipts during bootstrap', async () => {
+    spec.signing.cubesigner = {
+      mode: 'production_verifier_key_policy',
+      policyReceipts: {} as any,
+      roles: [{keys: [{keyId: 'fixture-key', keyType: 'SecpDogeTestAddr', materialId: 'fixture-material', publicKey: new bitcore.PrivateKey().toPublicKey().toString()}], name: 'fixture-role', roleId: 'fixture-role'}],
+    }
+    let error: unknown
+    const directory = path.join(root, 'deployment')
+    try {await run('--bootstrap', directory, '--sdk-dir', sdk)} catch (error_) {error = error_}
+    expect(String(error)).to.include('Policy input requires a pinned SHA-256')
+    expect(fs.existsSync(directory)).to.equal(false)
+  })
+
   for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects bootnode source restrictions through ${mode} and retains them on regeneration`, async () => {
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '123456789012', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, bootnodeCount: 2, provider: 'aws'}
     spec.identities!.bootnodes.push({index: 1, nodekey: {action: 'create'}})

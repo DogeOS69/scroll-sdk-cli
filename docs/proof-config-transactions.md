@@ -174,6 +174,14 @@ Use the same explicit `mode` in `signing.cubesigner` (DeploymentSpec) or
 - `production_verifier_key_policy`: requires `policyReceipts`. Mixing receipts
   with manually transcribed `productionPolicy` fields is rejected.
 
+Initial `generate-from-spec --bootstrap` (also used by preparation before
+creating genesis) can leave production policy receipts pending when none are
+supplied. It retains `production_verifier_key_policy`, leaves policy identity
+fields empty, and reports that the output is not ready for deployment. It never
+substitutes `transport_only`. Supplied receipts are still verified even during
+bootstrap. Normal `--with-values`, `--values-only`, and `prep-charts` remain
+strict: import the governed release/attachment receipts before final rendering.
+
 `policyReceipts` includes `release`, `attachment`, `protocolContext`, optional
 `liveEvidence` references (`path` plus `sha256`), and explicit `environment` and
 `organization`. Paths resolve relative to the deployment. The release receipt
