@@ -182,7 +182,9 @@ describe('real bake worker identity import', () => {
     const original = proofEnforcementReadiness(root, contract, config)
     // Other missing deployment evidence still blocks readiness.
     expect(original.ready).to.equal(false)
-    expect(original.blockers.some(item => /Publication|Evidence digest/.test(item))).to.equal(false)
+    // This intentionally minimal receipt now lacks the canonical content evidence.
+    expect(original.blockers.join(' ')).to.include('Publication content must bind exactly')
+    expect(original.blockers.some(item => /revision|Evidence digest/.test(item))).to.equal(false)
     fs.appendFileSync(file, ' ')
     expect(proofEnforcementReadiness(root, contract, config).blockers.join(' ')).to.include('Evidence digest mismatch')
     publication.coreRevision = 'd'.repeat(40)

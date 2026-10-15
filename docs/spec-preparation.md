@@ -1053,14 +1053,21 @@ Verify connectivity from the manager
 Pod before accepting capacity readiness. Changing a previously prepared endpoint
 still requires draining the old manager and archiving its local capacity plan.
 
-### Deferred: proof publication content comparison
+### Proof publication content comparison
 
 Operator decision (2026-10-15): do not compare the publication receipt's whole
 topology bundle revision with the current runtime topology. Service configuration
-edits must not require republishing unchanged proof programs. No replacement
-comparison of published program files or protocol materials is enabled for now.
-A future task should design and test that narrower comparison before enabling it.
-Existing proof-material integrity and receipt validation remain separate checks.
+edits must not require republishing unchanged proof programs. The deferred follow-up
+now compares the eleven canonical published program/protocol files by SHA-256,
+size, object key, and content-addressed bundle ID against the selected local
+materials and compiler-generated tag-5 program manifest. Service endpoints,
+credentials, and runtime topology revision do not participate in this comparison.
+Changing a program, OpenVM config, Bridge manifest or protocol context requires
+republishing that bundle. A legacy receipt without the complete file map must be
+replaced by a verified publication receipt. Receipt digest, release, selected
+artifact store and authenticated/anonymous readback evidence checks remain in place.
+This is an offline integrity gate; it does not re-fetch remote objects or claim
+that a GPU worker is operational.
 
 ## Internal dstack HTTPS with managed certificate renewal
 
