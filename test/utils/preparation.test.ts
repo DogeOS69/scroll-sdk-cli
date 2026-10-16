@@ -65,6 +65,24 @@ describe('resumable preparation plan', () => {
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
 
+  it('rejects an SDK without selected ALB support before querying CubeSigner', async () => {
+    const spec = fixture()
+    const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
+    spec.infrastructure = {aws: {
+      accountId: '000000000000', alb: {bindings: {frontends: {endpoint: 'public', serviceRef: {name: 'frontends', port: 80}, targetGroupArn: `${prefix}targetgroup/fixture/2222222222222222`}}, endpoints: {public: {
+        listenerArn: `${prefix}listener/app/fixture/0000000000000000/1111111111111111`,
+        loadBalancerArn: `${prefix}loadbalancer/app/fixture/0000000000000000`,
+      }}, mode: 'existing'}, eksClusterName: 'fixture',
+      region: 'us-east-1',
+    }, bootnodeCount: 1, provider: 'aws', sequencerCount: 1}
+    spec.signing.cubesigner = {identity: {roleId: 'NONFUNCTIONAL_TEST_ROLE'}, mode: 'production_verifier_key_policy'}
+    execFileSync('git', ['-C', sdk, 'rm', 'charts/frontends/templates/targetgroupbindings.yaml'])
+    execFileSync('git', ['-C', sdk, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Remove fixture capability'], {stdio: 'pipe'})
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    await rejected(makePlan, 'selected SDK revision lacks')
+    expect(fs.existsSync(deployment)).false
+  })
+
   it('resumes a frozen staged plan with late governance receipts before invoking prep-charts', async () => {
     const spec = yaml.load(fs.readFileSync(path.join(root, 'intent.yaml'), 'utf8')) as DeploymentSpec
     spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}

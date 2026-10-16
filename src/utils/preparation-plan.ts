@@ -11,6 +11,8 @@ import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {validateDstackAwsBackend} from './dstack-credentials.js'
 import {usesDstackPostgres} from './dstack-database.js'
+import {validateExistingAlb, validateExistingAlbSdk} from './existing-alb.js'
+import {validateExistingNlbSdk} from './existing-nlb.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {needsPreparationPolicy} from './preparation-cubesigner-policy.js'
 import {usesManagedHelper} from './preparation-helper-identity.js'
@@ -257,6 +259,11 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   // Persist the choice in new plans. Previously saved plans keep their original funding path.
   if (spec.preparation?.bridge.mode === 'production' && spec.preparation.bridge.production) spec.preparation.bridge.production.funding ??= 'helper'
   spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
+  // Selected external bindings must be usable by the frozen SDK before any
+  // provider identity queries or release downloads, not only at bootstrap.
+  validateExistingAlb(spec)
+  validateExistingAlbSdk(options.sdkDirectory, spec)
+  validateExistingNlbSdk(options.sdkDirectory, spec)
   spec = resolveCubesignerIdentity(spec)
   spec = await resolvePreparationProofRelease(spec, options.output)
   const validation = validateDeploymentSpec(spec)
