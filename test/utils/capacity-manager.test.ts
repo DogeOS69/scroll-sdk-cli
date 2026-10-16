@@ -141,7 +141,8 @@ describe('Core capacity manager', () => {
       writeJson(path.join(root, '.data/proof-worker-image-check-v1.json'), input.imageCheck)
       fs.mkdirSync(path.join(root, 'values'))
       const save = (service: string, value: any) => fs.writeFileSync(path.join(root, `values/${service}-production.yaml`), yaml.dump(value))
-      save('capacity-manager', {dstackAuth: {existingSecret: 'capacity-manager-dstack-auth'}, fullnameOverride: 'capacity-manager', manager: {dstack: {serverUrl: 'https://controller.example.invalid'}, scaleDownOnShutdown: false}, persistence: {size: '4Gi'}})
+      // Older generated values carry the retired shared-token binding.
+      save('capacity-manager', {dstackAuth: {existingSecret: 'capacity-manager-dstack-auth'}, fullnameOverride: 'capacity-manager', manager: {dstack: {serverUrl: 'https://controller.example.invalid'}, scaleDownOnShutdown: false, workerTokenSecret: 'cm_worker_legacy'}, persistence: {size: '4Gi'}})
       save('proof-coordinator', {persistence: {secrets: {name: 'deployment-proof-secrets'}}})
       save('dstack-controller', {auth: {existingSecret: 'controller-auth', key: 'admin-token'}, fullnameOverride: 'dstack-controller', service: {port: 3000}})
       if (managedTls) save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}, internalTls})!))
@@ -173,6 +174,7 @@ describe('Core capacity manager', () => {
       expect(values.wpAuth.existingSecret).to.equal('deployment-proof-secrets')
       // The master comes from the coordinator's Secret, never the worker Secret.
       expect(values.workerCredentialMaster).to.deep.equal({existingSecret: 'deployment-proof-secrets', key: 'prover-worker-token'})
+      expect(values.manager.workerTokenSecret).to.equal('')
       expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8')).workerCredentialMaster).to.deep.equal(values.workerCredentialMaster)
       expect(values.manager.dstack.serverUrl).to.equal(managedTls ? `https://${internalTls.hostname}` : 'https://controller.example.invalid')
       const wp = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any

@@ -131,6 +131,9 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   // master and mints one credential per run. It is read from the coordinator's
   // own Secret, never from a worker Secret, and no dstack project secret is used.
   projected.workerCredentialMaster = {existingSecret: coordinator.persistence.secrets.name, key: 'prover-worker-token'}
+  // Clear a shared-token binding kept from older generated values; the chart
+  // refuses both modes at once.
+  projected.manager.workerTokenSecret = ''
   const content = mergeBootstrapValues(fs.readFileSync(file, 'utf8'), yaml.dump(projected))
   const values = yaml.load(content) as any
   // Fixed, separately named manager: deployment/selector and Secret destination are a shared contract.
