@@ -7,8 +7,9 @@ import WebSocket from 'ws'
 
 import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { parseTomlConfig } from '../../utils/config-parser.js'
-import {readExistingAlbSpec} from '../../utils/existing-alb.js'
+import {existingAlbIngress, readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
 import {verifyExistingAlbTargetHealth} from '../../utils/existing-alb-runtime.js'
+import {specKubernetesTarget} from '../../utils/spec-kubernetes-target.js'
 import Alb from '../setup/alb.js'
 
 export default class TestIngress extends Command {
@@ -26,13 +27,17 @@ export default class TestIngress extends Command {
   private configValues: Record<string, string> = {}
 
   private frontendToIngressMapping: Record<string, string> = {
-    EXTERNAL_EXPLORER_URI_L2: 'BLOCKSCOUT_HOST',
-    EXTERNAL_RPC_URI_L2: 'RPC_GATEWAY_HOST',
+    EXTERNAL_EXPLORER_URI_L2: 'blockscout',
+    EXTERNAL_RPC_URI_L2: 'rpc',
   }
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(TestIngress)
     const spec = readExistingAlbSpec(process.cwd(), flags.spec)
+    const albHosts: Record<string, string> = {}
+    let namespace = flags.namespace ?? 'default'
+    let kubeContext: string | undefined
+    if (flags.config) this.loadConfig(flags.config)
     if (spec?.infrastructure.aws?.alb) {
       const args = ['--values-dir', flags['values-dir'], '--require-services']
       if (flags.spec) args.push('--spec', flags.spec)
@@ -40,12 +45,21 @@ export default class TestIngress extends Command {
       if (flags['aws-profile']) args.push('--aws-profile', flags['aws-profile'])
       await Alb.run(args, this.config)
       const healthy = verifyExistingAlbTargetHealth(spec, new AwsCliRunner(flags['aws-profile']))
-      this.log(`Existing ALB targets healthy: ${healthy.join(', ')}. No Kubernetes Ingress objects are expected.`)
-      return
-    }
-
-    if (flags.config) {
-      this.loadConfig(flags.config)
+      this.log(`Existing ALB targets healthy: ${healthy.join(', ')}. Selected bindings do not require Kubernetes Ingress objects.`)
+      const target = specKubernetesTarget(spec)
+      kubeContext = target.kubeContext
+      namespace = target.namespace
+      const values = readAlbValues(flags['values-dir'])
+      const names: Record<string, string> = {
+        'blockscout-api': 'blockscout-api', 'blockscout-frontend': 'blockscout', frontends: 'frontends',
+        'l2-reth-rpc-public': 'rpc', 'l2-reth-rpc-public-ws': 'rpc-websocket',
+        'proof-coordinator': 'proof-coordinator', 'tso-service': 'tso-service',
+      }
+      for (const name of healthy) {
+        const ingress = existingAlbIngress(values, name)
+        const host = ingress.hostname ?? ingress.hosts?.[0]
+        albHosts[names[name]] = typeof host === 'string' ? host : host.host
+      }
     }
 
     const requiredNames = [
@@ -61,9 +75,11 @@ export default class TestIngress extends Command {
     }
 
     try {
-      const actualIngresses = await this.getIngresses(flags.namespace ?? 'default')
+      // Existing bindings replace only their own Ingresses. Retain discovery,
+      // connectivity and config checks for the rest of a mixed deployment.
+      const actualIngresses = {...await this.getIngresses(namespace, kubeContext), ...albHosts}
 
-      this.log(chalk.cyan(`List of SDK ingresses found in ${flags.namespace ?? 'default'} namespace:`))
+      this.log(chalk.cyan(`List of SDK ingress and ALB hosts found in ${namespace} namespace:`))
       for (const [name, host] of Object.entries(actualIngresses)) {
         this.log(`- ${chalk.green(name)}: ${terminalLink(host, `http://${host}`)}`)
       }
@@ -259,9 +275,10 @@ export default class TestIngress extends Command {
     }
   }
 
-  private async getIngresses(namespace: string): Promise<Record<string, string>> {
+  private async getIngresses(namespace: string, kubeContext?: string): Promise<Record<string, string>> {
     const kc = new k8s.KubeConfig()
     kc.loadFromDefault()
+    if (kubeContext) kc.setCurrentContext(kubeContext)
     const k8sApi = kc.makeApiClient(k8s.NetworkingV1Api)
 
     const response = await k8sApi.listNamespacedIngress({ namespace })

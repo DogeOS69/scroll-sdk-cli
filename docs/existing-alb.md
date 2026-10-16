@@ -111,6 +111,11 @@ This requires read access to TargetGroupBindings, Services and EndpointSlices in
 the spec namespace. `setup alb --require-services` remains an installation
 preflight and does not require the bindings to exist yet.
 
+After binding verification, `test ingress` checks the retained ALB hostnames
+alongside ordinary Ingresses in the spec's namespace and Kubernetes context.
+HTTP/WebSocket connectivity, `--config` URL comparisons and `--dev` requirements
+continue to apply to mixed deployments, including applications without a binding.
+
 The controller and CRD must be installed separately. Target groups are exclusive
 to one binding; this mode does not support shared groups or manual targets.
 The controller needs target registration/deregistration permissions, not ALB

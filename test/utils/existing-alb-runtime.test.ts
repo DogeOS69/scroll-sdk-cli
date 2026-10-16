@@ -60,6 +60,9 @@ describe('existing ALB runtime ownership', () => {
     const sandbox = sinon.createSandbox()
     try {
       fs.writeFileSync(path.join(root, 'deployment-spec.yaml'), JSON.stringify(f.spec))
+      fs.mkdirSync(path.join(root, 'values'))
+      fs.writeFileSync(path.join(root, 'values/frontends-production.yaml'), JSON.stringify({ingress: {main: {enabled: false, existingAlbBinding: 'frontends', hosts: [{host: 'portal.example.invalid'}]}}}))
+      fs.writeFileSync(path.join(root, 'config.toml'), '[frontend]\nEXTERNAL_RPC_URI_L2 = "https://wrong-rpc.example.invalid"\n')
       fs.writeFileSync(path.join(root, 'fixture.json'), JSON.stringify({bindings: f.data.bindings, service: f.service, slices: f.data.slices}))
       fs.writeFileSync(path.join(root, 'kubectl'), `#!${process.execPath}\nconst fs = require('node:fs'); const f = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(root, 'fixture.json'))})); const args = process.argv.slice(2); if (args[0] !== '--context' || args[1] !== 'fixture-context' || args[2] !== 'get') process.exit(2); const result = {'targetgroupbindings.elbv2.k8s.aws': {items: f.bindings}, service: f.service, 'endpointslices.discovery.k8s.io': {items: f.slices}}[args[3]]; if (!result) process.exit(2); console.log(JSON.stringify(result));\n`, {mode: 0o755})
       process.chdir(root)
@@ -68,7 +71,10 @@ describe('existing ALB runtime ownership', () => {
       sandbox.stub(AwsCliRunner.prototype, 'json').callsFake(f.aws.json)
       const log = sandbox.stub()
       const command: any = Object.create(TestIngress.prototype)
-      Object.assign(command, {config: {}, log, parse: async () => ({flags: {'values-dir': 'values'}})})
+      Object.assign(command, {config: {}, configValues: {}, frontendToIngressMapping: {EXTERNAL_RPC_URI_L2: 'rpc'}, log, parse: async () => ({flags: {config: 'config.toml', dev: true, 'values-dir': 'values'}})})
+      const ingresses = sandbox.stub(command, 'getIngresses').resolves({grafana: 'grafana.example.invalid', rpc: 'rpc.example.invalid'})
+      const connectivity = sandbox.stub(command, 'checkHost').callsFake(async (_host: unknown, name: unknown) => name !== 'grafana')
+      const compare = sandbox.spy(command, 'compareWithConfig')
       let error: unknown
       try {await command.run()} catch (error_) {error = error_}
       expect(preflight.calledOnce).to.equal(true)
@@ -76,15 +82,45 @@ describe('existing ALB runtime ownership', () => {
       if (installed) {
         expect(error).to.equal(undefined)
         expect(log.calledWithMatch('Existing ALB targets healthy')).to.equal(true)
+        expect(ingresses.calledOnceWithExactly('fixture-namespace', 'fixture-context')).true
+        expect(connectivity.calledWith('portal.example.invalid', 'frontends')).true
+        expect(connectivity.calledWith('grafana.example.invalid', 'grafana')).true
+        expect(compare.calledOnce).true
+        expect(log.args.flat().join('\n')).include('grafana is not reachable').and.include('Mismatch for EXTERNAL_RPC_URI_L2').and.include('l1-devnet')
       } else {
         expect(String(error)).to.include('expected one installed')
         expect(log.called).to.equal(false)
+        expect(ingresses.called).false
       }
     } finally {
       sandbox.restore()
       process.chdir(cwd)
       if (oldPath === undefined) delete process.env.PATH
       else process.env.PATH = oldPath
+      fs.rmSync(root, {force: true, recursive: true})
+    }
+  })
+
+  it('retains normal ingress checks without an ALB spec', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ingress-without-alb-'))
+    const cwd = process.cwd()
+    const sandbox = sinon.createSandbox()
+    try {
+      process.chdir(root)
+      const command = Object.create(TestIngress.prototype)
+      Object.assign(command, {configValues: {}, log() {}, parse: async () => ({flags: {namespace: 'legacy'}})})
+      const ingresses = sandbox.stub(command, 'getIngresses').resolves({grafana: 'grafana.example.invalid'})
+      const connectivity = sandbox.stub(command, 'checkHost').resolves(true)
+      const preflight = sandbox.stub(Alb, 'run').rejects(new Error('must not call ALB'))
+      await command.run()
+      expect(preflight.called).false
+      expect(ingresses.calledOnce).true
+      expect(ingresses.firstCall.args[0]).eq('legacy')
+      expect(ingresses.firstCall.args[1]).undefined
+      expect(connectivity.calledOnceWithExactly('grafana.example.invalid', 'grafana')).true
+    } finally {
+      sandbox.restore()
+      process.chdir(cwd)
       fs.rmSync(root, {force: true, recursive: true})
     }
   })
