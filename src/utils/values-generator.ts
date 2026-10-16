@@ -26,7 +26,7 @@ import {
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
-import {CORE_DOCKER_DEFAULT_TAG, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
+import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, CORE_DOCKER_DEFAULT_TAG, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
 import {contractsDeploymentGasPrice} from './contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
@@ -1543,6 +1543,7 @@ function generateContractsValues(spec: DeploymentSpec): string {
     configMaps: {
       'contracts-deployment-env': {
         data: {
+          BATCH_SIZE: CONTRACTS_DEPLOYMENT_BATCH_SIZE,
           CHAIN_ID_L1: String(resolveDogecoinChainId(spec.dogecoin.network)),
           CHAIN_ID_L2: String(spec.network.l2ChainId),
           ...(deploymentGasPrice && {ETH_GAS_PRICE: deploymentGasPrice}),
