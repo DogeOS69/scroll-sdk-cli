@@ -2378,7 +2378,7 @@ This requires a **real Blockscout v2 API**: l2scan or another Etherscan-compatib
 API is not supported even when its Forge verifier type is called `blockscout`.
 
 `--image-tag` selects only the DogeOS contracts verifier. The independent
-`--preinstalls-image` defaults to `dogeos69/preinstalls:v0.2.1`; set it to the
+`--preinstalls-image` defaults to `dogeos69/preinstalls:v0.2.2`; set it to the
 preinstalls release actually deployed so the source set matches. The CLI
 overrides the image's deployment entrypoint with
 `bash /app/lib/verify-blockscout.sh` and passes the API root as one Docker command
