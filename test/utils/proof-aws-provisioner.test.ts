@@ -1080,6 +1080,14 @@ describe('proof-aws-provisioner worker-credential master', () => {
     expect(writes[0]['prover-worker-master']).not.to.equal('legacy-shared')
   })
 
+  it('never echoes malformed secret contents', () => {
+    const aws = {json: () => ({}), run: () => '', text: () => '{"proof-work-token": "plaintext-must-not-leak'}
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws as any) as any
+    expect(() => provisioner.ensureTokenSecret('us-west-2', 'test/proof', false))
+      .to.throw('contents omitted')
+      .with.property('message').that.does.not.include('plaintext-must-not-leak')
+  })
+
   it('reuses a secret that already has a master', () => {
     const {provisioner, writes} = fakeSecret({'proof-work-token': 'a', 'prover-worker-master': 'b'})
     expect(provisioner.ensureTokenSecret('us-west-2', 'test/proof', false)).to.equal('reused')

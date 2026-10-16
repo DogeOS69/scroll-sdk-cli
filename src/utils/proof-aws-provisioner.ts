@@ -944,7 +944,15 @@ export class ProofAwsProvisioner {
 
     // Shared-token deployments predate the master. Add a fresh one instead of
     // promoting the old shared token, which every existing worker knows.
-    const existing = JSON.parse(this.aws.text(['secretsmanager', 'get-secret-value', '--secret-id', secretName], { query: 'SecretString', region })) as Record<string, unknown>
+    let existing: Record<string, unknown>
+    try {
+      existing = JSON.parse(this.aws.text(['secretsmanager', 'get-secret-value', '--secret-id', secretName], { query: 'SecretString', region }))
+    } catch {
+      // JSON.parse errors can quote secret plaintext; never surface them.
+      throw new Error(`proof-aws: ${secretName} could not be read as a JSON property map (contents omitted)`)
+    }
+
+    if (typeof existing !== 'object' || existing === null || Array.isArray(existing)) throw new Error(`proof-aws: ${secretName} is not a JSON property map`)
     const missing = PROOF_SECRET_PROPERTIES.filter(property => typeof existing[property] !== 'string' || !(existing[property] as string).trim())
     if (missing.length > 0) {
       const merged = {...existing, ...Object.fromEntries(missing.map(property => [property, fresh()]))}

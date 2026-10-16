@@ -203,6 +203,7 @@ describe('compiled prover-worker bundle', () => {
     expect(() => hydrateCompiledProverWorkerBundle({bundleDir, workerToken: mintWorkerCredential(TEST_MASTER, 'other-gpu')}))
       .to.throw('minted for other-gpu')
     expect(fs.existsSync(path.join(bundleDir, 'prover-worker.token'))).to.equal(false)
+    expect(fs.readdirSync(bundleDir).filter(name => name.includes('.tmp-'))).to.deep.equal([])
   })
 
   it('launches Compose as the invoking host UID/GID with private readiness storage', () => {

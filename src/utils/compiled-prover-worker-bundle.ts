@@ -170,11 +170,15 @@ function assertWorkerCredential(credential: string, worker: ProverWorkerContract
   }
 }
 
-/** The Worker id a credential must be minted for; read from the bundle's verified contract. */
-export function compiledBundleWorkerId(bundleDir: string): string {
-  const worker = JSON.parse(
+function readBundleWorker(bundleDir: string): ProverWorkerContractV1 {
+  return JSON.parse(
     fs.readFileSync(path.join(path.resolve(bundleDir), COMPILED_PROVER_WORKER_CONTRACT), 'utf8'),
   ) as ProverWorkerContractV1
+}
+
+/** The Worker id a credential must be minted for; read from the bundle's verified contract. */
+export function compiledBundleWorkerId(bundleDir: string): string {
+  const worker = readBundleWorker(bundleDir)
   const workerId = argumentValue(worker, '--worker-id')
   if (!workerId) throw new Error('compiled Worker argv has no --worker-id; cannot mint its credential')
   return workerId
@@ -503,6 +507,7 @@ export function writeCompiledProverWorkerBundle(
   fs.rmSync(tokenPath, {force: true})
   if (options.workerToken) {
     if (!options.workerToken.trim()) throw new Error('worker token must be non-empty')
+    assertWorkerCredential(options.workerToken, options.worker, 'worker token')
     fs.writeFileSync(tokenPath, `${options.workerToken.trim()}\n`, {mode: 0o600})
   }
 
@@ -677,6 +682,8 @@ export function hydrateCompiledProverWorkerBundle(options: {
     bundleDir,
     expectedBundleId: options.expectedBundleId,
   })
+  // Reject a master or another Worker's credential before anything is written.
+  assertWorkerCredential(options.workerToken, readBundleWorker(bundleDir), 'worker token')
   const manifest = readManifest(manifestFile)
   const tokenPath = path.join(bundleDir, COMPILED_PROVER_WORKER_TOKEN_FILE)
   const originalManifest = fs.readFileSync(manifestFile)

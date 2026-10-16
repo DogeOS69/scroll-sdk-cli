@@ -16,7 +16,14 @@ export function readProverWorkerMasterFromSecretsManager(options: {
     ['secretsmanager', 'get-secret-value', '--secret-id', options.secretName],
     {query: 'SecretString', region: options.awsRegion},
   )
-  const parsed = JSON.parse(secretString) as Record<string, unknown>
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(secretString)
+  } catch {
+    // JSON.parse errors can quote secret plaintext; never surface them.
+    throw new TypeError(`Secrets Manager secret ${options.secretName} is not a JSON property map (contents omitted)`)
+  }
+
   if (typeof parsed !== 'object' || parsed === null) {
     throw new TypeError(`Secrets Manager secret ${options.secretName} is not a JSON property map`)
   }

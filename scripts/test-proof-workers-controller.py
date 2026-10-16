@@ -36,7 +36,8 @@ def plan():
             'env': {'SCROLLSDK_WORKER_PLAN_ID': 'test'}}
     return {'id': 'test', 'project': 'example', 'secretName': 'test_secret',
             'config': {'startupTimeoutMinutes': 30, 'maxDurationHours': 2, 'stopTimeoutMinutes': 13},
-            'workers': [{'name': 'test-worker', 'fleet': fleet, 'task': task}]}
+            'workers': [{'name': 'test-worker', 'fleet': fleet, 'task': task,
+                         'secretName': 'test_secret_0', 'workerId': 'test-worker-0'}]}
 
 
 class Client:
@@ -49,7 +50,9 @@ class Client:
                                         get_plan=lambda project, value, **kw: value, apply_plan=self.apply_run)
         self.fleets = types.SimpleNamespace(get=self.get_fleet, delete=self.delete,
                                           get_plan=lambda project, value: value, apply_plan=self.apply_fleet)
-        self.secrets = types.SimpleNamespace(create_or_update=lambda *a: self.calls.append('secret'))
+        self.secrets = types.SimpleNamespace(
+            create_or_update=lambda project, name, value: self.calls.append(['secret', name, value]),
+            delete=lambda project, names: self.calls.append(('delete-secrets', names)))
 
     def get_run(self, *_args):
         if not self.run:
@@ -82,7 +85,8 @@ class Lifecycle(unittest.TestCase):
     def setUp(self):
         self.client = Client()
         self.plan = plan()
-        self.payload = {'action': 'apply', 'plan': self.plan, 'startedAt': 1000, 'token': 'disposable-test-only'}
+        self.payload = {'action': 'apply', 'plan': self.plan, 'startedAt': 1000,
+                        'credentials': {'test_secret_0': 'test-worker-0.' + 'c' * 64}}
 
     def apply(self):
         with patch.object(adapter, 'APIClient', return_value=self.client), patch.dict('os.environ', {'DSTACK_SERVER_ADMIN_TOKEN': 'disposable-test-only'}), patch.object(adapter.time, 'time', return_value=1100):
@@ -179,6 +183,7 @@ class Lifecycle(unittest.TestCase):
         second = copy.deepcopy(self.plan['workers'][0])
         second['name'] = 'second-worker'
         second['fleet']['name'] = 'second-gpu'
+        second['secretName'] = 'test_secret_1'
         self.plan['workers'].append(second)
         def stop(project, names, abort):
             self.client.calls.append(('stop', names, abort))
@@ -190,6 +195,20 @@ class Lifecycle(unittest.TestCase):
             self.apply()
         self.assertIn(('stop', ['second-worker'], True), self.client.calls)
         self.assertIn(('delete', ['second-gpu']), self.client.calls)
+
+    def test_each_worker_secret_holds_only_its_own_credential(self):
+        second = copy.deepcopy(self.plan['workers'][0])
+        second.update(name='second-worker', secretName='test_secret_1', workerId='test-worker-1')
+        self.plan['workers'].append(second)
+        self.payload['credentials']['test_secret_1'] = 'test-worker-1.' + 'd' * 64
+        try:
+            self.apply()
+        except Exception:
+            pass  # The single-run fake cannot model two runs; secrets are written first.
+        secrets = [c for c in self.client.calls if isinstance(c, list)]
+        self.assertEqual(secrets, [['secret', 'test_secret_0', 'test-worker-0.' + 'c' * 64],
+                                   ['secret', 'test_secret_1', 'test-worker-1.' + 'd' * 64]])
+        self.assertEqual(adapter.secret_names(self.plan), ['test_secret_0', 'test_secret_1'])
 
     def test_auth_failure_does_not_become_resource_absence(self):
         self.client.runs.get = lambda *a: (_ for _ in ()).throw(PermissionError())
