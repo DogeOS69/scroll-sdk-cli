@@ -1,5 +1,9 @@
 # Prepare a deployment in explicit stages
 
+For supported public applications on AWS, select [existing ALB references](existing-alb.md) in
+`infrastructure.aws.alb`. Final preparation requires bindings for exposed
+endpoints; Helm installs bindings without owning the ALB lifecycle.
+
 `setup plan` saves a fresh deployment plan. Six stage commands execute only their
 selected stage, persist completed steps and stop for external inputs. Run the
 commands from the private working directory containing your spec and environment
@@ -878,6 +882,11 @@ boundaries. It reuses `.scrollsdk/intent.json`, existing controller credentials 
 the compiler Worker contract without additional input files or path flags.
 
 ## ALB edges, internal isolation and workload permissions
+
+For the supported public applications, use [existing ALB mode](existing-alb.md). Their charts
+own their bindings, while ALBs, certificates and forwarding rules remain
+externally managed. The managed-Ingress annotation workflow below applies to
+legacy deployments; it does not configure external ALBs.
 
 The current SDK examples require AWS Load Balancer Controller for HTTPS;
 ingress-nginx and cert-manager are not required. Set issued ACM certificate

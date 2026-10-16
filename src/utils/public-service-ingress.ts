@@ -6,6 +6,7 @@ export type PublicIngressService = string
 /** Controller, certificates and edge policy belong to operator values, not spec. */
 export function reconcilePublicServiceIngress(existing: Record<string, any>, service: PublicIngressService, validate = true): Record<string, any> {
   const ingress = structuredClone(existing)
+  if (ingress.existingAlbBinding) ingress.enabled = false
   const annotations = {...ingress.annotations}
   const controller = ingress.ingressClassName || annotations['kubernetes.io/ingress.class'] || 'alb'
   if (controller !== 'alb') throw new Error(`${service}: ingress controller ${controller} is unsupported; select alb and configure ACM/subnet annotations in values before regeneration`)

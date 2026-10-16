@@ -87,6 +87,7 @@ bin/run.js --help
 
 - [Staged spec preparation](docs/spec-preparation.md) — plan plus six resumable stages, local genesis, funding handoffs and explicit Secret upload.
 - [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
+- [Existing ALBs](docs/existing-alb.md) — select ALB/listener/target-group references in spec, verify them, and retain AWS edges when uninstalling Helm releases.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
 - [Pure Reth configuration](docs/reth-only-peers.md) — Reth node identities and peer configuration.
 - [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — selected bootnode exposure and external RPC peer export; `setup bootnode-public-p2p` is deprecated.
