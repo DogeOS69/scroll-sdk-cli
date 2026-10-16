@@ -3,8 +3,8 @@ import {promisify} from 'node:util'
 
 const execFileAsync = promisify(execFile)
 
-// Keep aligned with scroll-sdk/charts/preinstalls-deployer/values.yaml.
-export const PREINSTALLS_CHECK_IMAGE = 'dogeos69/preinstalls:v0.2.1'
+// Keep aligned with scroll-sdk/examples/values/preinstalls-production.yaml.
+export const PREINSTALLS_CHECK_IMAGE = 'dogeos69/preinstalls:v0.2.2'
 
 /** verify.sh and cast may echo RPC credentials in normal output or diagnostics. */
 function redactRpc(output: string, rpcUrl: string): string {

@@ -327,13 +327,13 @@ images:
     # L2 Execution Layer (Reth)
     l2Sequencer:
       repository: dogeos69/rollup-node
-      tag: TODO_TAG_TO_REPLACE
+      tag: v0.3.0-beta.2
     l2Rpc:
       repository: dogeos69/rollup-node
-      tag: TODO_TAG_TO_REPLACE
+      tag: v0.3.0-beta.2
     l2Bootnode:
       repository: dogeos69/rollup-node
-      tag: TODO_TAG_TO_REPLACE
+      tag: v0.3.0-beta.2
 
     # Rollup Services
     coordinator:

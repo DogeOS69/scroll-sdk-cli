@@ -3,8 +3,11 @@ import {select} from '@inquirer/prompts'
 import {Command, Flags} from '@oclif/core'
 import chalk from 'chalk'
 import Docker from 'dockerode'
+import path from 'node:path'
 
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
+import {PREINSTALLS_CHECK_IMAGE} from '../../utils/preinstalls-image-check.js'
+import {PreinstallsVerificationExitError, preparePreinstallsVerification, runPreinstallsVerification} from '../../utils/preinstalls-source-verification.js'
 
 export default class ContractsVerification extends Command {
   static override description = 'Set up contracts verification'
@@ -12,24 +15,60 @@ export default class ContractsVerification extends Command {
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --image-tag verify-v0.2.0-debug',
+    '<%= config.bin %> <%= command.id %> --preinstalls --config-dir ./deployment',
+    '<%= config.bin %> <%= command.id %> --preinstalls-only --preinstalls-image dogeos69/preinstalls:v0.2.1',
   ]
 
   static override flags = {
+    'config-dir': Flags.string({
+      default: '.',
+      description: 'Directory containing config.toml and contract verification artifacts',
+    }),
     'image-tag': Flags.string({
       description: 'Specify the Docker image tag to use',
       required: false,
     }),
+    preinstalls: Flags.boolean({
+      description: 'Also submit preinstalls sources to the configured L2 Blockscout v2 API',
+      exclusive: ['preinstalls-only'],
+    }),
+    'preinstalls-image': Flags.string({
+      description: `Preinstalls image matching the deployed release (default: ${PREINSTALLS_CHECK_IMAGE})`,
+    }),
+    'preinstalls-only': Flags.boolean({
+      description: 'Only submit preinstalls sources; skip the DogeOS contracts verifier',
+      exclusive: ['preinstalls', 'image-tag'],
+    }),
   }
 
   public async run(): Promise<void> {
-    this.log(chalk.blue('Running docker command to contracts verification...'))
-
     const {flags} = await this.parse(ContractsVerification)
+    const directory = path.resolve(flags['config-dir'])
+    if (flags['preinstalls-image'] && !flags.preinstalls && !flags['preinstalls-only']) {
+      this.error('--preinstalls-image requires --preinstalls or --preinstalls-only.')
+    }
 
-    const imageTag = await this.getDockerImageTag(flags['image-tag'])
-    this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
+    // Validate the additional target before either verifier can submit anything.
+    const preinstalls = flags.preinstalls || flags['preinstalls-only']
+      ? preparePreinstallsVerification(directory, flags['preinstalls-image']) : undefined
 
-    await this.runDockerCommand(imageTag)
+    if (!flags['preinstalls-only']) {
+      this.log(chalk.blue('Running Docker contracts verification...'))
+      const imageTag = await this.getDockerImageTag(flags['image-tag'])
+      this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
+      await this.runDockerCommand(imageTag, directory)
+    }
+
+    if (preinstalls) {
+      this.log(chalk.blue('Submitting preinstalls sources to Blockscout...'))
+      try {
+        await runPreinstallsVerification(preinstalls, message => this.log(message))
+      } catch (error) {
+        if (error instanceof PreinstallsVerificationExitError) this.error(error.message, {exit: error.exitCode})
+        // Docker errors can contain container request details. Keep endpoint/config private.
+        this.error('Preinstalls verification failed. Check the verifier output and Docker availability, then retry with --preinstalls-only.')
+      }
+    }
   }
 
   private async fetchDockerTags(): Promise<string[]> {
@@ -80,7 +119,7 @@ export default class ContractsVerification extends Command {
     return selectedTag
   }
 
-  private async runDockerCommand(imageTag: string): Promise<void> {
+  private async runDockerCommand(imageTag: string, directory: string): Promise<void> {
     const docker = new Docker()
     const image = `${DOCKER_REPOSITORY}:${imageTag}`
 
@@ -106,7 +145,7 @@ export default class ContractsVerification extends Command {
       const container = await docker.createContainer({
         Cmd: [], // Add any command if needed
         HostConfig: {
-          Binds: [`${process.cwd()}:/contracts/volume`],
+          Binds: [`${directory}:/contracts/volume`],
         },
         Image: image,
       })
@@ -159,7 +198,7 @@ export default class ContractsVerification extends Command {
               Cmd: ['chown', '-R', `${uid}:${gid}`, '/volume'],
               HostConfig: {
                 AutoRemove: true,
-                Binds: [`${process.cwd()}:/volume`],
+                Binds: [`${directory}:/volume`],
               },
               Image: 'alpine:latest',
             })

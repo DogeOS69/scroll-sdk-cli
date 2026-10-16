@@ -2336,10 +2336,15 @@ Set up contracts verification
 
 ```
 USAGE
-  $ scrollsdk setup verify-contracts [--image-tag <value>]
+  $ scrollsdk setup verify-contracts [--image-tag <value>] [--config-dir <value>]
+    [--preinstalls | --preinstalls-only] [--preinstalls-image <value>]
 
 FLAGS
   --image-tag=<value>  Specify the Docker image tag to use
+  --config-dir=<value> Directory containing config.toml and verification artifacts (default: .)
+  --preinstalls       Also submit preinstalls sources to Blockscout
+  --preinstalls-only  Only submit preinstalls sources
+  --preinstalls-image=<value>  Preinstalls image matching the deployed release
 
 DESCRIPTION
   Set up contracts verification
@@ -2348,9 +2353,44 @@ EXAMPLES
   $ scrollsdk setup verify-contracts
 
   $ scrollsdk setup verify-contracts --image-tag verify-v0.2.0-debug
+
+  $ scrollsdk setup verify-contracts --preinstalls --config-dir ./deployment
+
+  $ scrollsdk setup verify-contracts --preinstalls-only --preinstalls-image dogeos69/preinstalls:v0.2.1
 ```
 
 _See code: [src/commands/setup/verify-contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/verify-contracts.ts)_
+
+Without a preinstalls flag, this command retains the existing DogeOS contracts
+verification behavior. `--preinstalls` runs that verifier first, then submits the
+standard preinstalls sources; `--preinstalls-only` retries only the latter. A
+failure in either selected verifier makes the command fail. Preinstalls settings
+are validated before either container starts.
+
+The preinstalls path reads `[contracts.verification]` in `config.toml` under
+`--config-dir`: `VERIFIER_TYPE_L2` must be `blockscout`, `EXPLORER_URI_L2` must be a
+Blockscout site URL or its `/api` root, and `EXPLORER_API_KEY_L2` must be empty.
+For example, `https://explorer.example/chain/` and
+`https://explorer.example/chain/api/` both select
+`https://explorer.example/chain/api`. The script appends `/v2/...`; do not pass an
+`/api/v2` URL. Credential-bearing URLs, query strings and fragments are rejected.
+This requires a **real Blockscout v2 API**: l2scan or another Etherscan-compatible
+API is not supported even when its Forge verifier type is called `blockscout`.
+
+`--image-tag` selects only the DogeOS contracts verifier. The independent
+`--preinstalls-image` defaults to `dogeos69/preinstalls:v0.2.2`; set it to the
+preinstalls release actually deployed so the source set matches. The CLI
+overrides the image's deployment entrypoint with
+`bash /app/lib/verify-blockscout.sh` and passes the API root as one Docker command
+argument. It does not mount the deployment directory or pass signing keys, RPC
+credentials, or explorer API keys into this container. It uses Docker host
+networking to reach the configured API.
+
+This submits source verification requests and never deploys contracts. A zero
+exit means Blockscout accepted submissions or reported them already verified;
+check the explorer for final asynchronous verification results. Preinstalls
+must already be deployed and indexed. `scrollsdk test contracts` remains the
+separate codehash/runtime check.
 
 ## `scrollsdk signer init`
 
@@ -2485,7 +2525,7 @@ FLAGS
   -c, --config=<value>     [default: ./config.toml] Path to config.toml file
   -n, --contracts=<value>  [default: ./config-contracts.toml] Path to config-contracts.toml file
   -p, --pod                Run inside Kubernetes pod
-      --preinstalls-image  [default: dogeos69/preinstalls:v0.2.1] Image for runtime codehash verification
+      --preinstalls-image  [default: dogeos69/preinstalls:v0.2.2] Image for runtime codehash verification
 
 DESCRIPTION
   Test L2 contracts and preinstalls by checking deployment, initialization and ownership
@@ -2507,8 +2547,10 @@ configuration is not required.
 Also checks the 21 required canonical addresses from `dogeos-preinstalls`,
 including Multicall3, CreateX, Arachnid, Permit2, nine canonical Safe v1.3.0
 contracts, and EntryPoint/SenderCreator v0.6–v0.9. These fixed addresses do not
-need entries in `config-contracts.toml`. Safe Singleton Factory is optional;
-once deployed, its six Safe eip155 contracts become required.
+need entries in `config-contracts.toml`. Arachnid is a genesis prerequisite;
+the image does not deploy it. Safe Singleton Factory and the six legacy Safe
+EIP-155 entries remain optional even when the factory exists, matching the
+canonical-only deployment policy in preinstalls v0.2.2.
 
 Deployment checks require nonempty runtime code. Initialization checks inspect
 proxy initialization flags and the queue messenger, oracle whitelist, and fee
@@ -2518,7 +2560,7 @@ initialization/ownership cause exit status 1. Optional missing preinstalls are
 reported separately. These native CLI checks do not compare runtime codehashes.
 
 After both groups, a separate **preinstalls image verification** step runs
-`/app/lib/verify.sh` from `dogeos69/preinstalls:v0.2.1`, overriding the image's
+`/app/lib/verify.sh` from `dogeos69/preinstalls:v0.2.2`, overriding the image's
 default deployment entrypoint. It uses the same L2 RPC and verifies runtime
 codehashes using the image's chain-specific expectations. It runs even if the
 native CLI checks report missing or misconfigured contracts; either phase
@@ -2530,7 +2572,7 @@ Docker host must be able to reach the chosen RPC, including internal endpoints
 selected with `--pod`. No private key or deployment volume is passed to the
 container. RPC credentials in verifier output are redacted. Use
 `--preinstalls-image <repository:tag-or-digest>` to select the verifier image
-matching your deployment; the default matches the SDK preinstalls chart.
+matching your deployment; the default matches the SDK preinstalls production example.
 
 The default image has codehash expectations for chain IDs 1, 31337, 1122005 and
 6281971. An unsupported chain ID fails verification. Confirm that the RPC

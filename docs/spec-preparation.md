@@ -690,7 +690,7 @@ An omitted recipient retains the upstream template's zero placeholder and emits
 a warning: it must be selected before deploying L2 contracts.
 
 `setup gen-l2-artifacts` passes `config.toml` to
-`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.7`. The contracts
+`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.9`. The contracts
 image produces `genesis.yaml`; the CLI checks mandatory predeploy code before
 copying the result to `values/genesis.yaml`. It never synthesizes or patches
 contract bytecode or genesis storage. A regression fixture records every field
@@ -796,6 +796,14 @@ The contracts deployment environment uses rc.5's `DEPLOYER_PRIVATE_KEY`,
 transactions, so an estimate taken against the initial genesis state can leave
 those transactions underpriced. A zero configured floor leaves Foundry's
 automatic estimation enabled. This does not require enabling empty blocks.
+This also satisfies the newer `check-deploy-gas.js` preflight, which requires an integer wei `ETH_GAS_PRICE`
+of at least `2 * L2_BASE_FEE_OVERHEAD`: the default overhead of `420000000000`
+therefore produces `ETH_GAS_PRICE="840000000000"`. Both generation paths also
+set `BATCH_SIZE="10"` in the `contracts-deployment-env` ConfigMap, consumed through
+the deployment pod's `envFrom`. `deploy.sh` passes that environment value to
+Forge as `--batch-size "$BATCH_SIZE"`; it is not a positional script argument.
+Regenerate values or run `setup prep-charts` to update existing files before
+installing the contracts chart.
 After an interrupted broadcast, reconcile saved transactions and on-chain
 receipts before retrying; the full rc.5 script is not a read-only verification
 command and may fail after ownership has already moved to the configured owner.

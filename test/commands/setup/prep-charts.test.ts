@@ -7,6 +7,7 @@ import * as path from 'node:path'
 
 import PrepCharts, {
   applyConfigMapEnvValues,
+  applyContractsDeploymentEnv,
   applyCubesignerPrepEnv,
   applyEthDaSubmitterInitialBatchSidecar,
   applyFeeOracleCurrentEnv,
@@ -69,6 +70,25 @@ const VALID_PREP_CUTOVER = {
   stateRoot: '0x3333333333333333333333333333333333333333333333333333333333333333',
   withdrawRoot: '0x4444444444444444444444444444444444444444444444444444444444444444',
 }
+
+describe('setup prep-charts contracts deployment environment', () => {
+  it('migrates existing values to batches of 10 and the gas-check minimum, idempotently', () => {
+    const data = {BATCH_SIZE: '100', ETH_GAS_PRICE: '420000000000', L2_RPC_ENDPOINT: 'http://l2-rpc:8545'}
+    const values = {configMaps: {'contracts-deployment-env': {data}}}
+    expect(applyContractsDeploymentEnv(values, '420000000000')).to.have.length(2)
+    expect(data).to.deep.equal({BATCH_SIZE: '10', ETH_GAS_PRICE: '840000000000', L2_RPC_ENDPOINT: 'http://l2-rpc:8545'})
+    expect(applyContractsDeploymentEnv(values, '420000000000')).to.deep.equal([])
+  })
+
+  it('adds the batch environment variable and follows a custom or zero fee floor', () => {
+    const data: Record<string, string> = {}
+    const values = {configMaps: {'contracts-deployment-env': {data}}}
+    applyContractsDeploymentEnv(values, '123')
+    expect(data).to.deep.equal({BATCH_SIZE: '10', ETH_GAS_PRICE: '246'})
+    applyContractsDeploymentEnv(values, '0')
+    expect(data).to.deep.equal({BATCH_SIZE: '10'})
+  })
+})
 
 describe('setup prep-charts generated frontend config', () => {
   it('updates DeploymentSpec env-file values without serializing undefined', () => {

@@ -9,12 +9,12 @@ For the general command sequence, see [CLI setup order](setup-order.md).
 
 ## Matching contracts release
 
-The CLI defaults to `dogeos-v0.3.0-rc.7` in
+The CLI defaults to `dogeos-v0.3.0-rc.9` in
 `dogeos69/scroll-stack-contracts`:
 
-- `gen-configs-dogeos-v0.3.0-rc.7`
-- `deploy-dogeos-v0.3.0-rc.7`
-- `verify-dogeos-v0.3.0-rc.7`
+- `gen-configs-dogeos-v0.3.0-rc.9`
+- `deploy-dogeos-v0.3.0-rc.9`
+- `verify-dogeos-v0.3.0-rc.9`
 
 `CONTRACTS_DOCKER_DEFAULT_TAG` supplies the common tag. Explicit image overrides
 and existing deployment values should be reviewed when upgrading. The original
