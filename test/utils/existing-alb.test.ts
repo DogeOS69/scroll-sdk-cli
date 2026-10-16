@@ -173,6 +173,7 @@ describe('existing ALB lifecycle', () => {
         }]}
         return aws.json(args)
       }
+
       expect(() => verifyExistingAlb(spec(), values, {json})).to.throw('externally managed target group')
     })
   }
@@ -202,6 +203,54 @@ describe('existing ALB lifecycle', () => {
       const verify = () => verifyExistingAlb(input, values, {json})
       if (frontendFirst) expect(verify).to.throw('shadows blockscout-api')
       else expect(verify()).to.deep.equal({bindings: ['blockscout-api', 'blockscout-frontend'], loadBalancers: 1})
+    })
+  }
+
+  for (const kind of ['fixed-response', 'redirect', 'foreign-forward', 'host-wildcard', 'path-wildcard', 'regex', 'source-restricted', 'authenticate']) {
+    it(`rejects an earlier ${kind} rule that intercepts the selected route`, () => {
+      const values = files()
+      projectExistingAlb(values, spec())
+      const aws = provider()
+      const rule: any = {
+        Actions: [{FixedResponseConfig: {ContentType: 'text/plain', StatusCode: '503'}, Type: 'fixed-response'}],
+        Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['tso.example.invalid']}}], Priority: '1',
+      }
+      if (kind === 'redirect') rule.Actions = [{RedirectConfig: {Host: 'other.example.invalid', StatusCode: 'HTTP_302'}, Type: 'redirect'}]
+      if (kind === 'foreign-forward') rule.Actions = [{TargetGroupArn: targetGroupArn.replace('2222222222222222', '3333333333333333'), Type: 'forward'}]
+      if (kind === 'host-wildcard') rule.Conditions[0].HostHeaderConfig.Values = ['*.EXAMPLE.INVALID']
+      if (kind === 'path-wildcard') rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {Values: ['/signer/*/task?']}})
+      if (kind === 'regex') rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {RegexValues: ['^/signer/.*$']}})
+      if (kind === 'source-restricted') rule.Conditions.push({Field: 'source-ip', SourceIpConfig: {Values: ['203.0.113.0/24']}})
+      if (kind === 'authenticate') {
+        rule.Actions = [{Order: 1, Type: 'authenticate-oidc'}, {Order: 2, TargetGroupArn: targetGroupArn, Type: 'forward'}]
+        rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {Values: ['/health']}})
+      }
+
+      aws.responses['describe-rules'].Rules.unshift(rule)
+      expect(() => verifyExistingAlb(spec(), values, aws)).to.throw('higher-priority listener rule 1 may shadow')
+    })
+  }
+
+  for (const kind of ['other-host', 'other-path', 'lower-priority', 'default', 'same-target']) {
+    it(`accepts a non-intercepting ${kind} rule`, () => {
+      const values = files()
+      projectExistingAlb(values, spec())
+      const aws = provider()
+      const rule: any = {
+        Actions: [{FixedResponseConfig: {ContentType: 'text/plain', StatusCode: '503'}, Type: 'fixed-response'}],
+        Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['tso.example.invalid']}}], Priority: '1',
+      }
+      if (kind === 'other-host') rule.Conditions[0].HostHeaderConfig.Values = ['other.example.invalid']
+      if (kind === 'other-path') rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {Values: ['/unrelated/*']}})
+      if (kind === 'lower-priority') rule.Priority = '20'
+      if (kind === 'default') {rule.Priority = 'default'; rule.Conditions = []}
+      if (kind === 'same-target') {
+        rule.Actions = [{TargetGroupArn: targetGroupArn, Type: 'forward'}]
+        rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {Values: ['/health']}})
+      }
+
+      aws.responses['describe-rules'].Rules.unshift(rule)
+      expect(verifyExistingAlb(spec(), values, aws).bindings).to.deep.equal(['tso-service'])
     })
   }
 

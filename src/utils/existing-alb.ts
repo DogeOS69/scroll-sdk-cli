@@ -180,6 +180,42 @@ function verifySelectedRoutePriorities(routes: SelectedRoute[]): void {
   }
 }
 
+function matchesGlob(pattern: string, value: string, ignoreCase = false): boolean {
+  const expression = [...pattern].map(char => char === '*' ? '.*' : char === '?' ? '.' : char.replaceAll(/[$()*+.?[\\\]^{|}]/g, '\\$&')).join('')
+  return new RegExp(`^${expression}$`, ignoreCase ? 'i' : '').test(value)
+}
+
+/** Exact routes are decidable; for two wildcard paths reject possible overlap. */
+function pathsMayOverlap(pattern: string, route: string): boolean {
+  if (!route.endsWith('/*')) return matchesGlob(pattern, route)
+  if (!/[*?]/.test(pattern)) return matchesGlob(route, pattern)
+  const prefix = pattern.split(/[*?]/)[0]
+  const routePrefix = route.slice(0, -1)
+  return prefix.startsWith(routePrefix) || routePrefix.startsWith(prefix)
+}
+
+/** Health checks bypass listener rules, so healthy targets cannot prove routing. */
+function verifyUnshadowedRoutes(routes: SelectedRoute[], listeners: Map<string, any[]>): void {
+  for (const route of routes) for (const rule of listeners.get(route.listener) ?? []) {
+    const priority = Number(rule.Priority)
+    if (!Number.isInteger(priority) || priority >= route.priority) continue // default is last
+    const conditions = rule.Conditions ?? []
+    const hosts = conditions.find((condition: any) => condition.Field === 'host-header')
+    const paths = conditions.find((condition: any) => condition.Field === 'path-pattern')
+    if (hosts && !hosts.HostHeaderConfig?.RegexValues?.length && !(hosts.HostHeaderConfig?.Values ?? hosts.Values ?? []).some((host: string) => matchesGlob(host, route.host, true))) continue
+    if (paths && !paths.PathPatternConfig?.RegexValues?.length && !(paths.PathPatternConfig?.Values ?? paths.Values ?? []).some((pattern: string) => pathsMayOverlap(pattern, route.path))) continue
+    const actions = rule.Actions ?? []
+    const groups = actionGroups(actions)
+    if (actions.length === 1 && actions[0].Type === 'forward' && groups.length > 0 && !rule.Transforms?.length
+      && groups.every(group => group === route.group || routes.some(selected => selected.listener === route.listener && selected.priority === priority && selected.group === group))) continue
+    // Selected bindings already passed the narrower-before-broader check;
+    // their deliberate API/frontend split is not an unexpected interception.
+    // Additional conditions restrict which requests are intercepted, not whether
+    // the selected route is safe for every request. Regex overlap is not proven.
+    fail(`${route.name}: higher-priority listener rule ${priority} may shadow ${route.host}${route.path}; remove the overlap or place the selected route first`)
+  }
+}
+
 /** Read-only checks against explicitly selected resources. No AWS create/delete APIs. */
 export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, string>, aws: Pick<AwsCliRunner, 'json'> = new AwsCliRunner()): {bindings: string[]; loadBalancers: number} {
   validateExistingAlb(spec)
@@ -278,5 +314,6 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
   }
 
   verifySelectedRoutePriorities(selectedRoutes)
+  verifyUnshadowedRoutes(selectedRoutes, new Map([...endpoints.entries()].map(([name, value]) => [config!.endpoints[name].listenerArn, value.rules])))
   return {bindings: Object.keys(config!.bindings), loadBalancers: new Set(Object.values(config!.endpoints).map(endpoint => endpoint.loadBalancerArn)).size}
 }

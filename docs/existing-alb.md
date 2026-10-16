@@ -89,6 +89,10 @@ target type, health checks and explicit host/path coverage. It rejects wider
 routes to a selected target group and forwarding from another listener. The
 Service check also requires the spec's explicit kubeContext to resolve to the
 selected EKS cluster. AWS failure details are omitted from normal diagnostics.
+All higher-priority listener rules are checked for interception, including fixed
+responses, redirects and forwarding to unselected target groups. Rules with
+additional conditions or regex paths are rejected when overlap cannot be ruled
+out. Healthy targets alone do not prove that requests reach the selected route.
 Overlapping paths between selected bindings must put the narrower route first;
 for example, Blockscout `/api` and `/api/*` must precede the frontend `/*` rule.
 These checks do not establish live DNS/TLS/application behavior or exhaustively
