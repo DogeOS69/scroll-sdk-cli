@@ -49,7 +49,31 @@ export function ethereumDaRuntimeEnv(config: EthereumDaRuntimeConfig): Record<st
   return env
 }
 
-/** Ethereum DA network, independent of the deployment environment label. */
-export function defaultMaxPendingBlobTxs(ethereumDaChain: NonNullable<EthereumDaConfig['chain']>): number {
-  return ethereumDaChain === 'mainnet' ? 8 : 10
+/** Fixed mainnet policy, shared by spec validation and legacy chart preparation. */
+export function ethereumDaMainnetPolicyErrors(
+  chain: EthereumDaConfig['chain'],
+  runtime: EthereumDaRuntimeConfig = {},
+  maxPendingBlobTxs?: number | string,
+): Array<{message: string; path: string}> {
+  if (chain !== 'mainnet') return []
+  return ([
+    ['publish.maxPendingBlobTxs', maxPendingBlobTxs, 10],
+    ['confirmationDepth', runtime.confirmationDepth, 8],
+    ['finalizationDepth', runtime.finalizationDepth, 8],
+  ] as const).flatMap(([field, value, required]) => value === undefined || value === required || value === String(required)
+    ? [] : [{message: `ethereumDa.${field} must be ${required} when ethereumDa.chain is mainnet`, path: `ethereumDa.${field}`}])
+}
+
+/** Omitted mainnet fields are filled; explicit conflicts must never be overwritten. */
+export function resolveEthereumDaSubmitterPolicy(
+  chain: EthereumDaConfig['chain'],
+  runtime: EthereumDaRuntimeConfig = {},
+  maxPendingBlobTxs?: number | string,
+): {maxPendingBlobTxs: number | string | undefined; runtime: EthereumDaRuntimeConfig} {
+  const errors = ethereumDaMainnetPolicyErrors(chain, runtime, maxPendingBlobTxs)
+  if (errors.length > 0) throw new Error(errors.map(error => error.message).join('; '))
+  return {
+    maxPendingBlobTxs: maxPendingBlobTxs ?? (chain === undefined ? undefined : 10),
+    runtime: chain === 'mainnet' ? {...runtime, confirmationDepth: 8, finalizationDepth: 8} : runtime,
+  }
 }

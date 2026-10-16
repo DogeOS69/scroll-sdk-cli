@@ -492,13 +492,14 @@ export interface EthereumDaConfig {
   /** Real Ethereum DA execution chain ID. This is separate from DogeOS l1-interface/Dogecoin chain ID. */
   chainId?: number
 
-  /** EIP-4844 blob confirmation/finality policy. */
+  /** EIP-4844 confirmation depth. Fixed at 8 for Ethereum DA mainnet. */
   confirmationDepth?: number
 
   confirmerPollIntervalMs?: number
 
   fetchLimit?: number
 
+  /** Fixed at 8 for Ethereum DA mainnet. */
   finalizationDepth?: number
 
   /** Embedded Ethereum DA inbox indexer settings for services that resolve blobs locally. */
@@ -526,7 +527,7 @@ export interface EthereumDaConfig {
     maxBatchWait?: string
     maxBlobsPerTx?: number
     maxLivenessDelay?: string
-    /** Defaults to 8 for Ethereum DA mainnet and 10 for other DA networks. */
+    /** Fixed at 10 for Ethereum DA mainnet; defaults to 10 on other DA networks. */
     maxPendingBlobTxs?: number
     targetBlobsPerTx?: number
   }

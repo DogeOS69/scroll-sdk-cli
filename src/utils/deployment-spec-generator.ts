@@ -37,7 +37,7 @@ import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
 import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deployment-spec-fields.js'
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
-import {ETHEREUM_DA_RUNTIME_FIELDS, defaultMaxPendingBlobTxs} from './ethereum-da-runtime.js'
+import {ETHEREUM_DA_RUNTIME_FIELDS, ethereumDaMainnetPolicyErrors, resolveEthereumDaSubmitterPolicy} from './ethereum-da-runtime.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {stripRetiredServiceConfig} from './retired-services.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
@@ -533,6 +533,9 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     if (spec.infrastructure) existingNlbEntries(spec)
     else validateBootnodePublicP2p(spec.bootnodePublicP2p, [], 'aws')
   } catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'bootnodePublicP2p'})}
+
+  errors.push(...ethereumDaMainnetPolicyErrors(getEthereumDaChain(spec), spec.ethereumDa, spec.ethereumDa?.publish?.maxPendingBlobTxs)
+    .map(error => ({...error, code: 'E012_INVALID_ETHEREUM_DA_CONFIG'})))
 
   const warnings: ValidationWarning[] = []
   try {specAwsSecretPrefix(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'preparation.secretUpload.awsPrefix'})}
@@ -1584,8 +1587,9 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     config.ethereumDa.l2StartBlockNumber = spec.ethereumDa.l2StartBlockNumber
   }
 
+  const submitterPolicy = resolveEthereumDaSubmitterPolicy(ethereumDaChain, spec.ethereumDa, spec.ethereumDa?.publish?.maxPendingBlobTxs)
   for (const field of ETHEREUM_DA_RUNTIME_FIELDS) {
-    if (spec.ethereumDa?.[field] !== undefined) config.ethereumDa[field] = spec.ethereumDa[field]
+    if (submitterPolicy.runtime[field] !== undefined) config.ethereumDa[field] = submitterPolicy.runtime[field]
   }
 
   if (spec.ethereumDa?.batch) {
@@ -1596,7 +1600,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   config.ethereumDa.publish = {
     ...Object.fromEntries(Object.entries(spec.ethereumDa?.publish ?? {}).filter(([, value]) => value !== undefined)),
-    maxPendingBlobTxs: spec.ethereumDa?.publish?.maxPendingBlobTxs ?? defaultMaxPendingBlobTxs(ethereumDaChain),
+    maxPendingBlobTxs: submitterPolicy.maxPendingBlobTxs,
   }
 
   const ethereumDaS3Archive = spec.ethereumDa?.blobArchive?.s3

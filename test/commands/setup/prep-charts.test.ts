@@ -672,6 +672,36 @@ describe('setup prep-charts eth-da-submitter updates', () => {
     expect(env).not.to.have.property('DOGEOS_ETH_DA_SUBMITTER_S3__MAX_RETRIES')
   })
 
+  it('fills the fixed mainnet policy during legacy chart preparation', () => {
+    const input = {chain: 'mainnet' as const, ethereumRpcUrl: 'https://eth.example.invalid', l2RpcUrl: 'http://l2-rpc:8545'}
+    const values: any = {configMaps: {env: {data: {
+      DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: '1',
+      DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: '64',
+      DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS: '8',
+    }}}}
+    applyConfigMapEnvValues(values, buildEthDaSubmitterPrepEnv(input))
+    expect(values.configMaps.env.data).to.include({
+      DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: '8',
+      DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: '8',
+      DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS: '10',
+    })
+    expect(buildEthDaSubmitterPrepEnv({...input, maxPendingBlobTxs: '10', runtime: {confirmationDepth: '8', finalizationDepth: '8'}})).to.deep.equal(buildEthDaSubmitterPrepEnv(input))
+    expect(buildEthDaSubmitterPrepEnv({...input, chain: 'sepolia'}).DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal(undefined)
+  })
+
+  for (const field of ['confirmationDepth', 'finalizationDepth', 'publish.maxPendingBlobTxs'] as const) {
+    it(`rejects conflicting mainnet ${field} before chart preparation`, () => {
+      const config: any = {chain: 'mainnet', confirmationDepth: 8, finalizationDepth: 8, publish: {maxPendingBlobTxs: 10}}
+      if (field === 'publish.maxPendingBlobTxs') config.publish.maxPendingBlobTxs = '9'
+      else config[field] = '9'
+      expect(() => validateDogeConfigEthereumDaForPrep(config)).to.throw(`ethereumDa.${field} must be`)
+      expect(() => buildEthDaSubmitterPrepEnv({chain: config.chain, ethereumRpcUrl: undefined, l2RpcUrl: undefined, maxPendingBlobTxs: config.publish.maxPendingBlobTxs, runtime: config})).to.throw(`ethereumDa.${field} must be`)
+      delete config.chain
+      config.chainId = '1'
+      expect(() => validateDogeConfigEthereumDaForPrep(config)).to.throw(`ethereumDa.${field} must be`)
+    })
+  }
+
   it('reconciles the persisted pending blob cap without resetting manual values when absent', () => {
     const key = 'DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS'
     const values: any = {configMaps: {env: {data: {[key]: '4'}}}}

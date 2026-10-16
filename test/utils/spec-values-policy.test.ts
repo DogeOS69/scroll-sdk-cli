@@ -161,6 +161,8 @@ describe('spec values runtime policy across entry points', () => {
     await run(mode, directory, '--sdk-dir', sdk)
     expect(fs.existsSync(path.join(directory, 'values/l1-devnet-production.yaml'))).to.equal(false)
     spec.ethereumDa.chain = 'mainnet'
+    spec.ethereumDa.confirmationDepth = 8
+    spec.ethereumDa.finalizationDepth = 8
     await run(mode, directory, '--sdk-dir', sdk, '--force')
     expect(fs.existsSync(path.join(directory, 'values/l1-devnet-production.yaml'))).to.equal(false)
   })
@@ -224,12 +226,27 @@ describe('spec values runtime policy across entry points', () => {
     expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('10')
     spec.metadata.environment = 'devnet'
     spec.ethereumDa!.chain = 'mainnet'
+    delete spec.ethereumDa!.confirmationDepth
+    delete spec.ethereumDa!.finalizationDepth
     spec.ethereumDa!.chainId = 1
     await run(mode, directory, '--force')
-    expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('8')
-    spec.ethereumDa!.publish = {maxPendingBlobTxs: 12}
-    await run(mode, directory, '--force')
-    expect(read(directory, 'eth-da-submitter').configMaps.env.data[key]).to.equal('12')
+    const mainnetEnv = read(directory, 'eth-da-submitter').configMaps.env.data
+    expect(mainnetEnv).to.include({
+      DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: '8',
+      DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: '8',
+      [key]: '10',
+    })
+    for (const field of ['maxPendingBlobTxs', 'confirmationDepth', 'finalizationDepth'] as const) {
+      if (field === 'maxPendingBlobTxs') spec.ethereumDa!.publish = {maxPendingBlobTxs: 12}
+      else spec.ethereumDa![field] = 1
+      let error: unknown
+      try {await run(mode, directory, '--force')} catch (error_) {error = error_}
+      expect(String(error)).to.include('DeploymentSpec validation failed')
+      expect(read(directory, 'eth-da-submitter').configMaps.env.data).to.deep.equal(mainnetEnv)
+      delete spec.ethereumDa!.publish
+      delete spec.ethereumDa!.confirmationDepth
+      delete spec.ethereumDa!.finalizationDepth
+    }
   })
 
   it('uses identical committed policy in bootstrap, with-values and values-only using the conventional SDK path', async () => {

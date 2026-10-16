@@ -1255,10 +1255,23 @@ describe('deployment-spec-generator', () => {
     });
   });
 
+  for (const field of ['confirmationDepth', 'finalizationDepth', 'publish.maxPendingBlobTxs'] as const) {
+    it(`rejects a conflicting mainnet ${field} in validation and both generators`, () => {
+      const spec = createMinimalSpec();
+      spec.ethereumDa = {chain: 'mainnet', chainId: 1, confirmationDepth: 8, finalizationDepth: 8, publish: {maxPendingBlobTxs: 10}};
+      if (field === 'publish.maxPendingBlobTxs') spec.ethereumDa.publish!.maxPendingBlobTxs = 9;
+      else spec.ethereumDa[field] = 9;
+      expect(validateDeploymentSpec(spec).errors.some(error => error.path === `ethereumDa.${field}`)).to.equal(true);
+      expect(() => generateDogeConfigToml(spec)).to.throw(`ethereumDa.${field} must be`);
+      expect(() => generateValuesFiles(spec)).to.throw(`ethereumDa.${field} must be`);
+    });
+  }
+
   describe('generateDogeConfigToml', () => {
     for (const environment of ['mainnet', 'testnet', 'devnet'] as const) {
       for (const chain of ['mainnet', 'sepolia', 'devnet', undefined] as const) {
-        const expected = chain === 'mainnet' || (chain === undefined && environment === 'mainnet') ? 8 : 10;
+        const mainnet = chain === 'mainnet' || (chain === undefined && environment === 'mainnet');
+        const expected = 10;
         it(`uses the ${chain ?? 'default'} DA chain pending blob cap for a ${environment} deployment`, () => {
           const spec = createMinimalSpec();
           spec.metadata.environment = environment;
@@ -1267,10 +1280,23 @@ describe('deployment-spec-generator', () => {
             chain,
             chainId: chain === 'mainnet' ? 1 : chain === 'sepolia' ? 11_155_111 : chain === 'devnet' ? 32_382 : undefined,
           };
+          delete spec.ethereumDa.finalizationDepth;
           const config = toml.parse(generateDogeConfigToml(spec)) as any;
           const values = yaml.load(generateValuesFiles(spec)['eth-da-submitter-production.yaml']) as any;
           expect(config.ethereumDa.publish.maxPendingBlobTxs).to.equal(expected);
           expect(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS).to.equal(String(expected));
+
+          if (mainnet) {
+            expect(config.ethereumDa).to.include({confirmationDepth: 8, finalizationDepth: 8});
+            expect(values.configMaps.env.data).to.include({
+              DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH: '8',
+              DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH: '8',
+            });
+            spec.ethereumDa.publish = {maxPendingBlobTxs: 12};
+            expect(() => generateDogeConfigToml(spec)).to.throw('maxPendingBlobTxs must be 10');
+            expect(() => generateValuesFiles(spec)).to.throw('maxPendingBlobTxs must be 10');
+            return;
+          }
 
           spec.ethereumDa.publish = {maxBatchWait: '30m', maxPendingBlobTxs: 12};
           const overridden = toml.parse(generateDogeConfigToml(spec)) as any;
@@ -2148,7 +2174,7 @@ describe('deployment-spec-generator', () => {
     for (const chain of ['devnet', 'sepolia', 'mainnet'] as const) {
       it(`omits retired WP finality settings from generated ${chain} configs and values`, () => {
         const spec = createMinimalSpec();
-        spec.ethereumDa = {...spec.ethereumDa, chain, confirmationDepth: 2, finalizationDepth: 96};
+        spec.ethereumDa = {...spec.ethereumDa, chain, confirmationDepth: chain === 'mainnet' ? 8 : 2, finalizationDepth: chain === 'mainnet' ? 8 : 96};
         const dogeConfig = toml.parse(generateDogeConfigToml(spec)) as any;
         expect(dogeConfig.ethereumDa).not.to.have.property('minFinality');
         const files = generateValuesFiles(spec);
@@ -2159,8 +2185,8 @@ describe('deployment-spec-generator', () => {
         expect(env).not.to.have.property('DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__FINALIZED_DEPTH');
         expect(env.DOGEOS_WITHDRAWAL_ETHEREUM_DA__INBOX_WORKER__INGEST_DEPTH).to.equal('1');
         const da = yaml.load(files['eth-da-submitter-production.yaml']) as any;
-        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH).to.equal('2');
-        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH).to.equal('96');
+        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__CONFIRMATION_DEPTH).to.equal(chain === 'mainnet' ? '8' : '2');
+        expect(da.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__FINALIZATION_DEPTH).to.equal(chain === 'mainnet' ? '8' : '96');
       });
     }
 
