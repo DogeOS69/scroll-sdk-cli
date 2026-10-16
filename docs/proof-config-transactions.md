@@ -204,6 +204,10 @@ or `--values-only`.
 `liveEvidence` references (`path` plus `sha256`), and explicit `environment` and
 `organization`. Paths resolve relative to the deployment. The release receipt
 also refers to its Wasm and test report relative to the receipt directory.
+During transactional `prep-charts`, these references still resolve against the
+original deployment directory. The default `.scrollsdk/inputs/cubesigner-policy`
+directory stays outside generation staging; receipts and referenced artifacts
+are revalidated there before their public runtime configuration is projected.
 
 The validated schemas are:
 

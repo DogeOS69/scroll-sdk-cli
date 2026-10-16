@@ -244,6 +244,7 @@ export function buildTsoSigners(config: Pick<DogeConfig, 'attestationSigner' | '
  */
 export function buildCubesignerPrepEnv(
   config: Pick<DogeConfig, 'cubesigner' | 'network'>,
+  deploymentDir?: string,
 ): Record<string, string> {
   const env: Record<string, string> = {
     DOGEOS_CUBESIGNER_SIGNER_NETWORK: config.network,
@@ -253,6 +254,7 @@ export function buildCubesignerPrepEnv(
     NETWORK: config.network,
   }
   Object.assign(env, cubesignerPolicyEnvironment(resolveCubesignerPolicy({
+    deploymentDir,
     keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network,
     selection: config.cubesigner,
   })))
@@ -1303,6 +1305,7 @@ export default class SetupPrepCharts extends Command {
   }
 
   private contractsConfig: any = {}
+
   private dogeConfig: DogeConfig = {} as DogeConfig
   private dstackController?: DstackControllerConfig
   private flags: any
@@ -1310,6 +1313,8 @@ export default class SetupPrepCharts extends Command {
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
+  // Resolve pinned governance inputs at the source: .scrollsdk/ is excluded from staging.
+  private policyInputRoot?: string
   private proofIntent?: ResolvedProofIntent
   private skipL2ContractDeploymentBlock: boolean = false
   private withdrawalProcessorConfig: toml.JsonMap = {}
@@ -1317,6 +1322,7 @@ export default class SetupPrepCharts extends Command {
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupPrepCharts)
     this.flags = flags
+    this.policyInputRoot = process.cwd()
     this.albSpec = readExistingAlbSpec(process.cwd(), flags.spec)
     if (this.albSpec) validateExistingAlb(this.albSpec)
 
@@ -3001,7 +3007,7 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: env not found in config`);
         }
 
-        const policyResolution = resolveCubesignerPolicy({keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, selection: this.dogeConfig.cubesigner})
+        const policyResolution = resolveCubesignerPolicy({deploymentDir: this.policyInputRoot, keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, selection: this.dogeConfig.cubesigner})
         for (const warning of policyResolution.warnings) this.jsonCtx.addWarning(warning)
         const projection = cubesignerLiveEvidenceProjection(policyResolution)
         productionYaml.configMaps ||= {}
@@ -3022,7 +3028,7 @@ export default class SetupPrepCharts extends Command {
           ]),
           ...applyCubesignerPrepEnv(
             productionYaml,
-            buildCubesignerPrepEnv(this.dogeConfig),
+            buildCubesignerPrepEnv(this.dogeConfig, this.policyInputRoot),
           ),
           ...migrateCubesignerPolicySdkVersion(productionYaml),
           ...migrateCubesignerRequestContract(productionYaml),

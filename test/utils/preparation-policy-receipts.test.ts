@@ -1,9 +1,12 @@
 import * as toml from '@iarna/toml'
 import {expect} from 'chai'
+import * as yaml from 'js-yaml'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import PrepCharts from '../../src/commands/setup/prep-charts.js'
+import {GenerationTransaction} from '../../src/utils/generation-transaction.js'
 import {AwaitingInput, writeJson} from '../../src/utils/preparation-io.js'
 import {POLICY_RECEIPTS_INPUT, importPreparationPolicyReceipts} from '../../src/utils/preparation-policy-receipts.js'
 import {policyReceiptFixture} from '../helpers/cubesigner-policy-receipts.js'
@@ -77,5 +80,52 @@ describe('late preparation policy receipts', () => {
     writeJson(path.join(root, POLICY_RECEIPTS_INPUT), refs)
     importPreparationPolicyReceipts(root)
     expect((read().cubesigner as toml.JsonMap).policyReceipts).deep.eq(refs)
+  })
+
+  it('renders imported default-path evidence across staging and still rejects changed inputs', async () => {
+    const inputs = path.join(root, '.scrollsdk/inputs/cubesigner-policy')
+    fs.mkdirSync(inputs, {recursive: true})
+    refs = policyReceiptFixture(inputs).selection.policyReceipts
+    for (const ref of [refs.release, refs.attachment, refs.liveEvidence, refs.protocolContext]) {
+      ref.path = `.scrollsdk/inputs/cubesigner-policy/${ref.path}`
+    }
+
+    writeJson(path.join(root, POLICY_RECEIPTS_INPUT), refs)
+    importPreparationPolicyReceipts(root)
+    fs.writeFileSync(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
+    fs.mkdirSync(path.join(root, 'values'))
+    const name = 'values/cubesigner-signer-production.yaml'
+    fs.writeFileSync(path.join(root, name), yaml.dump({env: []}))
+    const before = fs.readFileSync(configPath, 'utf8')
+    const transaction = GenerationTransaction.begin(root)
+    const cwd = process.cwd()
+    try {
+      expect(fs.existsSync(path.join(transaction.stagingRoot, refs.release.path))).false
+      process.chdir(transaction.stagingRoot)
+      // Execute the actual chart reconciliation, including both policy reads
+      // and live-evidence ConfigMap projection, with the real generation clone.
+      const command = Object.create(PrepCharts.prototype)
+      Object.assign(command, {
+        configMapping: {}, dogeConfig: read(), error(message: string) {throw new Error(message)}, flags: {'proof-preparation': true},
+        getConfigValue() {},
+        jsonCtx: {addWarning() {}, info() {}, logSuccess() {}}, jsonMode: true,
+        log() {}, nonInteractive: true, policyInputRoot: root,
+      })
+      await command.processProductionYaml(path.join(transaction.stagingRoot, 'values'))
+      const file = path.join(transaction.stagingRoot, name)
+      const content = fs.readFileSync(file, 'utf8')
+      const values = yaml.load(content) as {configMaps: Record<string, {data: Record<string, string>}>; env: Array<{name: string; value: string}>}
+      expect(values.env.find(item => item.name === 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER')?.value).eq('dogeos-bridge/v2')
+      expect(JSON.parse(values.configMaps['proof-policy-live-evidence'].data['live-evidence.json']).result).eq('passed')
+      fs.appendFileSync(path.join(inputs, 'policy.wasm'), 'changed')
+      let error: unknown
+      try {await command.processProductionYaml(path.join(transaction.stagingRoot, 'values'))} catch (error_) {error = error_}
+      expect(String(error), error instanceof Error ? error.stack : String(error)).include('digest mismatch')
+      expect(fs.readFileSync(file, 'utf8')).eq(content)
+      expect(fs.readFileSync(configPath, 'utf8')).eq(before)
+    } finally {
+      process.chdir(cwd)
+      transaction.rollback()
+    }
   })
 })
