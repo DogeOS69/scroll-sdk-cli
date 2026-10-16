@@ -73,6 +73,7 @@ describe('proof-aws-provisioner values projection', () => {
         return ''
       },
       text(args: string[], options: AwsCliOptions = {}): string {
+        if (args[1] === 'get-secret-value') return JSON.stringify({ 'proof-work-token': 'placeholder', 'prover-worker-master': 'placeholder' })
         calls.push({ args, kind: 'text', options })
         if (args[0] === 'sts') return '123456789012'
         if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
@@ -168,6 +169,7 @@ describe('proof-aws-provisioner values projection', () => {
         return ''
       },
       text(args: string[]): string {
+        if (args[1] === 'get-secret-value') return JSON.stringify({ 'proof-work-token': 'placeholder', 'prover-worker-master': 'placeholder' })
         calls.push({args, kind: 'text'})
         if (args[0] === 'sts') return '123456789012'
         if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
@@ -268,6 +270,7 @@ describe('proof-aws-provisioner values projection', () => {
         return ''
       },
       text(args: string[]): string {
+        if (args[1] === 'get-secret-value') return JSON.stringify({ 'proof-work-token': 'placeholder', 'prover-worker-master': 'placeholder' })
         calls.push({args, kind: 'text'})
         if (args[0] === 'sts') return '123456789012'
         if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
@@ -356,6 +359,7 @@ describe('proof-aws-provisioner values projection', () => {
         return ''
       },
       text(args: string[]): string {
+        if (args[1] === 'get-secret-value') return JSON.stringify({ 'proof-work-token': 'placeholder', 'prover-worker-master': 'placeholder' })
         calls.push({args, kind: 'text'})
         if (args[0] === 'sts') return '123456789012'
         if (args[0] === 'eks') return 'https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE'
@@ -730,6 +734,7 @@ describe('proof-aws-provisioner values projection', () => {
         return ''
       },
       text(args: string[]): string {
+        if (args[1] === 'get-secret-value') return JSON.stringify({ 'proof-work-token': 'placeholder', 'prover-worker-master': 'placeholder' })
         calls.push({args, kind: 'text'})
         if (args[0] === 'sts') return '123456789012'
         if (args[0] === 'eks') return 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE'
@@ -780,6 +785,7 @@ describe('proof-aws-provisioner values projection', () => {
         return ''
       },
       text(args: string[]): string {
+        if (args[1] === 'get-secret-value') return JSON.stringify({ 'proof-work-token': 'placeholder', 'prover-worker-master': 'placeholder' })
         calls.push({args, kind: 'text'})
         if (args[0] === 's3api' && args[1] === 'get-bucket-policy') {
           return JSON.stringify({
@@ -868,6 +874,8 @@ describe('proof-aws-provisioner values projection', () => {
       key: 'scroll/proof-coordinator-secrets',
       property: 'proof-work-token',
     })
+    // The coordinator mounts a fresh master, never the retired shared token.
+    expect(coordinator.externalSecrets.secrets.data[1].remoteRef.property).to.equal('prover-worker-master')
     expect(coordinator.externalSecrets.secrets.secretRegion).to.equal('us-west-2')
 
     expect(withdrawal.withdrawalProof.s3AuthMode).to.equal('irsa')
@@ -950,6 +958,8 @@ describe('proof-aws-provisioner values projection', () => {
         'scroll/dev0829/proof-coordinator-secrets',
         'scroll/dev0829/proof-coordinator-secrets',
       ])
+    expect(coordinator.externalSecrets.secrets.data.map((item: any) => item.remoteRef.property))
+      .to.deep.equal(['proof-work-token', 'prover-worker-master'])
     expect(withdrawal.externalSecrets['proof-secrets'].data[0].remoteRef.key)
       .to.equal('scroll/dev0829/proof-coordinator-secrets')
   })
@@ -1043,5 +1053,36 @@ describe('proof-aws-provisioner values projection', () => {
     const entry = coordinator.env.find((item: any) => item.name === 'DOGEOS_PROOF_COORDINATOR_ARTIFACT_STORE__REGION')
     expect(entry.value).to.equal('us-west-2')
     expect(entry.valueFrom).to.equal(undefined)
+  })
+})
+
+describe('proof-aws-provisioner worker-credential master', () => {
+  function fakeSecret(existing: Record<string, string>) {
+    const writes: Array<Record<string, string>> = []
+    const aws = {
+      json(args: string[]) {
+        if (args[1] === 'put-secret-value') writes.push(JSON.parse(args[args.indexOf('--secret-string') + 1]))
+        return {}
+      },
+      run() { return '' },
+      text() { return JSON.stringify(existing) },
+    }
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws as any) as any
+    return {provisioner, writes}
+  }
+
+  it('adds a fresh master to a shared-token secret instead of promoting the shared token', () => {
+    const {provisioner, writes} = fakeSecret({'proof-work-token': 'kept-wp-token', 'prover-worker-token': 'legacy-shared'})
+    expect(provisioner.ensureTokenSecret('us-west-2', 'test/proof', false)).to.equal('migrated')
+    expect(writes).to.have.length(1)
+    expect(writes[0]['proof-work-token']).to.equal('kept-wp-token')
+    expect(writes[0]['prover-worker-master']).to.match(/^[\da-f]{64}$/)
+    expect(writes[0]['prover-worker-master']).not.to.equal('legacy-shared')
+  })
+
+  it('reuses a secret that already has a master', () => {
+    const {provisioner, writes} = fakeSecret({'proof-work-token': 'a', 'prover-worker-master': 'b'})
+    expect(provisioner.ensureTokenSecret('us-west-2', 'test/proof', false)).to.equal('reused')
+    expect(writes).to.have.length(0)
   })
 })

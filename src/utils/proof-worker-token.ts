@@ -1,7 +1,12 @@
 import {AwsCliRunner} from './aws-cli.js'
+import {PROVER_WORKER_MASTER_PROPERTY} from './proof-aws-provisioner.js'
 
-/** Read the prover-worker bearer token from the proof coordinator JSON secret. */
-export function readProverWorkerTokenFromSecretsManager(options: {
+/**
+ * Read the coordinator-only worker-credential master from the proof
+ * coordinator JSON secret. Callers mint per-worker credentials from it and must
+ * never write the master itself to a worker host, bundle or run spec.
+ */
+export function readProverWorkerMasterFromSecretsManager(options: {
   awsProfile?: string
   awsRegion?: string
   secretName: string
@@ -16,10 +21,10 @@ export function readProverWorkerTokenFromSecretsManager(options: {
     throw new TypeError(`Secrets Manager secret ${options.secretName} is not a JSON property map`)
   }
 
-  const token = parsed['prover-worker-token']
-  if (typeof token !== 'string' || token.trim() === '') {
-    throw new Error(`Secrets Manager secret ${options.secretName} has no prover-worker-token property`)
+  const master = parsed[PROVER_WORKER_MASTER_PROPERTY]
+  if (typeof master !== 'string' || master.trim() === '') {
+    throw new Error(`Secrets Manager secret ${options.secretName} has no ${PROVER_WORKER_MASTER_PROPERTY} property; run setup proof-aws-init to add a fresh coordinator-only master`)
   }
 
-  return token.trim()
+  return master.trim()
 }

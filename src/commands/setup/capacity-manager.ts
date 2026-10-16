@@ -49,7 +49,8 @@ export default class CapacityManager extends Command {
 
       assertSdkWorkersRetired(root)
       const values = yaml.load(fs.readFileSync(localPath(root, plan.valuesFile), 'utf8')) as any
-      if (values.manager.dstack.project !== plan.project || values.manager.workerTokenSecret !== plan.workerTokenSecret) throw new Error('Regenerate the capacity-manager plan after changing its credential bindings')
+      if (!plan.workerCredentialMaster) throw new Error('This capacity-manager plan predates per-worker credentials; drain the old manager, archive its plan and rerun setup render')
+      if (values.manager.dstack.project !== plan.project || values.workerCredentialMaster?.existingSecret !== plan.workerCredentialMaster.existingSecret || values.workerCredentialMaster?.key !== plan.workerCredentialMaster.key) throw new Error('Regenerate the capacity-manager plan after changing its credential bindings')
       if (!plan.fleets?.files?.length || !['create', 'reuse'].includes(plan.fleets.action)) throw new Error('Fleet preparation is missing; rerun setup render before installing capacity-manager')
       const fleets = plan.fleets.files.map((file: {path: string; sha256: string}) => {
         const content = fs.readFileSync(localPath(root, file.path), 'utf8')
@@ -57,21 +58,14 @@ export default class CapacityManager extends Command {
         return yaml.load(content) as any
       })
       if (JSON.stringify(fleets.map((fleet: any) => fleet.name)) !== JSON.stringify(values.manager.dstack.fleets)) throw new Error('Fleet bindings changed; rerun setup render')
-      const readSecret = (namespace: string, name: string, key: string) => {
-        const response = run(namespace, ['get', 'secret', name, '-o', 'json'])
-        let secret
-        try {secret = JSON.parse(response)} catch {throw new Error('Invalid Kubernetes Secret readback; private response omitted')}
-        if (!secret.data?.[key]) throw new Error('Required credential Secret/key is missing')
-        return Buffer.from(secret.data[key], 'base64').toString('utf8').trim()
-      }
-
       run(plan.namespace, ['rollout', 'status', `deployment/${plan.dstack.deployment}`, '--timeout=120s'])
-      const workerToken = readSecret(plan.namespace, plan.workerSecret, 'prover-worker-token')
       if (values.dstackAuth?.existingSecret !== plan.dstack.auth.existingSecret || values.dstackAuth?.key !== plan.dstack.auth.key) throw new Error('Dstack credential bindings changed; rerun setup render')
-      // Both releases mount the same Secret; no token readback/copy is necessary.
+      // The manager mounts the coordinator's master and mints per-run
+      // credentials itself (core #1598); nothing secret is copied to dstack.
+      // TODO(per-worker credentials): delete a legacy cm_worker_* project secret.
       const adapter = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../config/capacity-manager-credentials.py'), 'utf8')
-      run(plan.dstack.namespace, ['exec', '-i', `deployment/${plan.dstack.deployment}`, '-c', 'controller', '--', '/root/.local/share/uv/tools/dstack/bin/python', '-c', adapter], JSON.stringify({fleetAction: plan.fleets.action, fleets, project: plan.project, secretName: plan.workerTokenSecret, token: workerToken}))
-      out.info('Prepared empty fleets and credential references. No workers started; explicitly install the capacity-manager release after reviewing the generated policy.')
+      run(plan.dstack.namespace, ['exec', '-i', `deployment/${plan.dstack.deployment}`, '-c', 'controller', '--', '/root/.local/share/uv/tools/dstack/bin/python', '-c', adapter], JSON.stringify({fleetAction: plan.fleets.action, fleets, project: plan.project}))
+      out.info('Prepared empty fleets. No workers started; explicitly install the capacity-manager release after reviewing the generated policy.')
       out.success({namespace: plan.namespace, project: plan.project, updated: true})
     } catch (error) {out.error('E761_CAPACITY_MANAGER_FAILED', error instanceof Error ? error.message : 'Capacity manager preparation failed', 'CONFIGURATION', true)}
   }

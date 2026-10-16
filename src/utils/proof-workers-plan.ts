@@ -13,6 +13,7 @@ import {assertDeploymentSpecFields} from './deployment-spec-fields.js'
 import {digest, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {GPU_ARCHITECTURES, rentalEnvelope, rentalSeconds, resolveProofWorkers} from './proof-workers-config.js'
+import {validateWorkerName} from './prover-worker-credential.js'
 import {specDstackController, specKubernetesTarget} from './spec-kubernetes-target.js'
 
 export interface WorkerCapacityPlan {
@@ -22,12 +23,13 @@ export interface WorkerCapacityPlan {
   project: string
   rentalEnvelopeUsd: number
   schema: 'scrollsdk/proof-workers/v1'
+  /** Prefix of the per-worker dstack secrets. */
   secretName: string
   session: string
   target: {authKey: string; authSecret: string; context: string; deployment: string; image: string; namespace: string; port: number}
-  tokenFile: string
   wallTimeoutSeconds: number
-  workers: Array<{fleet: Record<string, unknown>; name: string; task: Record<string, unknown>}>
+  /** `secretName` holds only the credential minted for `workerId`, never the coordinator master. */
+  workers: Array<{fleet: Record<string, unknown>; name: string; secretName: string; task: Record<string, unknown>; workerId: string}>
 }
 
 const quote = (s: string): string => `'${s.replaceAll("'", "'\\''")}'`
@@ -71,7 +73,7 @@ export function workerCommand(worker: ProverWorkerContractV1, publication: Proof
   return commands.join('; ')
 }
 
-export function capacityPlan(input: {generationId: string; imageCheck: ProofWorkerImageCheckV1; publication: ProofProgramPublicationV1; session: string; spec: DeploymentSpec; target: WorkerCapacityPlan['target']; tokenFile: string; worker: ProverWorkerContractV1}): WorkerCapacityPlan {
+export function capacityPlan(input: {generationId: string; imageCheck: ProofWorkerImageCheckV1; publication: ProofProgramPublicationV1; session: string; spec: DeploymentSpec; target: WorkerCapacityPlan['target']; worker: ProverWorkerContractV1}): WorkerCapacityPlan {
   const {imageCheck, publication, session, spec, worker} = input
   if (spec.capacityManager) throw new Error('capacityManager owns GPU capacity; remove it and drain its workers before using the SDK launcher')
   if (!spec.proofWorkers) throw new Error('Declare proofWorkers in the deployment spec before planning GPU capacity')
@@ -89,18 +91,21 @@ export function capacityPlan(input: {generationId: string; imageCheck: ProofWork
   const resources = {cpu: `${aws ? 'x86:' : ''}${config.cpu}..`, disk: `${config.diskGb}GB..`, gpu: {count: 1, memory: config.gpu === 'L4' ? '22GB..' : '24GB..', name: config.gpu}, memory: `${config.memoryGb}GB..`}
   const workers = Array.from({length: config.count}, (_, index) => {
     const name = `sdk-${aws ? 'aws-' : ''}${id.slice(0, 16)}-${index}`
+    const workerId = `${spec.metadata.name}-${session}-${aws ? 'aws-' : ''}${id.slice(0, 8)}-${index}`
+    validateWorkerName(workerId)
+    const workerSecret = `${secretName}_${index}`
     const fleet = {...(aws ? {spot_policy: 'on-demand'} : {backend_options: [{min_reliability: config.minReliability, offer_order: 'price', type: 'vastai'}]}), ...providerOptions, backends: [config.backend], idle_duration: config.idleTimeoutMinutes * 60, max_price: config.maxPricePerHourUsd,
       name: `${name}-gpu`, nodes: '0..1', regions: config.regions, resources, retry: false,
       tags: {'scrollsdk-plan': id}, type: 'fleet'}
-    const task = {...providerOptions, backends: [config.backend], commands: [workerCommand(worker, publication, `${spec.metadata.name}-${session}-${aws ? 'aws-' : ''}${id.slice(0, 8)}-${index}`, GPU_ARCHITECTURES[config.gpu])], env: {DOGEOS_PROVER_WORKER_READY_FILE: '/dogeos/artifacts/prover-worker-ready-v1.json', DOGEOS_PROVER_WORKER_TOKEN: '${{ secrets.' + secretName + ' }}', NVIDIA_DRIVER_CAPABILITIES: 'compute,utility', SCROLLSDK_WORKER_PLAN_ID: id}, fleets: [fleet.name], idle_duration: config.idleTimeoutMinutes * 60, image, max_duration: Math.floor(config.maxDurationHours * 3600), max_price: config.maxPricePerHourUsd,
+    const task = {...providerOptions, backends: [config.backend], commands: [workerCommand(worker, publication, workerId, GPU_ARCHITECTURES[config.gpu])], env: {DOGEOS_PROVER_WORKER_READY_FILE: '/dogeos/artifacts/prover-worker-ready-v1.json', DOGEOS_PROVER_WORKER_TOKEN: '${{ secrets.' + workerSecret + ' }}', NVIDIA_DRIVER_CAPABILITIES: 'compute,utility', SCROLLSDK_WORKER_PLAN_ID: id}, fleets: [fleet.name], idle_duration: config.idleTimeoutMinutes * 60, image, max_duration: Math.floor(config.maxDurationHours * 3600), max_price: config.maxPricePerHourUsd,
       name, nodes: 1, regions: config.regions,
       resources, retry: false, spot_policy: 'on-demand',
       stop_duration: config.stopTimeoutMinutes * 60,
       type: 'task'}
-    return {fleet, name, task}
+    return {fleet, name, secretName: workerSecret, task, workerId}
   })
   return {config, generationId: input.generationId, id, project, rentalEnvelopeUsd: rentalEnvelope(config), schema: 'scrollsdk/proof-workers/v1', secretName,
-    session, target: input.target, tokenFile: input.tokenFile, wallTimeoutSeconds: rentalSeconds(config), workers}
+    session, target: input.target, wallTimeoutSeconds: rentalSeconds(config), workers}
 }
 
 export function workerControllerLocation(spec: DeploymentSpec, explicitContext?: string, currentContext: () => string = () => {
@@ -133,7 +138,7 @@ export function createWorkerCapacityPlan(root: string, session = 'initial', spec
     deployment: values.fullnameOverride ?? 'dstack-controller', image: `${values.image.repository}@${values.image.digest}`, port: values.service?.port ?? 3000}
   if (!/@sha256:[\da-f]{64}$/.test(target.image)) throw new Error('Dstack watchdog requires a digest-pinned controller image')
   const plan = capacityPlan({generationId: contract.generationId, imageCheck: read('.data/proof-worker-image-check-v1.json'), publication: read(contract.inputs.publication.path), session, spec,
-    target, tokenFile: path.relative(root, path.join(resolveContractFile(root, contract.worker.bundleDir), 'prover-worker.token')), worker: read(contract.worker.contractFile)})
+    target, worker: read(contract.worker.contractFile)})
   const file = localPath(root, '.scrollsdk/proof-workers/plan.json')
   if (fs.existsSync(file)) {
     const previous = JSON.parse(fs.readFileSync(file, 'utf8')) as WorkerCapacityPlan

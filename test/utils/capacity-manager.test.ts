@@ -171,7 +171,9 @@ describe('Core capacity manager', () => {
       expect(values.persistence.size).to.equal('4Gi')
       expect(values.dstackAuth).to.deep.equal({existingSecret: 'controller-auth', key: 'admin-token'})
       expect(values.wpAuth.existingSecret).to.equal('deployment-proof-secrets')
-      expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8')).workerSecret).to.equal('dedicated-worker-secret')
+      // The master comes from the coordinator's Secret, never the worker Secret.
+      expect(values.workerCredentialMaster).to.deep.equal({existingSecret: 'deployment-proof-secrets', key: 'prover-worker-token'})
+      expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8')).workerCredentialMaster).to.deep.equal(values.workerCredentialMaster)
       expect(values.manager.dstack.serverUrl).to.equal(managedTls ? `https://${internalTls.hostname}` : 'https://controller.example.invalid')
       const wp = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any
       expect(wp.networkPolicy.allowFrom.proofCoordinator).to.have.length(1)
@@ -196,7 +198,7 @@ describe('Core capacity manager', () => {
     expect(values.manager.workerCommand).to.include('--enable-prove-scroll-chunk')
     expect(values.manager.workerCommand).to.include('sha256sum --check --status')
     expect(values.manager.workerImage).to.equal(`${input.worker.image.repository}@${input.worker.image.digest}`)
-    expect(values.manager.workerTokenSecret).to.match(/^cm_worker_[\da-f]{16}$/)
+    expect(values.manager).not.to.have.property('workerTokenSecret')
     expect(values.prepared).to.equal(true)
     expect(input.worker.argv[1]).to.equal('original')
   })

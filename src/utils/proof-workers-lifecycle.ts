@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url'
 import type {WorkerCapacityPlan} from './proof-workers-plan.js'
 
 import {digest, localPath, writeJson} from './preparation-io.js'
+import {mintWorkerCredential} from './prover-worker-credential.js'
 
 export type CapacityExec = (args: string[], input?: string) => string
 export interface CapacityState {planId: string; startedAt: number; status: 'applying' | 'cleanup-requested' | 'destroyed' | 'submitted'}
@@ -51,7 +52,13 @@ export function readCapacityPlan(root: string): WorkerCapacityPlan {
   return plan
 }
 
-function operateWorkerCapacityUnlocked(root: string, action: 'apply' | 'destroy' | 'status', run: CapacityExec = capacityExec, now = Date.now() / 1000): unknown {
+/** Each worker gets a credential for its own id; the master stays on the operator machine. */
+function mintPlanCredentials(plan: WorkerCapacityPlan, master: string): Record<string, string> {
+  if (plan.workers.some(worker => !worker.secretName || !worker.workerId)) throw new Error('This plan predates per-worker credentials; destroy it and plan a new session')
+  return Object.fromEntries(plan.workers.map(worker => [worker.secretName, mintWorkerCredential(master, worker.workerId)]))
+}
+
+function operateWorkerCapacityUnlocked(root: string, action: 'apply' | 'destroy' | 'status', run: CapacityExec = capacityExec, now = Date.now() / 1000, readMaster?: () => string): unknown {
   const plan = readCapacityPlan(root)
   const stateFile = localPath(root, '.scrollsdk/proof-workers/state.json')
   let state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) as CapacityState : undefined
@@ -82,6 +89,9 @@ function operateWorkerCapacityUnlocked(root: string, action: 'apply' | 'destroy'
 
   if (state && ['cleanup-requested', 'destroyed'].includes(state.status)) throw new Error('This session is being retired; apply never restarts it')
   if (state && now >= state.startedAt + plan.config.startupTimeoutMinutes * 60) throw new Error('Session submission window has expired; inspect status, destroy and plan a new session')
+  // Mint before any cluster write, so a missing master changes nothing.
+  if (!readMaster) throw new Error('apply needs the worker-credential master to mint one credential per worker')
+  const credentials = mintPlanCredentials(plan, readMaster())
   if (!state) {
     state = {planId: plan.id, startedAt: now, status: 'applying'}
     writeJson(stateFile, state)
@@ -91,9 +101,7 @@ function operateWorkerCapacityUnlocked(root: string, action: 'apply' | 'destroy'
   run([...kubectl(plan), 'apply', '-f', '-'], JSON.stringify(guard))
   run([...kubectl(plan), 'wait', '--for=jsonpath={.status.active}=1', `job/sdk-worker-guard-${plan.id.slice(0, 16)}`, '--timeout=90s'])
   run([...kubectl(plan), 'wait', '--for=condition=Ready', 'pod', '-l', `job-name=sdk-worker-guard-${plan.id.slice(0, 16)}`, '--timeout=90s'])
-  const token = fs.readFileSync(localPath(root, plan.tokenFile), 'utf8').trim()
-  if (!token || /\s/.test(token)) throw new Error('Hydrate the Worker token with setup proof-worker before applying capacity')
-  const result = remote(plan, 'apply', run, {startedAt: state.startedAt, token})
+  const result = remote(plan, 'apply', run, {credentials, startedAt: state.startedAt})
   state.status = 'submitted'
   writeJson(stateFile, state)
   return {...result, message: 'GPU submission accepted; use status and coordinator evidence to verify actual proof work', status: 'submitted'}
@@ -108,12 +116,12 @@ export function retireCapacitySession(root: string, newSession?: string): void {
   fs.renameSync(directory, localPath(root, `.scrollsdk/proof-workers-${state.planId.slice(0, 16)}`))
 }
 
-export function operateWorkerCapacity(root: string, action: 'apply' | 'destroy' | 'status', run: CapacityExec = capacityExec, now = Date.now() / 1000): unknown {
+export function operateWorkerCapacity(root: string, action: 'apply' | 'destroy' | 'status', run: CapacityExec = capacityExec, now = Date.now() / 1000, readMaster?: () => string): unknown {
   if (action === 'status') return operateWorkerCapacityUnlocked(root, action, run, now)
   const lock = localPath(root, '.scrollsdk/proof-workers/operation.lock')
   const fd = fs.openSync(lock, 'wx', 0o600)
   try {
     fs.writeSync(fd, String(process.pid))
-    return operateWorkerCapacityUnlocked(root, action, run, now)
+    return operateWorkerCapacityUnlocked(root, action, run, now, readMaster)
   } finally {fs.closeSync(fd); fs.unlinkSync(lock)}
 }

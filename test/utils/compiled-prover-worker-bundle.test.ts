@@ -8,16 +8,24 @@ import * as path from 'node:path'
 import type {ProverWorkerContractV1} from '../../src/utils/proof-topology-compiler.js'
 
 import {
+  compiledBundleWorkerId,
   hydrateCompiledProverWorkerBundle,
   verifyCompiledProverWorkerBundle,
   writeCompiledProverWorkerBundle,
 } from '../../src/utils/compiled-prover-worker-bundle.js'
+import {mintWorkerCredential} from '../../src/utils/prover-worker-credential.js'
+
+// Nonfunctional placeholder master; only minted credentials reach the bundle.
+const TEST_MASTER = 'nonfunctional-test-master-0000000000000000'
+const CREDENTIAL = mintWorkerCredential(TEST_MASTER, 'ext-gpu-1')
 
 function worker(): ProverWorkerContractV1 {
   return {
     argv: [
       '--proof-coordinator-url',
       'https://proof.example.com',
+      '--worker-id',
+      'ext-gpu-1',
       '--worker-token-file',
       '/app/secrets/prover-worker-token',
       '--chunk-app-exe',
@@ -164,7 +172,7 @@ describe('compiled prover-worker bundle', () => {
       resourcesRoot,
       worker: worker(),
     })
-    const ready = hydrateCompiledProverWorkerBundle({bundleDir, workerToken: 'secret-token'})
+    const ready = hydrateCompiledProverWorkerBundle({bundleDir, workerToken: CREDENTIAL})
     expect(ready.bundleId).to.equal(pending.bundleId)
     expect(verifyCompiledProverWorkerBundle({
       bundleDir,
@@ -175,6 +183,26 @@ describe('compiled prover-worker bundle', () => {
     fs.writeFileSync(path.join(resourcesRoot, 'chunk/app.vmexe'), 'tampered')
     expect(() => verifyCompiledProverWorkerBundle({bundleDir, resourcesRoot}))
       .to.throw('resource SHA-256 mismatch')
+  })
+
+  it('accepts only a credential minted for the bundle Worker id', () => {
+    writeCompiledProverWorkerBundle({
+      bundleDir,
+      contractFile,
+      generatedMaterialsDir: path.join(root, '.data/generated/proof-topology/materials'),
+      generatedMaterialsRoot: '/app/data/proof-topology',
+      protocolContextPath: path.join(root, '.data/protocol_context.json'),
+      protocolContextRuntimePath: '/app/protocol_context.json',
+      resourcesMountPath: '/app/data/proof-materials',
+      resourcesRoot,
+      worker: worker(),
+    })
+    expect(compiledBundleWorkerId(bundleDir)).to.equal('ext-gpu-1')
+    expect(() => hydrateCompiledProverWorkerBundle({bundleDir, workerToken: TEST_MASTER}))
+      .to.throw('never give a worker the master')
+    expect(() => hydrateCompiledProverWorkerBundle({bundleDir, workerToken: mintWorkerCredential(TEST_MASTER, 'other-gpu')}))
+      .to.throw('minted for other-gpu')
+    expect(fs.existsSync(path.join(bundleDir, 'prover-worker.token'))).to.equal(false)
   })
 
   it('launches Compose as the invoking host UID/GID with private readiness storage', () => {
@@ -188,7 +216,7 @@ describe('compiled prover-worker bundle', () => {
       resourcesMountPath: '/app/data/proof-materials',
       resourcesRoot,
       worker: worker(),
-      workerToken: 'secret-token',
+      workerToken: CREDENTIAL,
     })
     const binDir = path.join(root, 'bin')
     fs.mkdirSync(binDir)

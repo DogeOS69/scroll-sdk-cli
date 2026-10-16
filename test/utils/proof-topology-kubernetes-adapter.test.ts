@@ -493,6 +493,11 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(worker.controller.replicas).to.equal(1)
     expect(worker.command).to.deep.equal([PROVER_WORKER_EXECUTABLE])
     expect(worker.args).to.deep.equal(WORKER_ARGV)
+    // The Worker mounts only its minted credential, never the coordinator master key.
+    expect(worker.persistence['prover-worker-token']).to.deep.include({
+      items: [{key: 'prover-worker-credential', path: 'prover-worker-token'}],
+      mountPath: '/app/secrets/prover-worker-token',
+    })
     expect(worker.configMaps['proof-topology-materials'].data['material-00-chunk.json'])
       .to.equal('{"kind":"chunk"}\n')
     expect(fs.existsSync(path.join(root, 'prover-worker-active/docker-compose'))).to.equal(false)

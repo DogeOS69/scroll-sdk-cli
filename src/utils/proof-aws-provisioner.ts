@@ -39,7 +39,7 @@ export interface ProofAwsProvisionResult {
   bucket: string
   bucketCreated: boolean
   coordinatorRoleArn: string
-  secretAction: 'created' | 'reused' | 'rotated'
+  secretAction: 'created' | 'migrated' | 'reused' | 'rotated'
   secretName: string
   withdrawalRoleArn: string
 }
@@ -72,7 +72,24 @@ export interface ProofArtifactVpcEndpointResult {
   vpcEndpointId: string
 }
 
-export const PROOF_SECRET_PROPERTIES = ['proof-work-token', 'prover-worker-token'] as const
+/**
+ * Coordinator-only worker-credential master (dogeos-core #1591). Workers get
+ * per-worker credentials minted from it, never the master itself. The property
+ * is new rather than a reuse of the retired shared `prover-worker-token`: every
+ * worker that ever held the shared token could mint any worker name with it.
+ */
+export const PROVER_WORKER_MASTER_PROPERTY = 'prover-worker-master'
+/**
+ * Secrets Manager property -> coordinator Kubernetes Secret key. The master
+ * keeps the `prover-worker-token` key, so the coordinator's
+ * `worker_auth_token_file` path (`/app/secrets/prover-worker-token`) is unchanged.
+ */
+export const PROOF_SECRET_MAPPINGS = [
+  {property: 'proof-work-token', secretKey: 'proof-work-token'},
+  {property: PROVER_WORKER_MASTER_PROPERTY, secretKey: 'prover-worker-token'},
+] as const
+export const PROOF_SECRET_PROPERTIES = PROOF_SECRET_MAPPINGS.map(mapping => mapping.property)
+const PROOF_SECRET_KEYS: readonly string[] = PROOF_SECRET_MAPPINGS.map(mapping => mapping.secretKey)
 export const PROOF_ARTIFACT_PUBLIC_READ_POLICY_SID = 'ScrollSdkProofArtifactPublicRead'
 export const PROOF_ARTIFACT_VPCE_POLICY_SID = 'ScrollSdkProofArtifactReadViaVpcEndpoint'
 export const DENY_INSECURE_TRANSPORT_SID = 'ScrollSdkDenyInsecureTransport'
@@ -486,7 +503,7 @@ function hasProofTokenMappings(values: Record<string, any>): boolean {
       .map((item: any) => item?.secretKey)
       .filter((key: unknown): key is string => typeof key === 'string')
   )
-  return PROOF_SECRET_PROPERTIES.every(property => mappedKeys.has(property))
+  return PROOF_SECRET_KEYS.every(key => mappedKeys.has(key))
 }
 
 function projectManagedAwsProofSecret(
@@ -498,7 +515,7 @@ function projectManagedAwsProofSecret(
     if (secret?.provider !== 'aws' || !Array.isArray(secret.data)) continue
 
     const proofTokenMappings = secret.data.filter((item: any) =>
-      PROOF_SECRET_PROPERTIES.includes(item?.secretKey)
+      PROOF_SECRET_KEYS.includes(item?.secretKey)
       || item?.secretKey === 'DOGEOS_WITHDRAWAL_PROOF_WORK_API__AUTH__BEARER_TOKEN'
     )
     if (proofTokenMappings.length === 0) continue
@@ -511,6 +528,8 @@ function projectManagedAwsProofSecret(
     for (const item of proofTokenMappings) {
       item.remoteRef ||= {}
       item.remoteRef.key = secretName
+      // Never resolve the coordinator master from the retired shared token.
+      if (item.secretKey === 'prover-worker-token') item.remoteRef.property = PROVER_WORKER_MASTER_PROPERTY
     }
 
     secret.secretRegion = region
@@ -554,9 +573,9 @@ export function applyProofAwsValues(
   if (!hasProofTokenMappings(coordinatorValues)) {
     coordinatorValues.externalSecrets ||= {}
     coordinatorValues.externalSecrets.secrets = {
-      data: PROOF_SECRET_PROPERTIES.map(property => ({
+      data: PROOF_SECRET_MAPPINGS.map(({property, secretKey}) => ({
         remoteRef: { key: projection.secretName, property },
-        secretKey: property,
+        secretKey,
       })),
       provider: 'aws',
       refreshInterval: '2m',
@@ -895,9 +914,10 @@ export class ProofAwsProvisioner {
     return roleArn
   }
 
-  private ensureTokenSecret(region: string, secretName: string, rotate: boolean): 'created' | 'reused' | 'rotated' {
+  private ensureTokenSecret(region: string, secretName: string, rotate: boolean): 'created' | 'migrated' | 'reused' | 'rotated' {
+    const fresh = (): string => randomBytes(32).toString('hex')
     const secretString = JSON.stringify(Object.fromEntries(
-      PROOF_SECRET_PROPERTIES.map(property => [property, randomBytes(32).toString('hex')])
+      PROOF_SECRET_PROPERTIES.map(property => [property, fresh()])
     ))
 
     let exists = true
@@ -916,9 +936,23 @@ export class ProofAwsProvisioner {
     }
 
     if (rotate) {
+      // Also drops a legacy shared `prover-worker-token` property.
       this.aws.json(['secretsmanager', 'put-secret-value', '--secret-id', secretName, '--secret-string', secretString], { region })
-      this.jsonCtx.info(`proof-aws: rotated token secret: ${secretName} (restart both proof workloads to pick up the new tokens)`)
+      this.jsonCtx.info(`proof-aws: rotated token secret: ${secretName} (drain workers first; restart the coordinator and capacity manager, then re-mint every worker credential)`)
       return 'rotated'
+    }
+
+    // Shared-token deployments predate the master. Add a fresh one instead of
+    // promoting the old shared token, which every existing worker knows.
+    const existing = JSON.parse(this.aws.text(['secretsmanager', 'get-secret-value', '--secret-id', secretName], { query: 'SecretString', region })) as Record<string, unknown>
+    const missing = PROOF_SECRET_PROPERTIES.filter(property => typeof existing[property] !== 'string' || !(existing[property] as string).trim())
+    if (missing.length > 0) {
+      const merged = {...existing, ...Object.fromEntries(missing.map(property => [property, fresh()]))}
+      // Keep a legacy `prover-worker-token` until --rotate-tokens: a running
+      // coordinator's ExternalSecret may still reference it until re-render.
+      this.aws.json(['secretsmanager', 'put-secret-value', '--secret-id', secretName, '--secret-string', JSON.stringify(merged)], { region })
+      this.jsonCtx.info(`proof-aws: added ${missing.join(', ')} to ${secretName}; drain shared-token workers, restart the coordinator, then mint per-worker credentials`)
+      return 'migrated'
     }
 
     this.jsonCtx.info(`proof-aws: reusing existing token secret: ${secretName} (pass --rotate-tokens to replace)`)
