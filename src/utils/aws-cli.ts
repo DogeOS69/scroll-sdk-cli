@@ -34,7 +34,9 @@ export class AwsCliRunner {
       return output
     } catch (error: any) {
       const stderr = error?.stderr ? String(error.stderr).trim() : ''
-      throw new Error(stderr || error?.message || `aws ${fullArgs.join(' ')} failed`)
+      // Never fall back to execFileSync's message or the argv: arguments can
+      // carry secrets (e.g. secretsmanager --secret-string).
+      throw new Error(stderr || `aws ${args.slice(0, 2).join(' ')} failed (exit ${error?.status ?? error?.signal ?? 'unknown'})`)
     }
   }
 
