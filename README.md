@@ -2326,10 +2326,15 @@ Set up contracts verification
 
 ```
 USAGE
-  $ scrollsdk setup verify-contracts [--image-tag <value>]
+  $ scrollsdk setup verify-contracts [--image-tag <value>] [--config-dir <value>]
+    [--preinstalls | --preinstalls-only] [--preinstalls-image <value>]
 
 FLAGS
   --image-tag=<value>  Specify the Docker image tag to use
+  --config-dir=<value> Directory containing config.toml and verification artifacts (default: .)
+  --preinstalls       Also submit preinstalls sources to Blockscout
+  --preinstalls-only  Only submit preinstalls sources
+  --preinstalls-image=<value>  Preinstalls image matching the deployed release
 
 DESCRIPTION
   Set up contracts verification
@@ -2338,9 +2343,44 @@ EXAMPLES
   $ scrollsdk setup verify-contracts
 
   $ scrollsdk setup verify-contracts --image-tag verify-v0.2.0-debug
+
+  $ scrollsdk setup verify-contracts --preinstalls --config-dir ./deployment
+
+  $ scrollsdk setup verify-contracts --preinstalls-only --preinstalls-image dogeos69/preinstalls:v0.2.1
 ```
 
 _See code: [src/commands/setup/verify-contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/verify-contracts.ts)_
+
+Without a preinstalls flag, this command retains the existing DogeOS contracts
+verification behavior. `--preinstalls` runs that verifier first, then submits the
+standard preinstalls sources; `--preinstalls-only` retries only the latter. A
+failure in either selected verifier makes the command fail. Preinstalls settings
+are validated before either container starts.
+
+The preinstalls path reads `[contracts.verification]` in `config.toml` under
+`--config-dir`: `VERIFIER_TYPE_L2` must be `blockscout`, `EXPLORER_URI_L2` must be a
+Blockscout site URL or its `/api` root, and `EXPLORER_API_KEY_L2` must be empty.
+For example, `https://explorer.example/chain/` and
+`https://explorer.example/chain/api/` both select
+`https://explorer.example/chain/api`. The script appends `/v2/...`; do not pass an
+`/api/v2` URL. Credential-bearing URLs, query strings and fragments are rejected.
+This requires a **real Blockscout v2 API**: l2scan or another Etherscan-compatible
+API is not supported even when its Forge verifier type is called `blockscout`.
+
+`--image-tag` selects only the DogeOS contracts verifier. The independent
+`--preinstalls-image` defaults to `dogeos69/preinstalls:v0.2.1`; set it to the
+preinstalls release actually deployed so the source set matches. The CLI
+overrides the image's deployment entrypoint with
+`bash /app/lib/verify-blockscout.sh` and passes the API root as one Docker command
+argument. It does not mount the deployment directory or pass signing keys, RPC
+credentials, or explorer API keys into this container. It uses Docker host
+networking to reach the configured API.
+
+This submits source verification requests and never deploys contracts. A zero
+exit means Blockscout accepted submissions or reported them already verified;
+check the explorer for final asynchronous verification results. Preinstalls
+must already be deployed and indexed. `scrollsdk test contracts` remains the
+separate codehash/runtime check.
 
 ## `scrollsdk signer init`
 
