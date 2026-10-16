@@ -174,10 +174,40 @@ Use the same explicit `mode` in `signing.cubesigner` (DeploymentSpec) or
 - `production_verifier_key_policy`: requires `policyReceipts`. Mixing receipts
   with manually transcribed `productionPolicy` fields is rejected.
 
+Initial `generate-from-spec --bootstrap` (also used by preparation before
+creating genesis) can leave production policy receipts pending when none are
+supplied. It retains `production_verifier_key_policy`, leaves policy identity
+fields empty, and reports that the output is not ready for deployment. It never
+substitutes `transport_only`. Supplied receipts are still verified even during
+bootstrap. Normal `--with-values`, `--values-only`, and `prep-charts` remain
+strict: import the governed release/attachment receipts before final rendering.
+
+For a staged `setup plan` deployment, `setup proof-materials` pauses at `charts`
+before invoking `prep-charts` if production receipts are absent. It creates
+`.scrollsdk/inputs/cubesigner-policy/receipts.json`, with the current protocol
+context path and digest already populated. Complete the governance process,
+copy the release/attachment receipts and their referenced artifacts into the
+deployment directory, and fill this input's paths, digests, environment and
+organization (plus `liveEvidence` when required). Rerun `setup proof-materials`.
+The workflow validates the evidence, writes only `cubesigner.policyReceipts` in
+the managed `.data/doge-config.toml`, and checkpoints that update before later
+stages. It does not change the frozen spec or repeat funding. Do not edit
+`intent.json`, the original spec, or `doge-config.toml` to complete this handoff.
+Once imported, the saved references remain authoritative; editing the input
+file does not silently switch an existing deployment to another policy.
+
+For standalone generation outside a saved preparation plan, supply
+`signing.cubesigner.policyReceipts` in the spec before running `--with-values`
+or `--values-only`.
+
 `policyReceipts` includes `release`, `attachment`, `protocolContext`, optional
 `liveEvidence` references (`path` plus `sha256`), and explicit `environment` and
 `organization`. Paths resolve relative to the deployment. The release receipt
 also refers to its Wasm and test report relative to the receipt directory.
+During transactional `prep-charts`, these references still resolve against the
+original deployment directory. The default `.scrollsdk/inputs/cubesigner-policy`
+directory stays outside generation staging; receipts and referenced artifacts
+are revalidated there before their public runtime configuration is projected.
 
 The validated schemas are:
 

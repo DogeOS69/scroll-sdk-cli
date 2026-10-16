@@ -1,5 +1,9 @@
 # Prepare a deployment in explicit stages
 
+For supported public applications on AWS, select [existing ALB references](existing-alb.md) in
+`infrastructure.aws.alb`. Final preparation requires bindings for exposed
+endpoints; Helm installs bindings without owning the ALB lifecycle.
+
 `setup plan` saves a fresh deployment plan. Six stage commands execute only their
 selected stage, persist completed steps and stop for external inputs. Run the
 commands from the private working directory containing your spec and environment
@@ -36,8 +40,9 @@ Before final `setup render`, fill the enabled ingress certificate references and
 TSO edge network-policy CIDRs in the deployment values. Intermediate chart
 compilation inside `setup proof-materials` defers these edge inputs and status-page
 reconciliation, while still validating internal callers and enabled isolation.
-Operator-owned values YAML and Makefile may be edited between stages; their
-fingerprints are not locked. The frozen spec and managed TOML remain protected.
+Local configuration may be edited between stages. Changes to recorded TOML,
+genesis or other generated files produce warnings and do not block preparation.
+Values YAML and Makefile remain excluded from fingerprint tracking.
 These defaults come from the committed SDK revision selected by plan/bootstrap;
 an older checkout or an existing deployment retains its own settings.
 
@@ -574,10 +579,27 @@ genesis, AWS provisioning or funding. No spec structure change is needed.
 provenance for the governance handoff. It is **not** approval or attachment
 evidence. Use the approved governance tools to publish, propose the exact
 attachment, collect Council approval and complete attachment with provider
-readback. Preserve `RequireRoleSession`. Import required policy evidence through
-the configured `signing.cubesigner.policyReceipts` and external inputs before
-production configuration validation; building Wasm alone does not make the key
-ready to sign. This stage does not invent governance commands, approve on behalf
+readback. Preserve `RequireRoleSession`. Before `prep-charts`, the `charts` step
+pauses when production receipts are absent and creates
+`.scrollsdk/inputs/cubesigner-policy/receipts.json`. Its protocol-context path and
+SHA-256 are already populated. Copy the governed release/attachment receipts,
+Wasm and test report into the deployment directory, preserving receipt-relative
+artifact paths. Fill the input's release/attachment paths and SHA-256 digests,
+CubeSigner environment and organization; include `liveEvidence` if required by
+the release. Input paths are relative to the deployment directory, not to
+`receipts.json`. Obtain receipt hashes from the governance handoff and check the
+received files with `sha256sum`.
+
+Rerun `scrollsdk setup proof-materials`. The CLI verifies the exact key, role,
+protocol context and policy evidence before importing the references into
+managed configuration. Do not change the original spec, frozen plan or
+`.data/doge-config.toml`. Existing plans use this handoff without replaying
+completed steps; invalid evidence leaves managed configuration unchanged.
+Already imported references remain authoritative on retries. See
+[the receipt contract](proof-config-transactions.md#cubesigner-receipts-and-external-signer-evidence).
+
+Building Wasm alone does not make the key ready to sign. This stage does not
+invent governance commands, approve on behalf
 of Council members, or configure the organization resolver.
 
 The workflow does not create an EKS cluster, rent GPU capacity or install releases.
@@ -585,24 +607,35 @@ The workflow does not create an EKS cluster, rent GPU capacity or install releas
 ## State and outcomes
 
 JSON output returns `stage`, `status`, `currentStep`, `completed`, `nextCommand`
-and optional `waiting` instructions. Exit codes: `0` for `stage-complete` or
+and optional `waiting` instructions; the response's `warnings` lists detected
+local file changes. Exit codes: `0` for `stage-complete` or
 `prepared`, `2` for `waiting`, and `1` for failure or `recovery-required`.
 `stage-complete` means only the selected stage is complete. `prepared` means all
 six stages are complete; running-service acceptance remains separate. A wait or
 failure reports the same stage as the next command. A successfully printed JSON result with
 `status: waiting` is not a completed deployment.
 
-Each completed step and the managed artifact hashes are saved before proceeding.
-Reruns preserve completed identities and artifacts. An apply lock excludes
-concurrent execution. Unexpected edits to recorded artifacts stop the run;
-operator-owned `values/*.yaml` (including nested YAML files) and `Makefile` are
-excluded from hash locking, including hashes saved by older CLI versions. External
-funding inputs remain editable under `.scrollsdk/inputs/`. Do not edit
-generated TOML to bypass the state checks.
+Each completed step and artifact fingerprints are saved before proceeding.
+Fingerprints are diagnostic only: edited or missing files produce warnings,
+and the next step runs using the files currently on disk. This also applies to
+old saved plans, with no opt-out flag or manual state-file repair. Warnings name
+files without printing their contents. Operator-owned `values/*.yaml` (including
+nested YAML files) and `Makefile` remain excluded from fingerprint tracking.
+External funding and governance inputs remain editable under `.scrollsdk/inputs/`.
 
-The initial interface is for fresh deployments. Saved plans are immutable: the
-same spec can be planned again, but a changed spec requires a new deployment
-directory. It does not implement in-place upgrades, key rotation or destructive
+Changes to the saved `plan.json` or `intent.json` content hashes also produce
+warnings instead of stopping execution. The workflow still reads its saved
+intent, not the original source spec, and skips completed steps: editing a file
+does not automatically regenerate dependent artifacts, reprovision AWS resources
+or replay funding. An apply lock still excludes concurrent execution. Required
+input parsing, step prerequisites, ambiguous broadcast recovery and externally
+pinned release/governance evidence validation remain in effect; a later step can
+report a concrete missing or invalid input rather than a generic file-hash error.
+
+The initial interface is for fresh deployments. Replanning from a changed source
+spec still requires a new deployment directory; resume commands use the saved
+plan and intent with the advisory file checks described above. This does not
+implement in-place upgrades, key rotation or destructive
 migration. After an abrupt process termination, inspect the lock's host/PID and
 any child/provider activity before removing a stale lock; interrupted broadcasts
 remain blocked regardless. Runtime deployment acceptance remains a separate step.
@@ -849,6 +882,11 @@ boundaries. It reuses `.scrollsdk/intent.json`, existing controller credentials 
 the compiler Worker contract without additional input files or path flags.
 
 ## ALB edges, internal isolation and workload permissions
+
+For the supported public applications, use [existing ALB mode](existing-alb.md). Their charts
+own their bindings, while ALBs, certificates and forwarding rules remain
+externally managed. The managed-Ingress annotation workflow below applies to
+legacy deployments; it does not configure external ALBs.
 
 The current SDK examples require AWS Load Balancer Controller for HTTPS;
 ingress-nginx and cert-manager are not required. Set issued ACM certificate

@@ -14,6 +14,8 @@ import {
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
 import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
+import {ALB_SERVICES, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
+import {validateExistingNlbSdk} from '../../utils/existing-nlb.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {loadPreparationEnv} from '../../utils/preparation-io.js'
@@ -232,6 +234,10 @@ export default class GenerateFromSpec extends Command {
     const generateValues = flags.bootstrap || flags['with-values'] || flags['values-only']
     const bootstrapFiles = flags.bootstrap ? planSpecBootstrap(spec, flags['sdk-dir'] ?? DEFAULT_SDK) : {}
     const templateFiles = flags.bootstrap ? bootstrapFiles : generateValues ? loadSdkTemplateFiles(flags['sdk-dir'] ?? DEFAULT_SDK, spec.templates?.sdkRevision).files : {}
+    if (generateValues) {
+      validateExistingAlbSdk(flags['sdk-dir'] ?? DEFAULT_SDK, spec)
+      validateExistingNlbSdk(flags['sdk-dir'] ?? DEFAULT_SDK, spec)
+    }
 
     let configs: GeneratedConfigs | null = null
     if (spec.capacityManager && generateValues && !templateFiles['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use the paired capacity-manager SDK branch')
@@ -253,7 +259,12 @@ export default class GenerateFromSpec extends Command {
 
       const monitor = 'scroll-monitor-production.yaml'
       const monitorTemplate = mergeBootstrapValues(templateFiles[`values/${monitor}`], '{}', existingValues(monitor))
-      valuesFiles = generateValuesFiles(spec, monitorTemplate)
+      valuesFiles = generateValuesFiles(spec, monitorTemplate, {bootstrap: flags.bootstrap})
+      if (flags.bootstrap && spec.signing?.cubesigner?.mode === 'production_verifier_key_policy'
+        && !spec.signing.cubesigner.policyReceipts && !spec.signing.cubesigner.productionPolicy) {
+        jsonCtx.addWarning('CubeSigner production policy receipts are pending. Bootstrap can prepare genesis; import the governed policy receipts before final configuration generation or deployment.')
+      }
+
       for (const [file, content] of Object.entries(valuesFiles)) {
         if (file === monitor) {
           const values = yaml.load(content) as Record<string, any>
@@ -319,6 +330,17 @@ export default class GenerateFromSpec extends Command {
         const existing = existingValues(file.slice('values/'.length))
         if (existing !== undefined) bootstrapFiles[file] = mergeBootstrapValues(template, '{}', existing)
       }
+
+      const allValues = {...Object.fromEntries(Object.entries(bootstrapFiles).filter(([file]) => file.startsWith('values/') && file.endsWith('.yaml')).map(([file, content]) => [file.slice('values/'.length), content])), ...valuesFiles}
+      // Some selected edges (for example the native proof coordinator) are
+      // populated later by preparation and initially come only from SDK defaults.
+      for (const name of Object.keys(spec.infrastructure.aws?.alb?.bindings ?? {})) {
+        const file = ALB_SERVICES[name]?.file
+        if (file && !allValues[file] && templateFiles[`values/${file}`]) allValues[file] = mergeBootstrapValues(templateFiles[`values/${file}`], '{}', existingValues(file))
+      }
+
+      projectExistingAlb(allValues, spec)
+      Object.assign(valuesFiles, allValues)
     }
 
     // Dry run - just show what would be generated

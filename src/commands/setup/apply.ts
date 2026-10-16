@@ -18,7 +18,7 @@ export default class SetupApply extends Command {
     const {flags} = await this.parse(SetupApply)
     const output = new JsonOutputContext('setup apply', flags.json)
     try {
-      const state = await applyPreparation(flags.dir, new CommandPreparationRunner(), step => output.info(`${step.id}: ${step.title}`), {dogecoinRoutingSpec: flags['dogecoin-routing-spec'], refreshRuntime: flags['refresh-runtime']})
+      const state = await applyPreparation(flags.dir, new CommandPreparationRunner(), step => output.info(`${step.id}: ${step.title}`), {dogecoinRoutingSpec: flags['dogecoin-routing-spec'], refreshRuntime: flags['refresh-runtime'], warn: message => output.addWarning(message)})
       const report = {completed: Object.keys(state.steps).filter(id => state.steps[id] === 'completed'), currentStep: state.currentStep, status: state.status, waiting: state.waiting}
       if (!flags.json) output.info(JSON.stringify(report, null, 2))
       output.success(report)

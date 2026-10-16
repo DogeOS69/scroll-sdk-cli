@@ -11,6 +11,8 @@ import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
 import {validateDstackAwsBackend} from './dstack-credentials.js'
 import {usesDstackPostgres} from './dstack-database.js'
+import {validateExistingAlb, validateExistingAlbSdk} from './existing-alb.js'
+import {validateExistingNlbSdk} from './existing-nlb.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {needsPreparationPolicy} from './preparation-cubesigner-policy.js'
 import {usesManagedHelper} from './preparation-helper-identity.js'
@@ -37,6 +39,7 @@ export interface PreparationState {
   status: 'failed' | 'pending' | 'prepared' | 'recovery-required' | 'running' | 'stage-complete' | 'waiting'
   steps: Record<string, 'completed' | 'failed' | 'recovery-required' | 'running'>
   waiting?: AwaitingInput['details']
+  warnings?: string[]
 }
 export const WORKFLOW_DIR = '.scrollsdk'
 export function preparationSteps(spec: DeploymentSpec, staged = false): PreparationStep[] {
@@ -256,6 +259,11 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   // Persist the choice in new plans. Previously saved plans keep their original funding path.
   if (spec.preparation?.bridge.mode === 'production' && spec.preparation.bridge.production) spec.preparation.bridge.production.funding ??= 'helper'
   spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
+  // Selected external bindings must be usable by the frozen SDK before any
+  // provider identity queries or release downloads, not only at bootstrap.
+  validateExistingAlb(spec)
+  validateExistingAlbSdk(options.sdkDirectory, spec)
+  validateExistingNlbSdk(options.sdkDirectory, spec)
   spec = resolveCubesignerIdentity(spec)
   spec = await resolvePreparationProofRelease(spec, options.output)
   const validation = validateDeploymentSpec(spec)
@@ -319,14 +327,18 @@ export function migratePolicyBuildStep(plan: PreparationPlan, spec: DeploymentSp
 }
 
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
-export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage} = {}): Promise<PreparationState> {
+export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage; warn?: (message: string) => void} = {}): Promise<PreparationState> {
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
   const root = fs.realpathSync(rootInput)
   const directory = localPath(root, WORKFLOW_DIR)
   let plan = JSON.parse(fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/plan.json`), 'utf8')) as PreparationPlan
   const text = fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/intent.json`), 'utf8')
   const {id, ...body} = plan
-  if (!['scrollsdk/preparation/v1', 'scrollsdk/preparation/v2'].includes(plan.schema) || digest(JSON.stringify(body)) !== id || digest(text) !== plan.specHash) throw new Error('Preparation plan or frozen intent changed')
+  const warnings: string[] = []
+  const warn = (message: string): void => {warnings.push(message); options.warn?.(message)}
+  if (!['scrollsdk/preparation/v1', 'scrollsdk/preparation/v2'].includes(plan.schema)) throw new Error('Unsupported preparation plan schema')
+  if (digest(JSON.stringify(body)) !== id) warn('Saved plan content changed: .scrollsdk/plan.json. Continuing with the current file; completed steps will not be replayed.')
+  if (digest(text) !== plan.specHash) warn('Saved intent content changed: .scrollsdk/intent.json. Continuing with the current file; completed steps will not be regenerated.')
   loadPreparationEnv(plan.envFile)
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
@@ -335,6 +347,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   if (JSON.stringify(preparationSteps(spec, staged)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
+  state.warnings = warnings
   // A migration interrupted after writing state.json leaves state on the migrated id.
   if (state.planId !== id && state.planId !== migrated.id) throw new Error('Workflow state does not match plan')
   if (options.stage && !staged) throw new Error('Stage commands require a new staged plan; resume this legacy plan with setup apply')
@@ -368,7 +381,9 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     for (const [file, hash] of Object.entries(state.files)) {
       // Also release hashes recorded by older CLI versions.
       if (operatorEditableArtifact(file)) {delete state.files[file]; continue}
-      if (!fs.existsSync(localPath(root, file)) || digest(fs.readFileSync(localPath(root, file))) !== hash) throw new Error(`Prepared artifact changed outside the workflow: ${file}`)
+      const current = localPath(root, file)
+      if (!fs.existsSync(current)) warn(`Prepared artifact is missing: ${file}. Continuing; steps that require it will report their missing input.`)
+      else if (digest(fs.readFileSync(current)) !== hash) warn(`Prepared artifact changed: ${file}. Continuing with the current file; completed steps will not be regenerated.`)
     }
 
     if (options.refreshRuntime) {
@@ -416,6 +431,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     }
 
     delete state.currentStep; delete state.waiting
+    state.files = fingerprint(root)
     writeJson(statePath, state)
     return state
   } finally {fs.unlinkSync(lock)}

@@ -36,6 +36,12 @@ export function createSdkFixture(directory: string): string {
     }
   }
 
+  for (const chart of ['blockscout', 'frontends', 'l2-reth', 'proof-coordinator', 'tso-service']) {
+    const target = path.join(directory, 'charts', chart, 'templates/targetgroupbindings.yaml')
+    fs.mkdirSync(path.dirname(target), {recursive: true})
+    fs.writeFileSync(target, '# Nonfunctional chart capability fixture\n')
+  }
+
   for (const [file, contents] of Object.entries(templates)) {
     const target = path.join(directory, 'examples/values', file)
     fs.mkdirSync(path.dirname(target), {recursive: true})
@@ -50,6 +56,6 @@ export function createSdkFixture(directory: string): string {
 
   fs.writeFileSync(path.join(directory, 'examples/Makefile.example'), ['install-l2-reth-sequencer:', '\t@true', 'delete-l2-reth-sequencer:', '\t@true', 'install-l2-reth-bootnode:', '\t@true', 'delete-l2-reth-bootnode:', '\t@true'].join('\n'))
   const git = (...args: string[]) => execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', stdio: 'pipe'}).trim()
-  git('init'); git('add', 'examples'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Nonfunctional SDK templates')
+  git('init'); git('add', 'examples', 'charts'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Nonfunctional SDK templates')
   return git('rev-parse', 'HEAD')
 }

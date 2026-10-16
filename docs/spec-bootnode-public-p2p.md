@@ -39,10 +39,19 @@ The current path supports IPv4, matching the default NLB address family.
 The subnet and EIP IDs belong to the deployment's AWS account/region. The CLI
 validates their shape and matching counts; it does not allocate or verify ownership
 of those resources. Each EIP may be used by only one enabled bootnode entry.
-Choose subnets in the AZ of the pod's EBS volume, or configure cross-zone balancing
-in reviewed chart values. Obtain and verify these IDs with the infrastructure
+Enable the AZ of the pod's EBS volume on the NLB. With multiple enabled AZs
+and one designated pod, also configure cross-zone balancing in reviewed values;
+it does not replace enabling the pod AZ. Obtain and verify these IDs with the infrastructure
 operator before activation. Existing Services require reviewing the controller's
 migration restrictions before changing NLB annotations.
+
+## Existing infrastructure mode
+
+To retain each NLB across bootnode Helm uninstall/reinstall, select
+`mode: existing` and the `existingNlb` ARN/security-group references. See the
+[existing NLB operator flow](existing-nlb.md), including `setup nlb` preflight,
+frontend SG enforcement, persistent node keys and migration. The Service-owned
+NLB behavior described below applies to the default `mode: service` only.
 
 ## Preparation and installation
 

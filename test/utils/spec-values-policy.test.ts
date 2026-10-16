@@ -12,6 +12,7 @@ import sinon from 'sinon'
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
 import Generate from '../../src/commands/setup/generate-from-spec.js'
+import {ALB_SERVICES} from '../../src/utils/existing-alb.js'
 import {reconcileDeploymentIngresses} from '../../src/utils/public-service-ingress.js'
 import {mergeBootstrapValues} from '../../src/utils/spec-bootstrap.js'
 import {createSdkFixture} from '../helpers/sdk-templates.js'
@@ -52,6 +53,88 @@ describe('spec values runtime policy across entry points', () => {
     fs.writeFileSync('deployment-spec.yaml', yaml.dump(spec))
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
+
+  for (const network of ['mainnet', 'testnet'] as const) {
+    it(`bootstraps ${network} before policy receipts exist without downgrading enforcement`, async () => {
+      spec.dogecoin.network = network
+      spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet).toAddress().toString()
+      spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
+      const directory = path.join(root, 'deployment')
+      await run('--bootstrap', directory, '--sdk-dir', sdk)
+      expect(fs.existsSync(path.join(directory, 'config.toml'))).to.equal(true)
+      const values = read(directory, 'cubesigner-signer')
+      const env = Object.fromEntries(values.env.map((item: any) => [item.name, item.value]))
+      expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy')
+      expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER).to.equal('')
+      expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST).to.equal('')
+      expect(values.probes.readiness.spec.httpGet.path).to.equal('/ready')
+      expect(fs.readFileSync(path.join(directory, '.data/doge-config.toml'), 'utf8')).to.include('production_verifier_key_policy')
+
+      // Reusing bootstrap output must not let runtime rendering bypass receipts.
+      const before = fs.readFileSync(path.join(directory, 'values/cubesigner-signer-production.yaml'), 'utf8')
+      for (const mode of ['--with-values', '--values-only']) {
+        let error: unknown
+        try {await run(mode, directory, '--sdk-dir', sdk, '--force')} catch (error_) {error = error_}
+        expect(String(error)).to.include('requires release and attachment receipts')
+        expect(fs.readFileSync(path.join(directory, 'values/cubesigner-signer-production.yaml'), 'utf8')).to.equal(before)
+      }
+    })
+  }
+
+  it('does not ignore supplied invalid policy receipts during bootstrap', async () => {
+    spec.signing.cubesigner = {
+      mode: 'production_verifier_key_policy',
+      policyReceipts: {} as any,
+      roles: [{keys: [{keyId: 'fixture-key', keyType: 'SecpDogeTestAddr', materialId: 'fixture-material', publicKey: new bitcore.PrivateKey().toPublicKey().toString()}], name: 'fixture-role', roleId: 'fixture-role'}],
+    }
+    let error: unknown
+    const directory = path.join(root, 'deployment')
+    try {await run('--bootstrap', directory, '--sdk-dir', sdk)} catch (error_) {error = error_}
+    expect(String(error)).to.include('Policy input requires a pinned SHA-256')
+    expect(fs.existsSync(directory)).to.equal(false)
+  })
+
+  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects existing ALB bindings through ${mode} without re-enabling ingress on regeneration`, async () => {
+    spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture', region: 'us-east-1'}, provider: 'aws'}
+    // Exercise the stacked bootstrap fix together with existing ALB projection.
+    if (mode === '--bootstrap') spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
+    const directory = path.join(root, 'deployment')
+    await run(mode, directory, '--sdk-dir', sdk)
+    const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
+    spec.infrastructure.aws!.alb = {bindings: {}, endpoints: {public: {listenerArn: `${prefix}listener/app/example/0000000000000000/1111111111111111`, loadBalancerArn: `${prefix}loadbalancer/app/example/0000000000000000`}}, mode: 'existing'}
+    let index = 0
+    for (const [name, entry] of Object.entries(ALB_SERVICES)) {
+      const file = path.join(directory, 'values', entry.file)
+      if (!fs.existsSync(file)) continue
+      const document = yaml.load(fs.readFileSync(file, 'utf8')) as any
+      const ingress = entry.ingress.reduce((value, key) => value?.[key], document)
+      if (!ingress || ingress.enabled === false) continue
+      spec.infrastructure.aws!.alb.bindings[name] = {endpoint: 'public', serviceRef: {name: `service-${index}`, port: 3000}, targetGroupArn: `${prefix}targetgroup/example-${index}/${String(++index).padStart(16, '0')}`}
+    }
+
+    // Native proof topology uses an SDK template before its later chart
+    // preparation stage; direct values generation must include that template.
+    spec.infrastructure.aws!.alb.endpoints.proof = {listenerArn: `${prefix}listener/app/proof/3333333333333333/4444444444444444`, loadBalancerArn: `${prefix}loadbalancer/app/proof/3333333333333333`}
+    spec.infrastructure.aws!.alb.bindings['proof-coordinator'] = {endpoint: 'proof', serviceRef: {name: 'proof-coordinator', port: 7788}, targetGroupArn: `${prefix}targetgroup/proof/${String(++index).padStart(16, '0')}`}
+
+    for (let repeat = 0; repeat < 2; repeat++) {
+      await run(mode, directory, '--sdk-dir', sdk, '--force')
+      if (mode === '--bootstrap') {
+        const env = Object.fromEntries(read(directory, 'cubesigner-signer').env.map((item: any) => [item.name, item.value]))
+        expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy')
+        expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER).to.equal('')
+      }
+
+      expect(fs.existsSync(path.join(directory, 'values/alb-bindings-production.yaml'))).to.equal(false)
+      for (const name of Object.keys(spec.infrastructure.aws!.alb.bindings)) {
+        const entry = ALB_SERVICES[name]
+        const document = yaml.load(fs.readFileSync(path.join(directory, 'values', entry.file), 'utf8')) as any
+        expect(entry.ingress.reduce((value, key) => value[key], document)).to.include({enabled: false, existingAlbBinding: name})
+        const binding = spec.infrastructure.aws!.alb.bindings[name]
+        expect(document.targetGroupBindings[name]).to.deep.equal({serviceRef: binding.serviceRef, targetGroupARN: binding.targetGroupArn, targetType: 'ip'})
+      }
+    }
+  })
 
   for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects bootnode source restrictions through ${mode} and retains them on regeneration`, async () => {
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '123456789012', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, bootnodeCount: 2, provider: 'aws'}

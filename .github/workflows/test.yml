@@ -7,8 +7,30 @@ on:
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
+    env:
+      SDK_ALB_CHARTS: ${{ github.workspace }}/.test-sdk/charts
+      SCROLLSDK_TEST_DEPLOYMENT_SPECS: ${{ github.workspace }}/.test-sdk-specs/examples
+      SCROLLSDK_TEST_SDK_CHART: ${{ github.workspace }}/.test-sdk/charts/l2-reth
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: DogeOS69/scroll-sdk
+          ref: 58acf6b9b64adf59f2e0d4a095010958d4e16472
+          path: .test-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: DogeOS69/scroll-sdk
+          ref: 25d6cd18eaca2a0693f7c5704c029b20d7433680
+          path: .test-sdk-specs
+      - uses: azure/setup-helm@v4.3.0
+        with:
+          version: v3.17.3
+      - run: helm dependency build .test-sdk/charts/tso-service --skip-refresh
+      - run: helm dependency build .test-sdk/charts/l2-reth --skip-refresh
+      - run: helm dependency build .test-sdk/charts/blockscout
+      - run: helm dependency build .test-sdk/charts/frontends --skip-refresh
+      - run: helm dependency build .test-sdk/charts/proof-coordinator --skip-refresh
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*

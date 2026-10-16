@@ -61,7 +61,7 @@ export async function prepareCubesignerPolicy(root: string, command: (args: stri
     instructions: [
       'Submit this artifact and its build provenance through the approved governance tooling. This file is a build handoff, not approval or attachment evidence.',
       'Publish a policy version; propose attaching that exact version while preserving RequireRoleSession. Council members independently reproduce and compare the Wasm hash before approval.',
-      'After approval, complete attachment and verify provider readback for the intended key and role. Supply policy evidence through the configured policyReceipts and external inputs before production configuration validation.',
+      'After approval, complete attachment and verify provider readback for the intended key and role. Fill .scrollsdk/inputs/cubesigner-policy/receipts.json when setup proof-materials pauses at charts, then rerun the same command. Do not edit the frozen spec or managed doge-config.toml.',
     ],
     schema: 'scrollsdk/cubesigner-policy-governance-handoff/v1',
     status: 'built-not-published-or-attached',

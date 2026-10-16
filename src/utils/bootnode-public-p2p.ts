@@ -12,11 +12,27 @@ export function validateBootnodePublicP2p(entries: BootnodePublicP2p[] | undefin
   if (!Array.isArray(entries)) throw new Error('bootnodePublicP2p must be an array')
   const selected = new Set<number>()
   const allocations = new Set<string>()
+  const loadBalancers = new Set<string>()
+  const targetGroups = new Set<string>()
   for (const entry of entries) {
     if (!entry || !Number.isSafeInteger(entry.index) || !indices.includes(entry.index) || selected.has(entry.index)) throw new Error('bootnodePublicP2p requires distinct configured bootnode indices')
     selected.add(entry.index)
     if (typeof entry.enabled !== 'boolean') throw new Error('bootnodePublicP2p.enabled must be a boolean')
+    if (entry.mode !== undefined && !['existing', 'service'].includes(entry.mode)) throw new Error('bootnodePublicP2p.mode must be existing or service')
+    if (entry.mode !== 'existing' && entry.existingNlb !== undefined) throw new Error('existingNlb requires mode existing; refusing automatic NLB creation fallback')
     if (!entry.enabled) continue
+    if (entry.mode === 'existing') {
+      const nlb = entry.existingNlb
+      const lb = nlb?.loadBalancerArn?.match(/^arn:aws:elasticloadbalancing:([\da-z-]+):(\d{12}):loadbalancer\/net\/([\w-]+\/[\da-f]{16})$/)
+      if (!nlb || !lb) throw new Error('existingNlb requires a network load balancer ARN')
+      const prefix = `arn:aws:elasticloadbalancing:${lb[1]}:${lb[2]}:`
+      if (!nlb.listenerArn?.startsWith(`${prefix}listener/net/${lb[3]}/`) || !/^[\da-f]{16}$/.test(nlb.listenerArn.slice(`${prefix}listener/net/${lb[3]}/`.length))) throw new Error('existingNlb.listenerArn must belong to the selected NLB')
+      if (!nlb.targetGroupArn?.startsWith(prefix) || !/^targetgroup\/[\w-]+\/[\da-f]{16}$/.test(nlb.targetGroupArn.slice(prefix.length))) throw new Error('existingNlb.targetGroupArn must use the NLB account and region')
+      if (loadBalancers.has(nlb.loadBalancerArn) || targetGroups.has(nlb.targetGroupArn)) throw new Error('Each bootnode requires its own independent NLB and target group')
+      loadBalancers.add(nlb.loadBalancerArn); targetGroups.add(nlb.targetGroupArn)
+      if (!Array.isArray(nlb.securityGroupIds) || nlb.securityGroupIds.length === 0 || nlb.securityGroupIds.some(id => !/^sg-(?:[\da-f]{8}|[\da-f]{17})$/.test(id)) || new Set(nlb.securityGroupIds).size !== nlb.securityGroupIds.length) throw new Error('existingNlb.securityGroupIds requires distinct NLB frontend security groups')
+    }
+
     if (provider !== 'aws') throw new Error('bootnodePublicP2p requires AWS NLB infrastructure')
     if (!Array.isArray(entry.sourceRanges) || entry.sourceRanges.length === 0) throw new Error('bootnodePublicP2p.sourceRanges requires approved partner IPv4 CIDRs')
     for (const cidr of entry.sourceRanges) {
@@ -38,12 +54,20 @@ export function validateBootnodePublicP2p(entries: BootnodePublicP2p[] | undefin
 export function applyBootnodePublicP2p(values: any, index: number, entries?: BootnodePublicP2p[]): void {
   if (entries === undefined) return // Preserve the independent manual-values workflow.
   const entry = entries.find(value => value.index === index && value.enabled)
+  if (values.reth?.p2pExternal?.enabled && values.reth.p2pExternal.mode === 'existing' && entry && entry.mode !== 'existing') throw new Error('Cannot change an existing NLB binding to Service-owned mode implicitly; review migration and remove the old binding first')
   values.reth ??= {}
   values.reth.p2pExternal = {
     ...values.reth.p2pExternal,
     allowOpenPeering: false,
     eipAllocations: entry?.eipAllocations ?? [],
     enabled: Boolean(entry),
+    existingNlb: entry?.mode === 'existing' ? {
+      listenerARN: entry.existingNlb!.listenerArn,
+      loadBalancerARN: entry.existingNlb!.loadBalancerArn,
+      securityGroupIds: entry.existingNlb!.securityGroupIds,
+      targetGroupARN: entry.existingNlb!.targetGroupArn,
+    } : {},
+    mode: entry?.mode ?? 'service',
     ordinal: 0,
     sourceRanges: entry?.sourceRanges ?? [],
     subnets: entry?.subnets ?? [],
