@@ -152,6 +152,19 @@ describe('existing ALB lifecycle', () => {
     expect(() => verifyExistingAlb(spec(), values, aws)).to.throw(message)
   })
 
+  for (const authentication of ['authenticate-oidc', 'authenticate-cognito']) {
+    it(`rejects ${authentication} on the selected forwarding rule`, () => {
+      const values = files()
+      projectExistingAlb(values, spec())
+      const aws = provider()
+      aws.responses['describe-rules'].Rules[0].Actions = [
+        {Order: 1, Type: authentication},
+        {Order: 2, TargetGroupArn: targetGroupArn, Type: 'forward'},
+      ]
+      expect(() => verifyExistingAlb(spec(), values, aws)).to.throw('single forward action')
+    })
+  }
+
   it('does not silently repair tampered values during verification', () => {
     const values: Record<string, string> = files()
     projectExistingAlb(values, spec())
@@ -227,7 +240,7 @@ describe('existing ALB lifecycle', () => {
       }
 
       aws.responses['describe-rules'].Rules.unshift(rule)
-      expect(() => verifyExistingAlb(spec(), values, aws)).to.throw('higher-priority listener rule 1 may shadow')
+      expect(() => verifyExistingAlb(spec(), values, aws)).to.throw(kind === 'authenticate' ? 'single forward action' : 'higher-priority listener rule 1 may shadow')
     })
   }
 

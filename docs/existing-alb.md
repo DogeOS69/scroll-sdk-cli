@@ -86,7 +86,9 @@ make delete-tso
 
 `setup alb` validates both ALB and target-group ownership tags, VPC/scheme, listener/certificate,
 target type, health checks and explicit host/path coverage. It rejects wider
-routes to a selected target group and forwarding from another listener. The
+routes to a selected target group and forwarding from another listener. Selected
+rules must use a single forward action; ALB OIDC/Cognito authentication is not
+supported for these machine-to-machine endpoints. The
 Service check also requires the spec's explicit kubeContext to resolve to the
 selected EKS cluster. AWS failure details are omitted from normal diagnostics.
 All higher-priority listener rules are checked for interception, including fixed

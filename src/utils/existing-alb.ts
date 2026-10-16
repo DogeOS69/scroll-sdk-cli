@@ -295,6 +295,7 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
     for (const rule of rules.filter(rule => actionGroups(rule.Actions ?? []).includes(binding.targetGroupArn))) {
       const priority = Number(rule.Priority)
       if (!Number.isInteger(priority) || priority < 1 || priority > 50_000) fail(`${name}: forwarding rule needs a numeric listener priority`)
+      if (rule.Actions.length !== 1 || rule.Actions[0].Type !== 'forward') fail(`${name}: selected listener rules must use a single forward action without ALB authentication`)
       const groups = actionGroups(rule.Actions)
       const conditions = rule.Conditions ?? []
       const hosts = conditions.find((condition: any) => condition.Field === 'host-header')
