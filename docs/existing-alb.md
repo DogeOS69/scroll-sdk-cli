@@ -40,6 +40,14 @@ matching application chart versions from that SDK revision.
 Binding keys map to existing application values: `tso-service`,
 `proof-coordinator`, `frontends`, `l2-reth-rpc-public`,
 `l2-reth-rpc-public-ws`, `blockscout-api`, `blockscout-frontend`.
+In existing ALB mode, the two public RPC bindings are independent opt-ins.
+Omitting `l2-reth-rpc-public` disables HTTP RPC ingress; omitting
+`l2-reth-rpc-public-ws` disables WebSocket RPC ingress. Omitting both generates
+neither RPC TargetGroupBinding and disables both ingresses, including in a fresh
+output directory. No pre-created values override is needed. The RPC node itself
+is still generated for internal use. Outside existing ALB mode, the default RPC
+ingress behavior is unchanged.
+
 This workflow does not modify or restrict other applications' ingress settings.
 Each binding requires its actual Kubernetes Service name and numeric Service
 port. HTTP and WebSocket RPC require separate target groups and distinguishable

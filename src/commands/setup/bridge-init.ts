@@ -11,7 +11,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
-import {assertGenesisSequencerAmount} from '../../utils/bridge-constants.js'
+import {assertGenesisSequencerAmount, coreHelperNetwork} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import {resolveEthereumRpc} from '../../utils/ethereum-rpc-secrets.js'
@@ -517,6 +517,8 @@ export class BridgeInitCommand extends Command {
         Cmd: command,
         HostConfig: {
           Binds: [`${process.cwd()}:/app`],
+          // Match host-side RPC preflight access, including loopback port-forwards.
+          NetworkMode: 'host',
         },
         Image: image,
         User: hostUser,
@@ -1362,7 +1364,7 @@ export class BridgeInitCommand extends Command {
 
     const newConfig = toml.parse(existingConfigStr) as any
     newConfig.seed_string = seed
-    newConfig.network = network
+    newConfig.network = coreHelperNetwork(network)
     newConfig.deposit_eth_recipient_address_hex = this.getNestedValue(configData, 'accounts.DEPLOYER_ADDR')
     fs.writeFileSync(paths.setupDefaultsPath, toml.stringify(newConfig))
     this.jsonCtx.info(`Updating protocol seed for Dogecoin network ${network}`)
@@ -1740,11 +1742,12 @@ export class BridgeInitCommand extends Command {
 
   private syncSetupDefaultsNetwork(setupDefaultsPath: string, network: string): void {
     const setupDefaults = toml.parse(fs.readFileSync(setupDefaultsPath, 'utf8')) as any
-    if (setupDefaults.network === network) return
+    const serializedNetwork = coreHelperNetwork(network)
+    if (setupDefaults.network === serializedNetwork) return
 
-    setupDefaults.network = network
+    setupDefaults.network = serializedNetwork
     fs.writeFileSync(setupDefaultsPath, toml.stringify(setupDefaults))
-    this.jsonCtx.info(`Updated ${setupDefaultsPath} with network = ${network} from .data/doge-config.toml`)
+    this.jsonCtx.info(`Updated ${setupDefaultsPath} with network = ${serializedNetwork} from .data/doge-config.toml`)
   }
 
   /**
@@ -1802,15 +1805,16 @@ export class BridgeInitCommand extends Command {
       return
     }
 
+    const serializedNetwork = coreHelperNetwork(network)
     const bridgeInfoConfig = toml.parse(fs.readFileSync(generateBridgeInfoPath, 'utf8')) as any
     if (bridgeInfoConfig.default && typeof bridgeInfoConfig.default === 'object') {
-      bridgeInfoConfig.default.network = network
+      bridgeInfoConfig.default.network = serializedNetwork
     } else {
-      bridgeInfoConfig.network = network
+      bridgeInfoConfig.network = serializedNetwork
     }
 
     fs.writeFileSync(generateBridgeInfoPath, toml.stringify(bridgeInfoConfig))
-    this.jsonCtx.info(`Updated ${generateBridgeInfoPath} with network = ${network}`)
+    this.jsonCtx.info(`Updated ${generateBridgeInfoPath} with network = ${serializedNetwork}`)
   }
 
   private async updateProtocolSeed(dataDir: string, network: string, configPath: string): Promise<string> {

@@ -46,6 +46,11 @@ Values YAML and Makefile remain excluded from fingerprint tracking.
 These defaults come from the committed SDK revision selected by plan/bootstrap;
 an older checkout or an existing deployment retains its own settings.
 
+For Reth RPC and bootnode followers, review
+[restart on signer rotation](reth-only-peers.md#follower-restart-on-signer-rotation)
+when selecting SDK templates and checking generated values. The
+`--consensus.exit-on-signer-rotation` flag must not be enabled on sequencers.
+
 The canonical operator spec and environment templates live in the scroll-sdk
 repository: [deployment-spec.example.yaml](https://github.com/DogeOS69/scroll-sdk/blob/v0.3.0-develop/examples/deployment-spec.example.yaml)
 and [deployment.env.example](https://github.com/DogeOS69/scroll-sdk/blob/v0.3.0-develop/examples/deployment.env.example),
@@ -682,6 +687,7 @@ should not have to copy protocol addresses into the spec:
 | Gas policy | Explicit genesis gas limit and base fee; Galileo scalars and penalty factor; L2 system-config base fee overhead |
 | Prepared identities | Genesis uses deployer/owner inputs. The isolated generator config uses the deployer for the shared reader's mandatory Fee Oracle address; this does not become the runtime Fee Oracle identity. The AWS stage prepares the actual service identity |
 | Fee-vault withdrawal destination | Required: `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. Plan rejects a missing or invalid recipient before SDK resolution, CubeSigner lookup or proof-release downloads; apply also rejects saved plans missing it before running any step. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
+| Fee-vault genesis/bootstrap recipient | Optional: `contracts.l1FeeVaultAddress` projects to `L1_FEE_VAULT_ADDR`; defaults to `0x0000000000000000000000000000000000000001`. Use a nonzero 20-byte hex address only when deliberately preserving a previous genesis input. It is temporary: contract initialization replaces the vault recipient with `FEE_VAULT_DOGE_RECIPIENT_ADDR` before routing withdrawals through the adapter. Changing it changes genesis; create a new preparation plan and regenerate all artifacts consistently. Do not patch genesis storage directly. |
 | Optional components | Blockscout database, explorer verification, Ethereum devnet and public service hostnames are configured only for the selected components |
 
 Keep the fee-vault recipient key under separate custody. The spec needs only its

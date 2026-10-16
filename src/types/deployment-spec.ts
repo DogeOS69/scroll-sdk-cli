@@ -782,9 +782,11 @@ export interface ContractsConfig {
     penaltyFactor: number
     scalar: number
   }
-
   /** L1 contract deployment block (set after deployment) */
   l1DeploymentBlock?: number
+
+  /** Temporary genesis/bootstrap recipient; defaults to address(1). Not the final Dogecoin withdrawal target. */
+  l1FeeVaultAddress?: string
 
   /** Fresh-chain L2 system-config base fee overhead, in wei. */
   l2BaseFeeOverheadWei?: string

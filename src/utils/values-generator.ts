@@ -436,6 +436,9 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
   }
 
   const sequencer = role === 'sequencer'
+  // Existing ALB bindings explicitly select which public RPC endpoints exist.
+  const alb = spec.infrastructure.aws?.alb
+  const rpcIngressEnabled = (binding: string): boolean => alb?.mode !== 'existing' || Object.hasOwn(alb.bindings, binding)
   return yaml.dump({
     controller: {replicas: 1, strategy: 'RollingUpdate', type: 'statefulset'},
     image,
@@ -445,11 +448,11 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
     env: [{name: 'RUST_BACKTRACE', value: '1'}],
     ...(publicRpc && {ingress: {
       main: {
-        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}],
+        enabled: rpcIngressEnabled('l2-reth-rpc-public'), hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}],
         primary: true,
       },
       websocket: {
-        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix', service: {port: 8546}}]}],
+        enabled: rpcIngressEnabled('l2-reth-rpc-public-ws'), hosts: [{host: spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix', service: {port: 8546}}]}],
       },
     }}),
     externalSecrets: {},

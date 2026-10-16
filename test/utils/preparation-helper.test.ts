@@ -52,6 +52,13 @@ describe('managed helper funding', () => {
     fs.rmSync(root, {force: true, recursive: true})
   })
 
+  for (const network of ['mainnet', 'testnet', 'regtest'] as const) it(`serializes ${network} for the Core helper`, () => {
+    spec.dogecoin.network = network
+    prepareManagedHelper(root, spec)
+    const config = toml.parse(fs.readFileSync(path.join(root, '.data/setup_defaults.toml'), 'utf8'))
+    expect(config.network).to.equal(network === 'mainnet' ? 'dogecoin' : network)
+  })
+
   it('blocks the known incompatible image before helper funding or broadcast', () => {
     expect(() => assertHelperFundingImage(image)).to.throw('invalid 71-byte')
   })

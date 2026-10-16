@@ -1090,7 +1090,7 @@ describe('deployment-spec-generator', () => {
       expect(toml.parse(generateDogeConfigToml(spec))).not.to.have.property('test');
     });
 
-    it('uses a fixed L1 fee vault address and rejects an unsupported spec override', () => {
+    it('defaults the bootstrap fee-vault address and rejects a misspelled override', () => {
       const spec = createMinimalSpec() as any;
       spec.contracts.l1FeeVaultAddr = '0x2222222222222222222222222222222222222222';
       expect(() => generateConfigToml(spec)).to.throw('contracts.l1FeeVaultAddr');
@@ -1099,6 +1099,37 @@ describe('deployment-spec-generator', () => {
 
       expect(output).to.include('L1_FEE_VAULT_ADDR = "0x0000000000000000000000000000000000000001"');
       expect(output).not.to.include('L1_FEE_VAULT_ADDR = "0x2222222222222222222222222222222222222222"');
+    });
+
+    it('uses Core helper network names without changing runtime network names', () => {
+      for (const network of ['mainnet', 'testnet', 'regtest'] as const) {
+        const spec = createMinimalSpec();
+        spec.dogecoin.network = network;
+        const config = toml.parse(generateSetupDefaultsToml(spec));
+        expect(config.network).to.equal(network === 'mainnet' ? 'dogecoin' : network);
+        expect(spec.dogecoin.network).to.equal(network);
+      }
+    });
+
+    it('preserves an explicit bootstrap recipient independently of the final Dogecoin recipient', () => {
+      const spec = createMinimalSpec();
+      const before = toml.parse(generateConfigToml(spec)) as any;
+      spec.contracts.l1FeeVaultAddress = '0x1111111111111111111111111111111111111111';
+      expect(validateDeploymentSpec(spec).valid).to.equal(true);
+      const after = toml.parse(generateConfigToml(spec)) as any;
+      expect(after.contracts.L1_FEE_VAULT_ADDR).to.equal(spec.contracts.l1FeeVaultAddress);
+      expect(after.contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal(before.contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR);
+      after.contracts.L1_FEE_VAULT_ADDR = before.contracts.L1_FEE_VAULT_ADDR;
+      expect(after).to.deep.equal(before);
+    });
+
+    it('rejects invalid bootstrap fee-vault recipients during validation and generation', () => {
+      for (const address of ['', '0x' + '0'.repeat(40), '0x1234', 'REPLACE_WITH_ADDRESS', 1, null]) {
+        const spec = createMinimalSpec();
+        spec.contracts.l1FeeVaultAddress = address as any;
+        expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'contracts.l1FeeVaultAddress')).to.equal(true);
+        expect(() => generateConfigToml(spec)).to.throw('contracts.l1FeeVaultAddress');
+      }
     });
 
     it('includes admin dashboard and Grafana frontend URIs required by contract scripts', () => {

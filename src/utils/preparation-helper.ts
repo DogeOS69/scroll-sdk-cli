@@ -7,7 +7,7 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {Rpc} from './preparation-funding.js'
 
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
-import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {GENESIS_SEQUENCER_AMOUNT_SATS, coreHelperNetwork} from './bridge-constants.js'
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, fundingInput, inspectFunding, publicKeyAddress, verifyDogecoinNetwork, verifyProductionBridge} from './preparation-funding.js'
 import {helperSeed, usesManagedHelper} from './preparation-helper-identity.js'
@@ -38,7 +38,7 @@ export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
     bridge_funding_target_amount: config.bridge_target_amount,
     bridge_funding_tx_count: 1,
     confirmations_required: spec.bridge.confirmationsRequired,
-    enable_deposit_seed_txs: false, network: spec.dogecoin.network,
+    enable_deposit_seed_txs: false, network: coreHelperNetwork(spec.dogecoin.network),
     recovery_key_count: policy.recoveryPublicKeys.length, recovery_pubkeys: policy.recoveryPublicKeys,
     recovery_threshold: spec.bridge.thresholds.recovery, seed_string: helperSeed(root),
     sequencer_pubkey: sequencer.publicKey,

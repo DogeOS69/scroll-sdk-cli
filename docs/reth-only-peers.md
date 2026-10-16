@@ -48,6 +48,42 @@ prepare Reth identities; they do not restore Geth keystore generation. Existing
 identities are retained, and conflicting replacements are rejected. The direct
 Reth commands above remain available. See [signing identities](keystore.md).
 
+## Follower restart on signer rotation
+
+Enable `--consensus.exit-on-signer-rotation` for Reth followers: internal RPC,
+public RPC, and bootnodes. Add this item to each follower's existing
+`reth.extraArgs` list in its deployment values:
+
+```yaml
+- "--consensus.exit-on-signer-rotation"
+```
+
+Preserve the other arguments when editing the list; Helm replaces lists rather
+than appending to them. **Do not add this flag to sequencer values.** Reth rejects
+it when sequencing is enabled; sequencer rotation remains a separate manual
+operation.
+
+The flag requires `--l1.url` and system-contract consensus (the node default).
+Do not combine it with `--consensus.authorized-signer`, because a pinned signer
+would stay pinned after restart. Once a follower confirms an authorized-signer
+change from L1, it shuts down with exit code `70`. A supervisor must restart the
+node so it can load the new signer. The SDK's Kubernetes workloads restart their
+containers; retain that behavior when adapting the deployment.
+
+For generated values, select a committed SDK template revision containing the
+follower setting and review the output after `setup prep-charts` or `setup render`.
+The CLI reads committed SDK templates, so editing an SDK working-tree file alone
+does not change generation. Existing operator-owned `reth.extraArgs` lists are
+preserved, including empty lists; add the flag explicitly to existing follower
+values when needed. See [SDK template and runtime policy ownership](spec-projection.md#start-a-fresh-directory-from-a-pinned-sdk-template).
+
+The standalone `dogeos-rpc-package` already includes the flag in
+`scripts/l2reth_entrypoint.sh`. Its `l2reth-node` service uses
+`restart: on-failure`, which restarts the process after exit code `70`.
+`setup gen-rpc-package` exports node configuration; it does not replace the
+package's entrypoint or restart policy. Keep both when adapting that package;
+signer rotation does not require resetting chain data.
+
 ## Generated files and peer sources
 
 - `gen-secrets` emits `l2-reth-sequencer-N-secret.env` and

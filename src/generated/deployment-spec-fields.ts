@@ -30,7 +30,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.capacityManager.instanceTypes": {"kind":"array"},
   "$.capacityManager.regions": {"kind":"array"},
   "$.celestia": {"keys":["authToken","indexerStartBlock","mnemonic","namespace","signerAddress","tendermintRpcUrl"],"kind":"object"},
-  "$.contracts": {"keys":["deploymentSalt","feeVaultDogeRecipientAddress","gasOracle","l1DeploymentBlock","l2BaseFeeOverheadWei","overrides","verification"],"kind":"object"},
+  "$.contracts": {"keys":["deploymentSalt","feeVaultDogeRecipientAddress","gasOracle","l1DeploymentBlock","l1FeeVaultAddress","l2BaseFeeOverheadWei","overrides","verification"],"kind":"object"},
   "$.contracts.gasOracle": {"keys":["blobScalar","commitScalar","penaltyFactor","scalar"],"kind":"object"},
   "$.contracts.overrides": {"keys":["l1GasPriceOracle","l1PlonkVerifier","l1Weth","l2MessageQueue","l2TxFeeVault","l2Wdoge","l2Whitelist"],"kind":"object"},
   "$.contracts.verification": {"keys":["l1ApiKey","l1ExplorerUri","l1VerifierType","l2ApiKey","l2ExplorerUri","l2VerifierType"],"kind":"object"},

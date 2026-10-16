@@ -94,7 +94,8 @@ describe('spec values runtime policy across entry points', () => {
     expect(fs.existsSync(directory)).to.equal(false)
   })
 
-  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects existing ALB bindings through ${mode} without re-enabling ingress on regeneration`, async () => {
+  for (const rpcSelection of ['both', 'http', 'ws', 'none'])
+    for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects existing ALB bindings through ${mode} with ${rpcSelection} RPC endpoints on fresh generation and regeneration`, async () => {
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture', region: 'us-east-1'}, provider: 'aws'}
     // Exercise the stacked bootstrap fix together with existing ALB projection.
     if (mode === '--bootstrap') spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
@@ -117,8 +118,19 @@ describe('spec values runtime policy across entry points', () => {
     spec.infrastructure.aws!.alb.endpoints.proof = {listenerArn: `${prefix}listener/app/proof/3333333333333333/4444444444444444`, loadBalancerArn: `${prefix}loadbalancer/app/proof/3333333333333333`}
     spec.infrastructure.aws!.alb.bindings['proof-coordinator'] = {endpoint: 'proof', serviceRef: {name: 'proof-coordinator', port: 7788}, targetGroupArn: `${prefix}targetgroup/proof/${String(++index).padStart(16, '0')}`}
 
+    if (!['both', 'http'].includes(rpcSelection)) delete spec.infrastructure.aws!.alb.bindings['l2-reth-rpc-public']
+    if (!['both', 'ws'].includes(rpcSelection)) delete spec.infrastructure.aws!.alb.bindings['l2-reth-rpc-public-ws']
+    // Prove no operator overlay from an earlier generation is required.
+    fs.rmSync(directory, {force: true, recursive: true})
     for (let repeat = 0; repeat < 2; repeat++) {
       await run(mode, directory, '--sdk-dir', sdk, '--force')
+      const rpc = read(directory, 'l2-reth-rpc-public')
+      expect(rpc.ingress.main.enabled).to.equal(false)
+      expect(rpc.ingress.websocket.enabled).to.equal(false)
+      for (const name of ['l2-reth-rpc-public', 'l2-reth-rpc-public-ws']) {
+        expect(Object.hasOwn(rpc.targetGroupBindings ?? {}, name)).to.equal(Object.hasOwn(spec.infrastructure.aws!.alb.bindings, name))
+      }
+
       if (mode === '--bootstrap') {
         const env = Object.fromEntries(read(directory, 'cubesigner-signer').env.map((item: any) => [item.name, item.value]))
         expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy')

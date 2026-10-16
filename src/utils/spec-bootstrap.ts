@@ -51,8 +51,21 @@ function mergeValues(base: unknown, override: unknown, project: boolean, explici
 /** Merge operator edits onto SDK defaults, then project deployment inputs. */
 export function mergeBootstrapValues(template: string | undefined, generated: string, existing?: string, explicitPaths: readonly string[] = []): string {
   let base = template ? yaml.load(template) : undefined
-  if (existing !== undefined) base = mergeValues(base, yaml.load(existing), false)
-  return yaml.dump(mergeValues(base, yaml.load(generated), true, explicitPaths), {lineWidth: -1, noRefs: true})
+  const operator = existing === undefined ? undefined : yaml.load(existing)
+  if (existing !== undefined) base = mergeValues(base, operator, false)
+  const merged = mergeValues(base, yaml.load(generated), true, explicitPaths)
+  // Generated endpoint defaults must not reopen ingress explicitly disabled by
+  // the operator. Keep projecting hosts and other deployment-owned inputs.
+  const preserveDisabledIngress = (saved: unknown, target: unknown, inIngress = false): void => {
+    if (!object(saved) || !object(target)) return
+    for (const [key, value] of Object.entries(saved)) {
+      if (inIngress && key === 'enabled' && value === false) target[key] = false
+      else preserveDisabledIngress(value, target[key], inIngress || key === 'ingress')
+    }
+  }
+
+  preserveDisabledIngress(operator, merged)
+  return yaml.dump(merged, {lineWidth: -1, noRefs: true})
 }
 
 /** Resolve a checkout once; callers persist this full commit in the frozen plan. */
