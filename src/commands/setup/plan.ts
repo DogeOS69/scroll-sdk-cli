@@ -5,7 +5,7 @@ import {JsonOutputContext} from '../../utils/json-output.js'
 import {createPreparationPlan} from '../../utils/preparation-plan.js'
 
 export default class SetupPlan extends Command {
-  static description = 'Plan a fresh spec deployment preparation; write a private immutable plan without cloud or chain mutations'
+  static description = 'Plan a fresh spec deployment preparation; save a private plan without cloud or chain mutations'
   static flags = {
     'env-file': Flags.string({description: 'Private NAME=value file (default: ./deployment.env when present); saved for stage commands, never executed as shell'}),
     json: Flags.boolean({default: false}),

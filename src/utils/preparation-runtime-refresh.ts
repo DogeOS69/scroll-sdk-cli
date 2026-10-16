@@ -8,7 +8,7 @@ import type {PreparationPlan, PreparationState} from './preparation-plan.js'
 
 import {localPath, privateWrite, writeJson} from './preparation-io.js'
 
-/** Called only while apply holds its lock and after managed fingerprints pass. */
+/** Called only while apply holds its lock and after artifact-change warnings. */
 export function refreshPreparationRuntime(root: string, plan: PreparationPlan, state: PreparationState, spec: DeploymentSpec, routingSpec?: string): void {
   const index = plan.steps.findIndex(step => step.id === 'charts')
   if (index < 0 || plan.steps.slice(0, index).some(step => state.steps[step.id] !== 'completed')) {
