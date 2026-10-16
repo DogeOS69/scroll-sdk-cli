@@ -264,7 +264,7 @@ describe('spec intent through configuration and values projection', () => {
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 
-  it('uses beta.7 for core services while preserving explicit image choices', () => {
+  it('uses beta.8 for core services while preserving explicit image choices', () => {
     const spec = fixture()
     for (const service of ['l1-interface', 'withdrawal-processor', 'tso-service', 'cubesigner-signer', 'fee-oracle', 'eth-da-submitter']) {
       expect(parseValues(spec, service).image.tag, service).to.equal('v0.3.0-beta.8')
