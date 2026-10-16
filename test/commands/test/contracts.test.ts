@@ -159,7 +159,7 @@ describe('test contracts (L2 and preinstalls)', () => {
         expect(dockerCall.rpc).to.equal(rpcUrl)
         expect(dockerCall.args).to.deep.equal([
           'run', '--rm', '--network', 'host', '--entrypoint', 'bash', '--env', 'SCROLLSDK_CHECK_RPC_URL',
-          'dogeos69/preinstalls:v0.2.1', '-c', 'exec bash /app/lib/verify.sh "$SCROLLSDK_CHECK_RPC_URL"',
+          'dogeos69/preinstalls:v0.2.2', '-c', 'exec bash /app/lib/verify.sh "$SCROLLSDK_CHECK_RPC_URL"',
         ])
         const coreStart = stdout.indexOf('=== scroll-contracts (16 contracts) ===')
         const preinstallsStart = stdout.indexOf('=== dogeos-preinstalls (28 contracts) ===')
@@ -206,9 +206,10 @@ describe('test contracts (L2 and preinstalls)', () => {
     expect(await expectFailure()).to.include('[failed] Multicall3').and.to.include('Contract not deployed')
   })
 
-  it('requires the six eip155 Safe contracts when their factory is deployed', async () => {
+  it('accepts absent eip155 Safe contracts when their factory is deployed', async () => {
     absent.delete(fixedAddress('SafeSingletonFactory'))
-    expect(await expectFailure()).to.include('38 passed, 6 failed, 0 optional absent.')
+    const {stdout} = await run()
+    expect(stdout).to.include('38 passed, 0 failed, 6 optional absent.')
   })
 
   it('accepts a complete Safe eip155 deployment', async () => {

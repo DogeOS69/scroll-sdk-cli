@@ -2485,7 +2485,7 @@ FLAGS
   -c, --config=<value>     [default: ./config.toml] Path to config.toml file
   -n, --contracts=<value>  [default: ./config-contracts.toml] Path to config-contracts.toml file
   -p, --pod                Run inside Kubernetes pod
-      --preinstalls-image  [default: dogeos69/preinstalls:v0.2.1] Image for runtime codehash verification
+      --preinstalls-image  [default: dogeos69/preinstalls:v0.2.2] Image for runtime codehash verification
 
 DESCRIPTION
   Test L2 contracts and preinstalls by checking deployment, initialization and ownership
@@ -2507,8 +2507,10 @@ configuration is not required.
 Also checks the 21 required canonical addresses from `dogeos-preinstalls`,
 including Multicall3, CreateX, Arachnid, Permit2, nine canonical Safe v1.3.0
 contracts, and EntryPoint/SenderCreator v0.6–v0.9. These fixed addresses do not
-need entries in `config-contracts.toml`. Safe Singleton Factory is optional;
-once deployed, its six Safe eip155 contracts become required.
+need entries in `config-contracts.toml`. Arachnid is a genesis prerequisite;
+the image does not deploy it. Safe Singleton Factory and the six legacy Safe
+EIP-155 entries remain optional even when the factory exists, matching the
+canonical-only deployment policy in preinstalls v0.2.2.
 
 Deployment checks require nonempty runtime code. Initialization checks inspect
 proxy initialization flags and the queue messenger, oracle whitelist, and fee
@@ -2518,7 +2520,7 @@ initialization/ownership cause exit status 1. Optional missing preinstalls are
 reported separately. These native CLI checks do not compare runtime codehashes.
 
 After both groups, a separate **preinstalls image verification** step runs
-`/app/lib/verify.sh` from `dogeos69/preinstalls:v0.2.1`, overriding the image's
+`/app/lib/verify.sh` from `dogeos69/preinstalls:v0.2.2`, overriding the image's
 default deployment entrypoint. It uses the same L2 RPC and verifies runtime
 codehashes using the image's chain-specific expectations. It runs even if the
 native CLI checks report missing or misconfigured contracts; either phase
@@ -2530,7 +2532,7 @@ Docker host must be able to reach the chosen RPC, including internal endpoints
 selected with `--pod`. No private key or deployment volume is passed to the
 container. RPC credentials in verifier output are redacted. Use
 `--preinstalls-image <repository:tag-or-digest>` to select the verifier image
-matching your deployment; the default matches the SDK preinstalls chart.
+matching your deployment; the default matches the SDK preinstalls production example.
 
 The default image has codehash expectations for chain IDs 1, 31337, 1122005 and
 6281971. An unsupported chain ID fails verification. Confirm that the RPC

@@ -1807,6 +1807,7 @@ describe('deployment-spec-generator', () => {
         const node = yaml.load(files[`l2-reth-${role}-production.yaml`]) as any;
         expect(node.role).to.equal(role);
         expect(node.image.repository).to.equal('dogeos69/rollup-node');
+        expect(node.image.tag).to.equal('v0.3.0-beta.2');
         expect(node.reth.l1Url).to.equal('http://l1-interface:8545');
         expect(node.reth.trustedPeers).to.equal('');
         expect(node.reth.extraArgs.slice(0, 2)).to.deep.equal(['--network.legacy-geth-header-transform', 'false']);

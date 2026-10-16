@@ -1,7 +1,9 @@
 /* eslint-disable perfectionist/sort-objects */
 import {DeployedContract} from './contracts.js'
 
-// Canonical addresses from dogeos-preinstalls 1ecfb45, lib/verify.sh.
+// Required canonical addresses and the Arachnid genesis prerequisite match
+// dogeos-preinstalls v0.2.2, lib/verify.sh. Legacy Safe EIP-155 contracts remain
+// optional even when their factory exists: v0.2.2 does not deploy that set.
 // These are shared contracts, not operator-owned instances: check code presence,
 // not owner() or proxy initialization. Full runtime codehash verification remains
 // available through dogeos-preinstalls `make verify`.
@@ -28,10 +30,10 @@ export const preinstalledContracts: DeployedContract[] = [
   {name: 'EntryPointV09', address: '0x433709009B8330FDa32311DF1C2AFA402eD8D009', owned: false},
   {name: 'SenderCreatorV09', address: '0x0A630a99Df908A81115A3022927Be82f9299987e', owned: false},
   {name: 'SafeSingletonFactory', address: '0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7', owned: false, optional: true},
-  {name: 'GnosisSafe', address: '0x69f4D1788e39c87893C980c06EdF4b7f686e2938', owned: false, optional: true, requiredWhen: 'SafeSingletonFactory'},
-  {name: 'GnosisSafeL2', address: '0xfb1bffC9d739B8D520DaF37dF666da4C687191EA', owned: false, optional: true, requiredWhen: 'SafeSingletonFactory'},
-  {name: 'MultiSend', address: '0x998739BFdAAdde7C933B942a68053933098f9EDa', owned: false, optional: true, requiredWhen: 'SafeSingletonFactory'},
-  {name: 'MultiSendCallOnly', address: '0xA1dabEF33b3B82c7814B6D82A79e50F4AC44102B', owned: false, optional: true, requiredWhen: 'SafeSingletonFactory'},
-  {name: 'SafeProxyFactory', address: '0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC', owned: false, optional: true, requiredWhen: 'SafeSingletonFactory'},
-  {name: 'SafeCompatFallback', address: '0x017062a1dE2FE6b99BE3d9d37841FeD19F573804', owned: false, optional: true, requiredWhen: 'SafeSingletonFactory'},
+  {name: 'GnosisSafe', address: '0x69f4D1788e39c87893C980c06EdF4b7f686e2938', owned: false, optional: true},
+  {name: 'GnosisSafeL2', address: '0xfb1bffC9d739B8D520DaF37dF666da4C687191EA', owned: false, optional: true},
+  {name: 'MultiSend', address: '0x998739BFdAAdde7C933B942a68053933098f9EDa', owned: false, optional: true},
+  {name: 'MultiSendCallOnly', address: '0xA1dabEF33b3B82c7814B6D82A79e50F4AC44102B', owned: false, optional: true},
+  {name: 'SafeProxyFactory', address: '0xC22834581EbC8527d974F8a1c97E1bEA4EF910BC', owned: false, optional: true},
+  {name: 'SafeCompatFallback', address: '0x017062a1dE2FE6b99BE3d9d37841FeD19F573804', owned: false, optional: true},
 ]

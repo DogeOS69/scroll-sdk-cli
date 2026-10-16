@@ -429,7 +429,7 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
   const serviceKey = {bootnode: 'l2Bootnode', rpc: 'l2Rpc', sequencer: 'l2Sequencer'} as const
   const image = resolveImage(spec, serviceKey[role], {
     repository: 'dogeos69/rollup-node',
-    tag: 'TODO_TAG_TO_REPLACE',
+    tag: 'v0.3.0-beta.2',
   })
   if (/(?:^|\/)l2geth$/.test(image.repository)) {
     throw new Error(`images.services.${serviceKey[role]} must reference a Reth image; l2geth is retired`)
