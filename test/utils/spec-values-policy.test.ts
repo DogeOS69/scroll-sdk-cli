@@ -96,6 +96,8 @@ describe('spec values runtime policy across entry points', () => {
 
   for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects existing ALB bindings through ${mode} without re-enabling ingress on regeneration`, async () => {
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture', region: 'us-east-1'}, provider: 'aws'}
+    // Exercise the stacked bootstrap fix together with existing ALB projection.
+    if (mode === '--bootstrap') spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
     const directory = path.join(root, 'deployment')
     await run(mode, directory, '--sdk-dir', sdk)
     const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
@@ -117,6 +119,12 @@ describe('spec values runtime policy across entry points', () => {
 
     for (let repeat = 0; repeat < 2; repeat++) {
       await run(mode, directory, '--sdk-dir', sdk, '--force')
+      if (mode === '--bootstrap') {
+        const env = Object.fromEntries(read(directory, 'cubesigner-signer').env.map((item: any) => [item.name, item.value]))
+        expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy')
+        expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER).to.equal('')
+      }
+
       expect(fs.existsSync(path.join(directory, 'values/alb-bindings-production.yaml'))).to.equal(false)
       for (const name of Object.keys(spec.infrastructure.aws!.alb.bindings)) {
         const entry = ALB_SERVICES[name]
