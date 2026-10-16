@@ -4,6 +4,7 @@ export const L2_GENESIS_GAS_LIMIT = 30_000_000
 export const L2_BLOCK_TIME_MS = 2000
 export const L2_PAYLOAD_BUILDING_DURATION_MS = 1400
 export const L2_BASE_FEE_OVERHEAD_WEI = '420000000000'
+export const CONTRACTS_DEPLOYMENT_BATCH_SIZE = '10'
 export const L2_TX_FEE_VAULT = '0x5300000000000000000000000000000000000005'
 
 /** Canonical genesis predeploys used by the contracts generator and Reth. */

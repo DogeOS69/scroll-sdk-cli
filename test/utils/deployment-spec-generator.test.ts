@@ -1826,6 +1826,7 @@ describe('deployment-spec-generator', () => {
       const contractsValues = yaml.load(files['contracts-production.yaml']) as any;
       expect(contractsValues.image).to.include({repository: DOCKER_REPOSITORY, tag: `deploy-${CONTRACTS_DOCKER_DEFAULT_TAG}`});
       expect(contractsValues.configMaps['contracts-deployment-env'].data).to.deep.equal({
+        BATCH_SIZE: '10',
         CHAIN_ID_L1: String((toml.parse(generateConfigToml(spec)) as any).general.CHAIN_ID_L1), CHAIN_ID_L2: String(spec.network.l2ChainId),
         ETH_GAS_PRICE: '840000000000',
         L1_RPC_ENDPOINT: 'http://l1-interface:8545', L2_RPC_ENDPOINT: 'http://l2-rpc:8545',

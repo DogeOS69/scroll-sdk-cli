@@ -17,6 +17,7 @@ import {
   L1_INTERFACE_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
+import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
@@ -534,6 +535,23 @@ export function scrubFeeOracleLegacyValues(productionYaml: any): PrepChartChange
 
       productionYaml.env = nextEnv
     }
+  }
+
+  return changes
+}
+
+/** Pass deploy.sh controls through its environment, including existing SDK values. */
+export function applyContractsDeploymentEnv(productionYaml: any, overhead: unknown): PrepChartChange[] {
+  const changes: PrepChartChange[] = []
+  const env = productionYaml.configMaps?.['contracts-deployment-env']?.data
+  const price = contractsDeploymentGasPrice(overhead)
+  if (!env) return changes
+
+  for (const [key, value] of Object.entries({BATCH_SIZE: CONTRACTS_DEPLOYMENT_BATCH_SIZE, ETH_GAS_PRICE: price})) {
+    if (env[key] === value) continue
+    changes.push({key: `contracts ${key}`, newValue: value ?? 'automatic', oldValue: String(env[key] ?? 'automatic')})
+    if (value === undefined) delete env[key]
+    else env[key] = value
   }
 
   return changes
@@ -2229,14 +2247,9 @@ export default class SetupPrepCharts extends Command {
       }
 
       if (chartName === 'contracts') {
-        const env = productionYaml.configMaps?.['contracts-deployment-env']?.data
-        const price = contractsDeploymentGasPrice(this.getConfigValue('contracts.L2_BASE_FEE_OVERHEAD'))
-        if (env && env.ETH_GAS_PRICE !== price) {
-          changes.push({key: 'contracts ETH_GAS_PRICE', newValue: price ?? 'automatic', oldValue: String(env.ETH_GAS_PRICE ?? 'automatic')})
-          if (price) env.ETH_GAS_PRICE = price
-          else delete env.ETH_GAS_PRICE
-          updated = true
-        }
+        const deploymentChanges = applyContractsDeploymentEnv(productionYaml, this.getConfigValue('contracts.L2_BASE_FEE_OVERHEAD'))
+        changes.push(...deploymentChanges)
+        if (deploymentChanges.length > 0) updated = true
       }
 
       // In the normal deployment flow every concrete Reth node uses the L2
