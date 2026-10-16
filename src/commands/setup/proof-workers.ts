@@ -2,6 +2,8 @@ import {Args, Command, Flags} from '@oclif/core'
 import path from 'node:path'
 
 import {JsonOutputContext} from '../../utils/json-output.js'
+import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
+import {readProverWorkerMasterFromSecretsManager} from '../../utils/proof-worker-token.js'
 import {operateWorkerCapacity, retireCapacitySession} from '../../utils/proof-workers-lifecycle.js'
 import {createWorkerCapacityPlan} from '../../utils/proof-workers-plan.js'
 
@@ -9,10 +11,14 @@ export default class ProofWorkers extends Command {
   static args = {action: Args.string({default: 'status', options: ['plan', 'apply', 'status', 'destroy']})}
   static description = 'Plan, submit, inspect or destroy bounded AWS or Vast.ai GPU workers through the deployed dstack controller'
   static flags = {
+    'aws-profile': Flags.string({description: 'For apply only: AWS CLI profile used to read the worker-credential master'}),
+    'aws-region': Flags.string({description: 'For apply only: region of the proof coordinator secret; inferred from .data/proof-aws.json when omitted'}),
     'deployment-dir': Flags.string({default: '.', description: 'Generated deployment/runtime directory'}),
     json: Flags.boolean({default: false}),
     'kube-context': Flags.string({description: 'For plan only: override the saved Secret-upload context or current kubectl context'}),
+    'master-env': Flags.string({default: 'DOGEOS_PROVER_WORKER_MASTER', description: 'For apply only: environment variable holding the worker-credential master; when unset, read it from Secrets Manager'}),
     'new-session': Flags.string({description: 'For plan only: a new session name after the old session is confirmed destroyed'}),
+    'secret-name': Flags.string({description: 'For apply only: Secrets Manager secret containing prover-worker-master; inferred from .data/proof-aws.json when omitted'}),
     spec: Flags.string({description: 'For plan only: read updated proofWorkers intent; retain saved deployment/cluster bindings'}),
   }
 
@@ -27,10 +33,22 @@ export default class ProofWorkers extends Command {
         const plan = createWorkerCapacityPlan(root, flags['new-session'] ?? 'initial', flags.spec, flags['kube-context'])
         out.info(`Target: Kubernetes context ${plan.target.context}, namespace ${plan.target.namespace}, dstack project ${plan.project}`)
         out.info(`${plan.config.count} x ${plan.config.gpu}; ${plan.config.maxDurationHours}h running; USD ${plan.config.maxPricePerHourUsd}/instance-hour ceiling; USD ${plan.rentalEnvelopeUsd} rental envelope including startup, drain, idle and polling.`)
-        out.info('No resources allocated. Envelope excludes storage, traffic and tax; provider/API outages can delay deletion. After coordinator and controller are ready, run scrollsdk setup proof-worker, then scrollsdk setup proof-workers apply.')
+        out.info('No resources allocated. Envelope excludes storage, traffic and tax; provider/API outages can delay deletion. After coordinator and controller are ready, run scrollsdk setup proof-workers apply; it mints one credential per worker from the coordinator master.')
         out.success({config: plan.config, planId: plan.id, rentalEnvelopeUsd: plan.rentalEnvelopeUsd, session: plan.session, target: plan.target, workers: plan.workers.map(w => w.name)})
       } else {
-        const result = operateWorkerCapacity(root, args.action as 'apply' | 'destroy' | 'status')
+        if (args.action !== 'apply' && (flags['aws-profile'] || flags['aws-region'] || flags['secret-name'])) throw new Error('AWS secret options are only accepted by apply')
+        // apply mints one credential per planned worker id. The master is
+        // read only here and never sent to dstack or written to disk.
+        const readMaster = () => {
+          const fromEnvironment = process.env[flags['master-env']]?.trim()
+          if (fromEnvironment) return fromEnvironment
+          const proofAws = readOptionalProofAwsConfig(root)?.config
+          const secretName = flags['secret-name'] || proofAws?.secret.name
+          if (!secretName) throw new Error('Cannot find the worker-credential master; run setup proof-aws-init, pass --secret-name, or set the master environment variable')
+          return readProverWorkerMasterFromSecretsManager({awsProfile: flags['aws-profile'], awsRegion: flags['aws-region'] || proofAws?.secret.region, secretName})
+        }
+
+        const result = operateWorkerCapacity(root, args.action as 'apply' | 'destroy' | 'status', undefined, undefined, readMaster)
         if (!flags.json) this.log(JSON.stringify(result, null, 2))
         out.success(result)
       }

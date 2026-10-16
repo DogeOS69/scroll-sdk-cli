@@ -103,7 +103,7 @@ export function buildCapacityManagerValues(spec: DeploymentSpec, worker: ProverW
   if (publication.verification.anonymousHttpReadback !== 'passed' || publication.verification.authenticatedS3Readback !== 'passed') throw new Error('Publish and verify Worker artifacts before preparing capacity-manager')
   const families = Object.fromEntries([['scroll_chunk', 60], ['scroll_batch', 300], ['l2_range_aggregation', 1800], ['bridge_state', 1800]].map(([name, seconds]) => [name, {max_workers: config.maxWorkers, min_vram_gib: 16, min_workers: 0, runtime_seconds: seconds}]))
   const policy = {families, global: {liveness_floor: config.minWorkers, max_workers: config.maxWorkers, scale_down_ttl_seconds: config.scaleDownTtlSeconds, steady_state_floor: 1, target_drain_seconds: config.targetDrainSeconds}, pool: {gpu_class: config.gpu, hourly_cost_usd_per_worker: config.maxPricePerHourUsd, max_hourly_cost_usd: config.maxHourlyCostUsd, max_workers: config.maxWorkers, provider: config.provider, provider_diversity_min: 1, vram_gib: config.gpu === 'L4' ? 22 : config.gpu === 'L40S' ? 44 : 24}}
-  return {image: config.image, manager: {dstack: {fleets: config.fleets, instanceTypes: config.instanceTypes, maxPricePerHourUsd: config.maxPricePerHourUsd, project: config.project, regions: config.regions}, policy: toml.stringify(policy as any), proofWorkBaseUrl: spec.proofTopology!.deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300', workerCommand: workerCommand(worker, publication, '{worker_id}', architectures[config.gpu]), workerIdPrefix: config.workerIdPrefix, workerImage: `${worker.image.repository}@${worker.image.digest}`, workerTokenSecret: `cm_worker_${digest(config.workerIdPrefix).slice(0, 16)}`}, prepared: true}
+  return {image: config.image, manager: {dstack: {fleets: config.fleets, instanceTypes: config.instanceTypes, maxPricePerHourUsd: config.maxPricePerHourUsd, project: config.project, regions: config.regions}, policy: toml.stringify(policy as any), proofWorkBaseUrl: spec.proofTopology!.deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300', workerCommand: workerCommand(worker, publication, '{worker_id}', architectures[config.gpu]), workerIdPrefix: config.workerIdPrefix, workerImage: `${worker.image.repository}@${worker.image.digest}`}, prepared: true}
 }
 
 export function prepareCapacityManager(root: string, readContract = validateProofDeploymentContract): {namespace: string; project: string; valuesFile: string} {
@@ -127,6 +127,13 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   projected.dstackAuth = controller.auth
   if (!controller.auth?.existingSecret || !controller.auth?.key) throw new Error('Dstack auth Secret reference is required')
   projected.wpAuth = {existingSecret: coordinator.persistence.secrets.name, key: 'proof-work-token'}
+  // dogeos-core #1598: the manager holds the coordinator's worker-credential
+  // master and mints one credential per run. It is read from the coordinator's
+  // own Secret, never from a worker Secret, and no dstack project secret is used.
+  projected.workerCredentialMaster = {existingSecret: coordinator.persistence.secrets.name, key: 'prover-worker-token'}
+  // Clear a shared-token binding kept from older generated values; the chart
+  // refuses both modes at once.
+  projected.manager.workerTokenSecret = ''
   const content = mergeBootstrapValues(fs.readFileSync(file, 'utf8'), yaml.dump(projected))
   const values = yaml.load(content) as any
   // Fixed, separately named manager: deployment/selector and Secret destination are a shared contract.
@@ -149,7 +156,7 @@ export function prepareCapacityManager(root: string, readContract = validateProo
     fs.writeFileSync(localPath(root, relative), content)
     return {path: relative, sha256: digest(content)}
   })
-  writeJson(previousFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace}, fingerprint, fleets: {action: fleetIntent.action, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerSecret: spec.proofTopology?.deployment.workerSecretName ?? coordinator.persistence.secrets.name, workerTokenSecret: projected.manager.workerTokenSecret})
+  writeJson(previousFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace}, fingerprint, fleets: {action: fleetIntent.action, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerCredentialMaster: projected.workerCredentialMaster})
   return {namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, valuesFile: file}
 }
 

@@ -47,6 +47,12 @@ const RETIRED_TOPOLOGY_ANNOTATIONS = [
 ] as const
 const WORKER_READINESS_VOLUME = 'prover-worker-readiness'
 const WORKER_TOKEN_VOLUME = 'prover-worker-token'
+/**
+ * Secret key holding this Worker's minted credential (dogeos-core #1591). The
+ * coordinator's `prover-worker-token` key is the master and must never be
+ * mounted here; a Worker handed the master crash-loops at startup anyway.
+ */
+export const WORKER_CREDENTIAL_SECRET_KEY = 'prover-worker-credential'
 
 export interface ReconcileCompiledProofTopologyOptions {
   bridge?: ProofTopologyBridgeContext
@@ -411,16 +417,19 @@ function configureWorkerValues(
   const deployment = input.topology.deployment || {}
   const tokenPath = workerArgument(worker, '--worker-token-file')
   const tokenName = path.posix.basename(tokenPath)
-  const tokenKey = input.proofCoordinator?.secrets?.proverWorkerTokenProperty
-    || 'prover-worker-token'
+  // setup proof-worker provisions only this worker credential in a dedicated Secret.
+  const workerSecretName = deployment.workerSecretName || 'prover-worker-credentials'
+  if (workerSecretName === (input.proofCoordinator?.secrets?.name || 'proof-coordinator-secrets')) {
+    throw new Error('workerSecretName must differ from the coordinator master Secret')
+  }
+
+  const tokenKey = WORKER_CREDENTIAL_SECRET_KEY
   values.persistence ||= {}
   values.persistence[WORKER_TOKEN_VOLUME] = {
     enabled: true,
     items: [{key: tokenKey, path: tokenName}],
     mountPath: tokenPath,
-    name: deployment.workerSecretName
-      || input.proofCoordinator?.secrets?.name
-      || 'proof-coordinator-secrets',
+    name: workerSecretName,
     readOnly: true,
     subPath: tokenName,
     type: 'secret',

@@ -16,16 +16,15 @@ describe('setup capacity-manager credentials', () => {
       const fleetYaml = 'type: fleet\nname: test-fleet\nnodes: {min: 0, target: 0, max: 2}\n'
       fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/fleet.yaml'), fleetYaml)
       const log = path.join(root, 'calls.jsonl')
-      fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), JSON.stringify({dstack: {auth: {existingSecret: 'dstack-auth', key: 'admin-token'}, deployment: 'dstack-controller', namespace: 'chain'}, fleets: {action: 'create', files: [{path: '.scrollsdk/capacity-manager/fleet.yaml', sha256: createHash('sha256').update(fleetYaml).digest('hex')}]}, kubeContext: 'saved-context', namespace: 'chain', project: 'test-project', proofSecret: 'proof-secrets', schema: 'scrollsdk/capacity-manager/v1', valuesFile: 'values/capacity-manager-production.yaml', workerSecret: 'dedicated-worker-secret', workerTokenSecret: 'cm_worker_test'}))
-      fs.writeFileSync(path.join(root, 'values/capacity-manager-production.yaml'), 'dstackAuth:\n  existingSecret: dstack-auth\n  key: admin-token\nmanager:\n  workerTokenSecret: cm_worker_test\n  dstack:\n    project: test-project\n    fleets: [test-fleet]\n')
+      fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), JSON.stringify({dstack: {auth: {existingSecret: 'dstack-auth', key: 'admin-token'}, deployment: 'dstack-controller', namespace: 'chain'}, fleets: {action: 'create', files: [{path: '.scrollsdk/capacity-manager/fleet.yaml', sha256: createHash('sha256').update(fleetYaml).digest('hex')}]}, kubeContext: 'saved-context', namespace: 'chain', project: 'test-project', proofSecret: 'proof-secrets', schema: 'scrollsdk/capacity-manager/v1', valuesFile: 'values/capacity-manager-production.yaml', workerCredentialMaster: {existingSecret: 'proof-secrets', key: 'prover-worker-token'}}))
+      fs.writeFileSync(path.join(root, 'values/capacity-manager-production.yaml'), 'dstackAuth:\n  existingSecret: dstack-auth\n  key: admin-token\nworkerCredentialMaster:\n  existingSecret: proof-secrets\n  key: prover-worker-token\nmanager:\n  dstack:\n    project: test-project\n    fleets: [test-fleet]\n')
       fs.writeFileSync(path.join(root, 'kubectl'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 const input = args.includes('exec') || args.includes('apply') ? fs.readFileSync(0, 'utf8') : '';
 fs.appendFileSync(process.env.CM_TEST_LOG, JSON.stringify({args, input}) + '\\n');
 if (process.env.CM_FAIL_WAIT && args.includes('rollout')) { console.error('NONFUNCTIONAL_PRIVATE_RESPONSE'); process.exit(1); }
-if(args.includes('get') && args.includes('dedicated-worker-secret')) console.log(JSON.stringify({data:{'prover-worker-token':Buffer.from('NONFUNCTIONAL_WORKER_TOKEN').toString('base64')}}));
-else if(args.includes('get') && args.includes('dstack-auth')) console.log(JSON.stringify({data:{'admin-token':Buffer.from('NONFUNCTIONAL_DSTACK_TOKEN').toString('base64')}}));
+if(args.includes('get') && args.includes('dstack-auth')) console.log(JSON.stringify({data:{'admin-token':Buffer.from('NONFUNCTIONAL_DSTACK_TOKEN').toString('base64')}}));
 else if(args.includes('get')) process.stdout.write('');
 else console.log('{"updated":true}');
 `, {mode: 0o755})
@@ -35,7 +34,10 @@ else console.log('{"updated":true}');
       const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line))
       expect(calls.every(call => call.args.includes('test-context'))).to.equal(true)
       const exec = calls.find(call => call.args.includes('exec'))
-      expect(JSON.parse(exec.input)).to.include({secretName: 'cm_worker_test', token: 'NONFUNCTIONAL_WORKER_TOKEN'})
+      // The manager mints per-run credentials from its mounted master; no
+      // worker secret is read back or sent to dstack.
+      expect(JSON.parse(exec.input)).not.to.have.any.keys('secretName', 'token')
+      expect(calls.some(call => call.args.includes('secret'))).to.equal(false)
       expect(JSON.parse(exec.input)).to.include({fleetAction: 'create'})
       expect(JSON.parse(exec.input).fleets[0]).to.deep.include({name: 'test-fleet', nodes: {max: 2, min: 0, target: 0}})
       expect(exec.args.join(' ')).not.to.include('NONFUNCTIONAL_')

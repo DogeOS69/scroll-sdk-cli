@@ -6,6 +6,8 @@ import * as path from 'node:path'
 
 import type {ProverWorkerContractV1} from './proof-topology-compiler.js'
 
+import {workerCredentialName} from './prover-worker-credential.js'
+
 export const COMPILED_PROVER_WORKER_BUNDLE_MANIFEST = 'bundle-manifest.json'
 export const COMPILED_PROVER_WORKER_CONTRACT = 'prover-worker-v1.json'
 export const COMPILED_PROVER_WORKER_LAUNCHER = 'prover-worker-compose'
@@ -147,6 +149,39 @@ function copyTree(source: string, destination: string): CompiledProverWorkerBund
 function argumentValue(worker: ProverWorkerContractV1, flag: string): string | undefined {
   const index = worker.argv.indexOf(flag)
   return index >= 0 ? worker.argv[index + 1] : undefined
+}
+
+/**
+ * The token file holds a per-worker credential minted for this Worker's id
+ * (dogeos-core #1591), never the coordinator master. A master has no
+ * `<name>.` prefix, so this also rejects one copied here by mistake.
+ */
+function assertWorkerCredential(credential: string, worker: ProverWorkerContractV1, source: string): void {
+  let name: string
+  try {
+    name = workerCredentialName(credential.trim())
+  } catch (error) {
+    throw new Error(`${source}: ${error instanceof Error ? error.message : 'invalid worker credential'}`)
+  }
+
+  const workerId = argumentValue(worker, '--worker-id')
+  if (workerId !== undefined && workerId !== name) {
+    throw new Error(`${source}: worker credential was minted for ${name}, but the Worker id is ${workerId}`)
+  }
+}
+
+function readBundleWorker(bundleDir: string): ProverWorkerContractV1 {
+  return JSON.parse(
+    fs.readFileSync(path.join(path.resolve(bundleDir), COMPILED_PROVER_WORKER_CONTRACT), 'utf8'),
+  ) as ProverWorkerContractV1
+}
+
+/** The Worker id a credential must be minted for; read from the bundle's verified contract. */
+export function compiledBundleWorkerId(bundleDir: string): string {
+  const worker = readBundleWorker(bundleDir)
+  const workerId = argumentValue(worker, '--worker-id')
+  if (!workerId) throw new Error('compiled Worker argv has no --worker-id; cannot mint its credential')
+  return workerId
 }
 
 function validateWorkerContract(worker: ProverWorkerContractV1): void {
@@ -472,6 +507,7 @@ export function writeCompiledProverWorkerBundle(
   fs.rmSync(tokenPath, {force: true})
   if (options.workerToken) {
     if (!options.workerToken.trim()) throw new Error('worker token must be non-empty')
+    assertWorkerCredential(options.workerToken, options.worker, 'worker token')
     fs.writeFileSync(tokenPath, `${options.workerToken.trim()}\n`, {mode: 0o600})
   }
 
@@ -610,9 +646,12 @@ export function verifyCompiledProverWorkerBundle(options: {
       throw new Error(`${tokenPath}: secret file mode must be 0600, got ${mode.toString(8).padStart(4, '0')}`)
     }
 
-    if (!fs.readFileSync(tokenPath, 'utf8').trim()) {
+    const credential = fs.readFileSync(tokenPath, 'utf8').trim()
+    if (!credential) {
       throw new Error(`${tokenPath}: worker token is empty`)
     }
+
+    assertWorkerCredential(credential, worker, tokenPath)
   } else {
     throw new Error(`${manifestFile}: invalid credentialState`)
   }
@@ -643,6 +682,8 @@ export function hydrateCompiledProverWorkerBundle(options: {
     bundleDir,
     expectedBundleId: options.expectedBundleId,
   })
+  // Reject a master or another Worker's credential before anything is written.
+  assertWorkerCredential(options.workerToken, readBundleWorker(bundleDir), 'worker token')
   const manifest = readManifest(manifestFile)
   const tokenPath = path.join(bundleDir, COMPILED_PROVER_WORKER_TOKEN_FILE)
   const originalManifest = fs.readFileSync(manifestFile)

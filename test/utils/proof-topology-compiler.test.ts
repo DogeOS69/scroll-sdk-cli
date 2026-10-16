@@ -8,6 +8,7 @@ import * as path from 'node:path'
 import type {ProofTopologySpec} from '../../src/types/proof-topology.js'
 
 import {
+  compileProofTopology,
   computeProofTopologyBundleRevision,
   projectMockGenerationVerifierSelection,
   projectProofCoordinatorEthereumDa,
@@ -53,6 +54,34 @@ timeout_ms = 10000
   })
 
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
+
+  it('passes distinct coordinator master and worker credential paths to the compiler', () => {
+    fs.mkdirSync(path.join(root, 'proof-coordinator'))
+    fs.mkdirSync(path.join(root, 'withdrawal-processor'))
+    fs.writeFileSync(path.join(root, 'proof-coordinator/ProofCoordinator.toml'), '')
+    fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), '')
+    fs.writeFileSync(path.join(root, 'identity.json'), '{}')
+    const capture = path.join(root, 'captured-context.json')
+    const compiler = path.join(root, 'compiler.cjs')
+    fs.writeFileSync(compiler, `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.copyFileSync(process.argv[process.argv.indexOf('--deployment-context') + 1], ${JSON.stringify(capture)});
+process.stderr.write('captured compiler input'); process.exit(17);
+`, {mode: 0o700})
+    const topology = {
+      compiler: {identityFilePath: 'identity.json'}, deployment: {}, enforcement: 'observe',
+      generation: 'mock', mode: 'disabled', observeRealProofDeadlineMs: 1_800_000,
+    } as ProofTopologySpec
+    const compile = () => compileProofTopology({compilerBinary: compiler, deploymentDir: root, deploymentName: 'test', network: 'testnet', proofTopology: topology})
+    expect(compile).to.throw('captured compiler input')
+    const context = JSON.parse(fs.readFileSync(capture, 'utf8'))
+    expect(context.worker_token_file).to.equal('/app/secrets/prover-worker-token')
+    expect(context.prover_worker.worker_credential_file).to.equal('/app/secrets/prover-worker-credential')
+    fs.unlinkSync(capture)
+    topology.deployment.workerTokenFile = '/app/secrets/../secrets/prover-worker-credential'
+    expect(compile).to.throw('must differ')
+    expect(fs.existsSync(capture)).to.equal(false)
+  })
 
   it('requires an explicit positive deadline and emits the native snake-case key', () => {
     const topology = {compiler: {}, enforcement: 'observe', generation: 'mock', mode: 'disabled'} as ProofTopologySpec

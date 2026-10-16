@@ -478,3 +478,79 @@ partner Signers or prove their network reachability.
   artifact store or alter an already-built WF transaction.
 - Feynman/Tsuki activation is determined by canonical protocol context, not by
   these deployment switches.
+
+## 8. Worker credentials
+
+Since dogeos-core #1591 the Proof Coordinator holds one coordinator-only
+**master** secret (`prover_api.worker_auth_token_file`). Every Worker
+authenticates with its own credential,
+`<name>.<hex HMAC-SHA256(master, "dogeos-prover-worker-v1" || 0x00 || name)>`,
+and its `--worker-id` must equal `name`. The old shared raw token is rejected.
+See `crates/proof_coordinator/README.md` and the "Worker credentials" section of
+`docs/engineering/aws-gpu-dstack.md` in dogeos-core (#1598) for the core rules.
+
+**Never copy the master to a Worker.** Anyone holding it can mint a credential
+for any worker name. A Worker handed the master fails at startup, because the
+master has no `<name>.` prefix.
+
+Where each value lives:
+
+| Value | Stored in | Read by |
+| --- | --- | --- |
+| Master | Secrets Manager property `prover-worker-master`, synced to the coordinator Secret key `prover-worker-token` | Proof Coordinator, capacity manager |
+| Worker credential | Per Worker, minted for that Worker's id | That Worker only |
+
+How each Worker gets its credential:
+
+- **External Docker Compose Worker:** `scrollsdk setup proof-worker` reads the
+  master, mints a credential for the bundle's `--worker-id` and writes only that
+  credential to `prover-worker.token`. The bundle check rejects a token minted
+  for another name, and rejects the master itself. To mint elsewhere, pass the
+  credential in `DOGEOS_PROVER_WORKER_TOKEN` instead.
+- **SDK GPU launcher (`setup proof-workers`):** every planned Worker has its own
+  id and its own dstack secret. `apply` reads the master, mints one credential
+  per Worker and sends only those credentials to dstack. Plans made before this
+  change must be destroyed and planned again.
+- **Capacity manager:** the chart mounts the master from the coordinator Secret
+  as `--worker-credential-master-file`. The manager mints a credential for each
+  run itself, and no dstack project secret is used.
+- **Local Kubernetes Worker:** the Worker mounts only the
+  `prover-worker-credential` key of its dedicated Secret (`workerSecretName`,
+  default: `prover-worker-credentials`), never the coordinator Secret. After
+  `setup prep-charts`, run `scrollsdk setup proof-worker --kube-context <context>
+  --namespace <namespace>` to mint and install the credential for the compiled
+  worker id. An already minted credential can instead come from
+  `DOGEOS_PROVER_WORKER_TOKEN`. The command checks generated-file integrity
+  before reading the master, sends only the worker credential to Kubernetes,
+  and never restarts the Pod automatically. Start or restart the worker after
+  provisioning; its `subPath` token mount cannot refresh in place.
+
+The beta.8 compiler receives separate runtime paths: `workerTokenFile` names
+only the coordinator master (default `/app/secrets/prover-worker-token`), while
+`prover_worker.worker_credential_file` is `/app/secrets/prover-worker-credential`.
+The two paths must differ. Compose and Kubernetes consume the compiler's worker
+path; the dstack launcher maps it to its own credential file.
+
+**Upgrading from a shared token.** `setup proof-aws-init` adds a fresh
+`prover-worker-master` to an existing secret. It does not reuse the old
+`prover-worker-token`, which every existing Worker knows. The old property stays
+in place until you pass `--rotate-tokens`, so a running coordinator keeps
+syncing until `setup prep-charts` repoints it.
+
+**Rotation**, from a shared token or for a later rotation:
+
+1. Drain the old fleet. Set capacity to zero and wait until every run has
+   stopped. Run `setup proof-workers destroy` for SDK sessions, and stop any
+   external Workers.
+2. For the first migration, run `scrollsdk setup proof-aws-init` to add a fresh
+   master while preserving `proof-work-token`. For full rotation, use
+   `--rotate-tokens`: it replaces both `prover-worker-master` and
+   `proof-work-token`.
+3. Re-render with `setup prep-charts` and apply the updated Secret mappings.
+   Wait for all affected ExternalSecrets and Kubernetes Secrets to synchronize.
+   After full rotation, restart **WP, the Proof Coordinator, and the capacity
+   manager**. WP's token uses a `subPath` mount, so Secret synchronization alone
+   does not refresh it. For first-time migration with the proof-work token
+   unchanged, restart the coordinator and manager to load the master.
+4. Mint new Worker credentials (`setup proof-worker`, or `setup proof-workers
+   apply` for a new session) and start the Workers again.

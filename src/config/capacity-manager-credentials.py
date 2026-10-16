@@ -1,4 +1,7 @@
-"""Prepare reviewed empty fleets and a worker secret using dstack 0.21.5.
+"""Prepare reviewed empty fleets using dstack 0.21.5.
+
+Workers get per-run credentials minted by the capacity manager (dogeos-core
+#1598); this adapter no longer stores any worker secret in the project.
 
 Runs inside the controller. API/provider exceptions may contain credentials and
 are deliberately omitted. Never starts runs, changes existing fleets, or forces
@@ -70,7 +73,6 @@ def prepare(client, payload):
         if canonical(fleet.spec) != canonical(spec):
             raise PreparationError('Created fleet readback differs; inspect controller policies before continuing')
         created += 1
-    client.secrets.create_or_update(project, payload['secretName'], payload['token'])
     return {'createdEmptyFleets': created, 'updated': True}
 
 
@@ -84,7 +86,7 @@ def main():
         print(str(error), file=sys.stderr)
         sys.exit(1)
     except Exception:
-        print('Capacity-manager fleet/secret preparation failed; check project/backend availability (private details omitted)', file=sys.stderr)
+        print('Capacity-manager fleet preparation failed; check project/backend availability (private details omitted)', file=sys.stderr)
         sys.exit(1)
 
 

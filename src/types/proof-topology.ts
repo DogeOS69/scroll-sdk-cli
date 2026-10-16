@@ -117,7 +117,9 @@ export interface ProofTopologyDeploymentConfig {
     requests?: Record<string, number | string>
   }
   workerRuntimeClassName?: string
+  /** Dedicated Kubernetes worker credential Secret; must differ from the coordinator Secret. */
   workerSecretName?: string
+  /** Coordinator-only master file; workers use /app/secrets/prover-worker-credential. */
   workerTokenFile?: string
   workerTolerations?: Array<{
     effect?: 'NoExecute' | 'NoSchedule' | 'PreferNoSchedule'

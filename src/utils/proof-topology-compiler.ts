@@ -671,6 +671,12 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
     const proofWorkPublicUrl = deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300'
     const proverPublicUrl = deployment.proverPublicUrl ?? (options.proofTopology.mode === 'disabled' ? 'http://127.0.0.1:7788' : undefined)
     if (!proverPublicUrl) throw new Error('active proof topology requires a Worker-reachable HTTPS Proof Coordinator URL')
+    const workerCredentialFile = '/app/secrets/prover-worker-credential'
+    const coordinatorMasterFile = deployment.workerTokenFile ?? '/app/secrets/prover-worker-token'
+    if (path.posix.normalize(coordinatorMasterFile) === workerCredentialFile) {
+      throw new Error('coordinator workerTokenFile must differ from the worker credential path')
+    }
+
     const context = {
       artifact_key_prefix: deployment.artifactKeyPrefix,
       // Kubernetes proof services share one chart-owned PVC layout. The root
@@ -703,6 +709,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
       proof_work_token_file: deployment.proofWorkTokenFile ?? '/app/secrets/proof-work-token',
       protocol_context_path: deployment.protocolContextPath ?? '/app/protocol_context.json',
       prover_worker: {
+        worker_credential_file: workerCredentialFile,
         ...(deployment.mockWorkerImage ? {mock_image: deployment.mockWorkerImage} : {}),
         ...(deployment.productionWorkerImage ? {production_image: deployment.productionWorkerImage} : {}),
         readiness_evidence_path: deployment.readinessEvidencePath ?? '/run/dogeos/prover-worker-ready-v1.json',
@@ -721,7 +728,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
         proof_work_bind: proofWorkBind,
         proof_work_public_url: proofWorkPublicUrl,
       },
-      worker_token_file: deployment.workerTokenFile ?? '/app/secrets/prover-worker-token',
+      worker_token_file: coordinatorMasterFile,
     }
     const sourcePath = path.join(inputDir, 'proof-topology.toml')
     const contextPath = path.join(inputDir, 'deployment-context.json')

@@ -1,5 +1,5 @@
 /** Fresh-deployment defaults shared by spec configuration and values generation. */
-export const CORE_DOCKER_DEFAULT_TAG = 'v0.3.0-beta.7'
+export const CORE_DOCKER_DEFAULT_TAG = 'v0.3.0-beta.8'
 export const L2_GENESIS_GAS_LIMIT = 30_000_000
 export const L2_BLOCK_TIME_MS = 2000
 export const L2_PAYLOAD_BUILDING_DURATION_MS = 1400

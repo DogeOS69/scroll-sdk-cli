@@ -1319,7 +1319,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
         secretKey: 'proof-work-token'
       },
       {
-        property: proofCoordinator.secrets?.proverWorkerTokenProperty || 'prover-worker-token',
+        property: proofCoordinator.secrets?.proverWorkerTokenProperty || 'prover-worker-master',
         remoteKey: remoteSecretKey,
         secretKey: 'prover-worker-token'
       },

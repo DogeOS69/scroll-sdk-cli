@@ -18,7 +18,7 @@ spec.loader.exec_module(adapter)
 
 
 def payload():
-    return {'project': 'provers', 'fleetAction': 'create', 'secretName': 'worker', 'token': 'NONFUNCTIONAL_TEST_TOKEN', 'fleets': [{
+    return {'project': 'provers', 'fleetAction': 'create', 'fleets': [{
         'type': 'fleet', 'name': 'workers', 'nodes': {'min': 0, 'target': 0, 'max': 2},
         'resources': {'cpu': '16..', 'memory': '64GB..', 'disk': {'size': '200GB..'},
                       'gpu': {'name': ['RTX4090'], 'count': 1, 'vendor': 'nvidia'}},
@@ -62,7 +62,9 @@ class CapacityFleets(unittest.TestCase):
         self.payload['fleetAction'] = 'reuse'
         self.assertEqual(adapter.prepare(self.client, self.payload)['createdEmptyFleets'], 0)
         self.assertEqual(len(self.client.applied), 1)
-        self.assertEqual(self.client.secret.call_count, 3)
+        # The manager mints per-run credentials from its master (core #1598);
+        # preparation never writes a worker secret into the project.
+        self.client.secret.assert_not_called()
 
     def test_missing_reuse_never_creates_or_writes_token(self):
         self.payload['fleetAction'] = 'reuse'

@@ -2115,27 +2115,37 @@ _See code: [src/commands/setup/proof-topology-compile.ts](https://github.com/dog
 
 ## `scrollsdk setup proof-worker`
 
-Hydrate a compiler-generated Docker Compose prover-worker bundle with its bearer token after deterministic configuration generation
+Provision a per-worker credential for a compiler-generated Compose bundle or local Kubernetes worker (never the coordinator master)
 
 ```
 USAGE
-  $ scrollsdk setup proof-worker [--aws-profile <value>] [--aws-region <value>] [--deployment-dir <value>] [--json]
-    [--secret-name <value>] [--worker-token-env <value>]
+  $ scrollsdk setup proof-worker [--aws-profile <value>] [--aws-region <value>]
+    [--deployment-dir <value>] [--json] [--kube-context <value>] [--namespace
+    <value>] [--secret-name <value>] [--worker-token-env <value>]
 
 FLAGS
-  --aws-profile=<value>       AWS CLI profile used to read the prover-worker token
-  --aws-region=<value>        AWS region of the proof coordinator secret; inferred from .data/proof-aws.json when
-                              omitted
-  --deployment-dir=<value>    [default: .] Deployment root containing .data/proof-deployment.json
+  --aws-profile=<value>       AWS CLI profile used to read the worker-credential
+                              master (only the minted credential is written)
+  --aws-region=<value>        AWS region of the proof coordinator secret;
+                              inferred from .data/proof-aws.json when omitted
+  --deployment-dir=<value>    [default: .] Deployment root containing
+                              .data/proof-deployment.json
   --json                      Output structured JSON
-  --secret-name=<value>       Secrets Manager secret containing prover-worker-token; inferred from .data/proof-aws.json
-                              when omitted
-  --worker-token-env=<value>  [default: DOGEOS_PROVER_WORKER_TOKEN] Environment variable containing the worker token;
-                              when unset, read it from Secrets Manager
+  --kube-context=<value>      Explicit Kubernetes context for a compiled-local
+                              worker
+  --namespace=<value>         Explicit Kubernetes namespace for a compiled-local
+                              worker
+  --secret-name=<value>       Secrets Manager secret containing
+                              prover-worker-master; inferred from
+                              .data/proof-aws.json when omitted
+  --worker-token-env=<value>  [default: DOGEOS_PROVER_WORKER_TOKEN] Environment
+                              variable containing an already minted credential
+                              for this Worker id; when unset, mint one from the
+                              Secrets Manager master
 
 DESCRIPTION
-  Hydrate a compiler-generated Docker Compose prover-worker bundle with its bearer token after deterministic
-  configuration generation
+  Provision a per-worker credential for a compiler-generated Compose bundle or
+  local Kubernetes worker (never the coordinator master)
 
 EXAMPLES
   $ scrollsdk setup proof-worker

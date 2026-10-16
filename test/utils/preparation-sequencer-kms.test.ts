@@ -327,7 +327,7 @@ describe('production Bridge sequencer KMS', () => {
     const generated = generateValuesFiles(spec)['withdrawal-processor-production.yaml']
     expect(generated).not.to.include('DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY')
     delete spec.images
-    expect((yaml.load(generateValuesFiles(spec)['withdrawal-processor-production.yaml']) as any).image.tag).to.equal('v0.3.0-beta.7')
+    expect((yaml.load(generateValuesFiles(spec)['withdrawal-processor-production.yaml']) as any).image.tag).to.equal('v0.3.0-beta.8')
     const installable = yaml.load(generated) as any
     installable.networkPolicy = {allowFrom: {proofCoordinator: [{podSelector: {matchLabels: {app: 'proof-coordinator'}}}], tso: [{podSelector: {matchLabels: {app: 'tso'}}}]}, enabled: true}
     fs.writeFileSync(valuesFile, yaml.dump(installable))

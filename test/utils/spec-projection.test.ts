@@ -267,7 +267,7 @@ describe('spec intent through configuration and values projection', () => {
   it('uses beta.7 for core services while preserving explicit image choices', () => {
     const spec = fixture()
     for (const service of ['l1-interface', 'withdrawal-processor', 'tso-service', 'cubesigner-signer', 'fee-oracle', 'eth-da-submitter']) {
-      expect(parseValues(spec, service).image.tag, service).to.equal('v0.3.0-beta.7')
+      expect(parseValues(spec, service).image.tag, service).to.equal('v0.3.0-beta.8')
     }
 
     spec.images = {services: {withdrawalProcessor: {tag: 'operator-selected'}}}

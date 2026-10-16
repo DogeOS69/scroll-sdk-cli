@@ -42,6 +42,12 @@ def snapshot(client, plan):
     return rows
 
 
+def secret_names(plan):
+    # One dstack secret per worker, each holding only that worker's minted
+    # credential (dogeos-core #1591). The master never reaches dstack.
+    return [worker['secretName'] for worker in plan['workers']]
+
+
 def cleanup(client, plan, worker, abort=True):
     run, fleet = owned(client, plan, worker)
     try:
@@ -108,7 +114,7 @@ def main(payload):
                 done = guard_tick(client, plan, payload['startedAt'], time.time())
                 pathlib.Path('/tmp/scrollsdk-watchdog-ready').touch()
                 if done:
-                    client.secrets.delete(project, [plan['secretName']])
+                    client.secrets.delete(project, secret_names(plan))
                     return {'cleaned': True}
             except Exception:
                 # Never emit provider errors: they may echo secrets. Keep trying
@@ -129,7 +135,8 @@ def main(payload):
             raise ValueError('Completed runs are never restarted by apply; use a new session')
         if fleet and fleet.status.value in ('terminating', 'terminated'):
             raise ValueError('Retired fleets are never recreated by apply')
-    client.secrets.create_or_update(project, plan['secretName'], payload['token'])
+    for name in secret_names(plan):
+        client.secrets.create_or_update(project, name, payload['credentials'][name])
     attempted = []
     try:
         for worker, fleet_spec, run_spec in definitions:

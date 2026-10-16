@@ -267,6 +267,11 @@ export interface ProofCoordinatorConfig {
   secrets?: {
     name?: string
     proofWorkTokenProperty?: string
+    /**
+     * Remote property holding the coordinator-only worker-credential master
+     * (default `prover-worker-master`). Never mount it on a worker; workers get
+     * per-worker credentials minted from it.
+     */
     proverWorkerTokenProperty?: string
     remoteKey?: string
   }

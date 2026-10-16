@@ -12,6 +12,7 @@ import {digest, writeJson} from '../../src/utils/preparation-io.js'
 import {rentalEnvelope, resolveProofWorkers} from '../../src/utils/proof-workers-config.js'
 import {operateWorkerCapacity, retireCapacitySession, watchdogManifest} from '../../src/utils/proof-workers-lifecycle.js'
 import {capacityPlan, workerCommand, workerControllerLocation} from '../../src/utils/proof-workers-plan.js'
+import {mintWorkerCredential} from '../../src/utils/prover-worker-credential.js'
 
 export function fixturePlan() {
   const image = {digest: `sha256:${'a'.repeat(64)}`, repository: 'example.invalid/worker'}
@@ -21,9 +22,13 @@ export function fixturePlan() {
   const worker = {argv: ['--worker-id', 'original', '--worker-token-file', '/secret', '--drain-timeout-ms', '720000', '--chunk-app-exe', '/old/chunk', '--enable-prove-scroll-chunk'], image, required_build_class: 'production'} as ProverWorkerContractV1
   const imageCheck = {cudaArchitectures: ['86'], image} as ProofWorkerImageCheckV1
   const target = {authKey: 'token', authSecret: 'dstack-auth', context: 'test-context', deployment: 'dstack-controller', image: `example.invalid/controller@sha256:${'c'.repeat(64)}`, namespace: 'test', port: 3000}
-  const input = {generationId: 'd'.repeat(64), imageCheck, publication, session: 'initial', spec, target, tokenFile: 'prover-worker/prover-worker.token', worker}
+  const input = {generationId: 'd'.repeat(64), imageCheck, publication, session: 'initial', spec, target, worker}
   return {input, plan: capacityPlan(input)}
 }
+
+// Nonfunctional placeholder; only minted per-worker credentials leave apply.
+const MASTER = 'disposable-test-only-master-000000000000'
+const readMaster = () => MASTER
 
 describe('bounded proof-worker capacity', () => {
   let root: string
@@ -34,8 +39,6 @@ describe('bounded proof-worker capacity', () => {
     const file = path.join(root, '.scrollsdk/proof-workers/plan.json')
     writeJson(file, plan)
     fs.writeFileSync(path.join(path.dirname(file), 'plan.sha256'), digest(fs.readFileSync(file)))
-    fs.mkdirSync(path.join(root, 'prover-worker'))
-    fs.writeFileSync(path.join(root, plan.tokenFile), 'disposable-test-only-token', {mode: 0o600})
     return plan
   }
 
@@ -96,8 +99,10 @@ describe('bounded proof-worker capacity', () => {
     expect(vast.workers[0].task.backends).to.deep.equal(['vastai'])
   })
   it('preserves the serialized Vast plan from the deployed SDK revision', () => {
-    // Captured from PR #78 at a9af2807, including its plan ID and worker names.
-    expect(digest(JSON.stringify(fixturePlan().plan))).to.equal('e76ff8a447c9b9ba4d1e3f5ee0282644550ceb4e87a71d64d3a9da4fd5c7b2bf')
+    // Captured from PR #78 at a9af2807, including its plan ID and worker names;
+    // re-pinned when each worker got its own credential secret (core #1591).
+    // The plan ID seed is unchanged.
+    expect(digest(JSON.stringify(fixturePlan().plan))).to.equal('ff7b1b7230d94f16412e7fc9adfa8dffa96aa9c05875ae96b40a6dbaf6207825')
   })
   it('carries operator durations into the task and watchdog without a CLI policy cap', () => {
     for (const [hours, seconds, envelope] of [[0.1, 360, 0.75], [48, 172_800, 39.07], [49, 176_400, 39.87], [168, 604_800, 135.07], [720, 2_592_000, 576.67]]) {
@@ -127,8 +132,13 @@ describe('bounded proof-worker capacity', () => {
       expect(worker.task.max_duration).to.equal(7200)
       expect(worker.task.stop_duration).to.equal(780)
       expect((worker.task.commands as string[])[0]).to.contain('--enable-prove-scroll-chunk')
-      expect(JSON.stringify(worker)).not.to.contain('disposable-test-only-token')
+      expect(JSON.stringify(worker)).not.to.contain(MASTER)
+      expect((worker.task.commands as string[])[0]).to.contain(`'--worker-id' '${worker.workerId}'`)
+      expect((worker.task.env as Record<string, string>).DOGEOS_PROVER_WORKER_TOKEN).to.equal(`\${{ secrets.${worker.secretName} }}`)
     }
+
+    expect(new Set(plan.workers.map(w => w.workerId)).size).to.equal(2)
+    expect(new Set(plan.workers.map(w => w.secretName)).size).to.equal(2)
 
     expect(capacityPlan(input).id).to.equal(plan.id)
     expect(capacityPlan({...input, session: 'next'}).id).not.to.equal(plan.id)
@@ -141,34 +151,40 @@ describe('bounded proof-worker capacity', () => {
     input.publication.files['protocol_context.json'].url += '?token=example'
     expect(() => workerCommand(input.worker, input.publication, 'worker', '86')).to.throw('without credentials')
   })
-  it('installs and waits for an independent watchdog before sending a private token', () => {
+  it('installs and waits for an independent watchdog before sending per-worker credentials', () => {
     const plan = save()
     const calls: Array<{args: string[]; input?: string}> = []
     const run = (args: string[], input?: string) => {calls.push({args, input}); return JSON.stringify({workers: [{fleet: 'active', run: 'running'}]})}
-    operateWorkerCapacity(root, 'apply', run, 1000)
+    operateWorkerCapacity(root, 'apply', run, 1000, readMaster)
     expect(calls[0].args).to.include('apply')
     expect(calls[1].args).to.include('wait')
     expect(calls[2].args).to.include('--for=condition=Ready')
     expect(calls[3].args).to.include('exec')
-    expect(calls[0].input).not.to.contain('disposable-test-only-token')
-    expect(JSON.parse(calls[3].input!).token).to.equal('disposable-test-only-token')
+    expect(calls[0].input).not.to.contain(MASTER)
+    expect(calls[3].input).not.to.contain(MASTER)
+    expect(JSON.parse(calls[3].input!).credentials).to.deep.equal(Object.fromEntries(plan.workers.map(w => [w.secretName, mintWorkerCredential(MASTER, w.workerId)])))
     const first = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/proof-workers/state.json'), 'utf8'))
-    operateWorkerCapacity(root, 'apply', run, 1100)
+    operateWorkerCapacity(root, 'apply', run, 1100, readMaster)
     const second = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/proof-workers/state.json'), 'utf8'))
     expect(second.startedAt).to.equal(first.startedAt)
     expect(JSON.stringify(watchdogManifest(plan, first.startedAt))).to.contain('SCROLLSDK_GUARD_PAYLOAD')
-    expect(() => operateWorkerCapacity(root, 'apply', run, 3000)).to.throw('expired')
+    expect(() => operateWorkerCapacity(root, 'apply', run, 3000, readMaster)).to.throw('expired')
+  })
+  it('refuses apply without a master before touching the cluster', () => {
+    save()
+    expect(() => operateWorkerCapacity(root, 'apply', () => {throw new Error('should not run')}, 1000)).to.throw('master')
+    expect(fs.existsSync(path.join(root, '.scrollsdk/proof-workers/state.json'))).to.equal(false)
   })
   it('never allocates if watchdog readiness fails and leaves the original deadline recoverable', () => {
     save()
     let calls = 0
-    expect(() => operateWorkerCapacity(root, 'apply', () => {calls++; if (calls === 2) throw new Error('not ready'); return ''}, 1000)).to.throw('not ready')
+    expect(() => operateWorkerCapacity(root, 'apply', () => {calls++; if (calls === 2) throw new Error('not ready'); return ''}, 1000, readMaster)).to.throw('not ready')
     expect(calls).to.equal(2)
     expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/proof-workers/state.json'), 'utf8')).startedAt).to.equal(1000)
   })
   it('status sends only read operation and never creates a state file', () => {
     save()
-    operateWorkerCapacity(root, 'status', (_args, input) => {if (!input) return ''; expect(JSON.parse(input!).action).to.equal('status'); expect(input).not.to.contain('disposable-test-only-token'); return '{"workers":[]}'})
+    operateWorkerCapacity(root, 'status', (_args, input) => {if (!input) return ''; expect(JSON.parse(input!).action).to.equal('status'); expect(input).not.to.contain(MASTER); return '{"workers":[]}'})
     expect(fs.existsSync(path.join(root, '.scrollsdk/proof-workers/state.json'))).to.equal(false)
   })
   it('keeps cleanup pending until the fleet is actually terminated and never reapplies it', () => {
