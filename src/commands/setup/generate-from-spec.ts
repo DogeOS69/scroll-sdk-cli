@@ -15,6 +15,7 @@ import {
 } from '../../utils/deployment-spec-generator.js'
 import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {ALB_SERVICES, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
+import {validateExistingNlbSdk} from '../../utils/existing-nlb.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {loadPreparationEnv} from '../../utils/preparation-io.js'
@@ -233,7 +234,10 @@ export default class GenerateFromSpec extends Command {
     const generateValues = flags.bootstrap || flags['with-values'] || flags['values-only']
     const bootstrapFiles = flags.bootstrap ? planSpecBootstrap(spec, flags['sdk-dir'] ?? DEFAULT_SDK) : {}
     const templateFiles = flags.bootstrap ? bootstrapFiles : generateValues ? loadSdkTemplateFiles(flags['sdk-dir'] ?? DEFAULT_SDK, spec.templates?.sdkRevision).files : {}
-    if (generateValues) validateExistingAlbSdk(flags['sdk-dir'] ?? DEFAULT_SDK, spec)
+    if (generateValues) {
+      validateExistingAlbSdk(flags['sdk-dir'] ?? DEFAULT_SDK, spec)
+      validateExistingNlbSdk(flags['sdk-dir'] ?? DEFAULT_SDK, spec)
+    }
 
     let configs: GeneratedConfigs | null = null
     if (spec.capacityManager && generateValues && !templateFiles['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use the paired capacity-manager SDK branch')

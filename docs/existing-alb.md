@@ -125,3 +125,10 @@ Run it in a disposable deployment before production rollout.
 
 References: [AWS lifecycle pattern](https://aws.amazon.com/blogs/containers/patterns-for-targetgroupbinding-with-aws-load-balancer-controller/),
 [TargetGroupBinding reference](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/targetgroupbinding/targetgroupbinding/).
+
+## Bootnode P2P infrastructure
+
+Bootnode NLBs can use the same independent lifecycle with one NLB per node.
+Configure `bootnodePublicP2p[].mode: existing` and follow
+[Existing bootnode NLBs](existing-nlb.md). `setup nlb` checks TCP resources and
+partner source controls; `setup alb` continues to check HTTP/HTTPS resources only.

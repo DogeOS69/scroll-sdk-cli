@@ -917,7 +917,15 @@ export interface ValidationWarning {
 export interface BootnodePublicP2p {
   eipAllocations?: string[]
   enabled: boolean
+  /** Existing infrastructure stays outside the application Helm lifecycle. */
+  existingNlb?: {
+    listenerArn: string
+    loadBalancerArn: string
+    securityGroupIds: string[]
+    targetGroupArn: string
+  }
   index: number
+  mode?: 'existing' | 'service'
   sourceRanges?: string[]
   subnets?: string[]
 }
