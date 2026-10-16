@@ -213,8 +213,8 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
   for (const [name, endpoint] of Object.entries(config!.endpoints)) {
     const lb = read(['elbv2', 'describe-load-balancers', '--load-balancer-arns', endpoint.loadBalancerArn]).LoadBalancers?.[0]
     if (!lb || lb.LoadBalancerArn !== endpoint.loadBalancerArn || lb.Type !== 'application' || lb.State?.Code !== 'active' || lb.VpcId !== cluster.resourcesVpcConfig.vpcId) fail(`${name}: ALB must be active and in the selected EKS VPC`)
-    const tags = read(['elbv2', 'describe-tags', '--resource-arns', endpoint.loadBalancerArn]).TagDescriptions?.[0]?.Tags ?? []
-    if (tags.some((tag: any) => ['elbv2.k8s.aws/cluster', 'gateway.k8s.aws/stack', 'ingress.k8s.aws/stack', 'service.k8s.aws/stack'].includes(tag.Key))) fail(`${name}: select an externally managed ALB without Kubernetes controller ownership tags`)
+    const tags = read(['elbv2', 'describe-tags', '--resource-arns', endpoint.loadBalancerArn]).TagDescriptions?.find((item: any) => item.ResourceArn === endpoint.loadBalancerArn)?.Tags
+    if (!Array.isArray(tags) || tags.some((tag: any) => ['elbv2.k8s.aws/cluster', 'gateway.k8s.aws/stack', 'ingress.k8s.aws/stack', 'service.k8s.aws/stack'].includes(tag.Key))) fail(`${name}: select an externally managed ALB without Kubernetes controller ownership tags`)
     const listener = read(['elbv2', 'describe-listeners', '--listener-arns', endpoint.listenerArn]).Listeners?.[0]
     if (listener?.ListenerArn !== endpoint.listenerArn || listener.LoadBalancerArn !== endpoint.loadBalancerArn || listener.Protocol !== 'HTTPS' || listener.Port !== 443 || !listener.Certificates?.length) fail(`${name}: select an HTTPS 443 listener with an ACM certificate`)
     const rules = read(['elbv2', 'describe-rules', '--listener-arn', endpoint.listenerArn]).Rules
@@ -238,6 +238,8 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
     if (lb.Scheme !== scheme) fail(`${name}: ALB scheme does not match the intended exposure`)
     const tg = read(['elbv2', 'describe-target-groups', '--target-group-arns', binding.targetGroupArn]).TargetGroups?.[0]
     if (!tg || tg.TargetGroupArn !== binding.targetGroupArn || tg.TargetType !== 'ip' || tg.VpcId !== lb.VpcId || tg.Protocol !== 'HTTP' || !tg.LoadBalancerArns?.includes(endpoint.loadBalancerArn)) fail(`${name}: target group must be an HTTP/IP group attached to the selected ALB in the same VPC`)
+    const tags = read(['elbv2', 'describe-tags', '--resource-arns', binding.targetGroupArn]).TagDescriptions?.find((item: any) => item.ResourceArn === binding.targetGroupArn)?.Tags
+    if (!Array.isArray(tags) || tags.some((tag: any) => ['elbv2.k8s.aws/cluster', 'gateway.k8s.aws/stack', 'ingress.k8s.aws/stack', 'service.k8s.aws/stack'].includes(tag.Key))) fail(`${name}: select an externally managed target group without Kubernetes controller ownership tags`)
     const healthPath = annotations['alb.ingress.kubernetes.io/healthcheck-path'] ?? (name === 'tso-service' ? '/health' : name === 'proof-coordinator' ? '/healthz' : '/')
     if (tg.HealthCheckEnabled !== true || tg.HealthCheckPath !== healthPath || tg.HealthCheckProtocol !== 'HTTP' || tg.HealthCheckPort !== 'traffic-port') fail(`${name}: target group health check must use HTTP traffic-port ${healthPath}`)
     if (tg.Matcher?.HttpCode !== (annotations['alb.ingress.kubernetes.io/success-codes'] ?? '200')) fail(`${name}: target group health-check success codes differ from the application values`)

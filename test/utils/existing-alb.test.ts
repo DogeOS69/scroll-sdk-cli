@@ -38,7 +38,12 @@ function provider() {
     'describe-target-groups': {TargetGroups: [{HealthCheckEnabled: true, HealthCheckPath: '/health', HealthCheckPort: 'traffic-port', HealthCheckProtocol: 'HTTP', LoadBalancerArns: [loadBalancerArn], Matcher: {HttpCode: '200'}, Protocol: 'HTTP', TargetGroupArn: targetGroupArn, TargetType: 'ip', VpcId: 'vpc-example'}]},
   }
   const calls: string[][] = []
-  return {calls, json(args: string[]) {calls.push(args); if (!responses[args[1]]) throw new Error('Unexpected provider request'); return responses[args[1]]}, responses}
+  return {calls, json(args: string[]) {
+    calls.push(args)
+    if (!responses[args[1]]) throw new Error('Unexpected provider request')
+    if (args[1] === 'describe-tags') return {TagDescriptions: responses[args[1]].TagDescriptions.map((item: any) => ({...item, ResourceArn: args[3]}))}
+    return responses[args[1]]
+  }, responses}
 }
 
 describe('existing ALB lifecycle', () => {
@@ -155,6 +160,22 @@ describe('existing ALB lifecycle', () => {
     values['tso-service-production.yaml'] = yaml.dump(changed)
     expect(() => verifyExistingAlb(spec(), values, provider())).to.throw('stale values')
   })
+
+  for (const ownership of ['elbv2.k8s.aws/cluster', 'ingress.k8s.aws/stack', 'service.k8s.aws/stack', 'gateway.k8s.aws/stack', 'missing', 'wrong-resource']) {
+    it(`rejects target group ownership ${ownership} even when the ALB is independent`, () => {
+      const values = files()
+      projectExistingAlb(values, spec())
+      const aws = provider()
+      const json = (args: string[]) => {
+        if (args[1] === 'describe-tags' && args[3] === targetGroupArn) return {TagDescriptions: ownership === 'missing' ? [] : [{
+          ResourceArn: ownership === 'wrong-resource' ? loadBalancerArn : targetGroupArn,
+          Tags: ownership === 'wrong-resource' ? [] : [{Key: ownership, Value: 'old-owner'}],
+        }]}
+        return aws.json(args)
+      }
+      expect(() => verifyExistingAlb(spec(), values, {json})).to.throw('externally managed target group')
+    })
+  }
 
   for (const [apiPath, frontendFirst] of [['/api', true], ['/api', false], ['/api/v2', true], ['/api/v2', false]] as const) {
     it(`${frontendFirst ? 'rejects' : 'accepts'} overlapping Blockscout ${apiPath} routes with frontend ${frontendFirst ? 'first' : 'last'}`, () => {

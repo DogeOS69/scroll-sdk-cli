@@ -84,7 +84,7 @@ scrollsdk test ingress
 make delete-tso
 ```
 
-`setup alb` validates the ALB ownership tags, VPC/scheme, listener/certificate,
+`setup alb` validates both ALB and target-group ownership tags, VPC/scheme, listener/certificate,
 target type, health checks and explicit host/path coverage. It rejects wider
 routes to a selected target group and forwarding from another listener. The
 Service check also requires the spec's explicit kubeContext to resolve to the
