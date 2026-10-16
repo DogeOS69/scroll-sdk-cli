@@ -107,8 +107,16 @@ and the direct `--with-values` path:
 | Fee limits | `maxBlobBaseFeeWei`, `maxFeePerGasWei`, `minPriorityFeeWei` |
 | State paths | `submitterDbPath`, `lifecycleDbPath` |
 
-Only explicit doge-config values replace corresponding existing submitter
-settings during prep. Zero values are preserved. An explicit `submitterDbPath`
+Ethereum DA mainnet requires `publish.maxPendingBlobTxs: 10`,
+`confirmationDepth: 8` and `finalizationDepth: 8`. Omitted fields are filled in
+both generated doge-config and values; conflicting explicit fields fail spec
+validation, direct generation and chart preparation. The resolved
+`ethereumDa.chain` selects this policy (when omitted, the existing environment
+fallback applies). Legacy chart preparation also recognizes `chainId: 1` when
+`chain` is absent. Update older mainnet inputs such as `8/1/64` before rendering.
+
+On other DA networks, only explicit doge-config values replace corresponding
+existing submitter settings during prep. Zero values are preserved. An explicit `submitterDbPath`
 also supplies `lifecycleDbPath` when the latter is absent, consistently with
 direct values generation. Custom submitter L2 RPC selection is retained through
 both generic environment reconciliation and submitter-specific reconciliation.

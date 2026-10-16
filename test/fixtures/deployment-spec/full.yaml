@@ -110,7 +110,7 @@ dogecoin:
   walletPath: ".data/doge-wallet.json"
 
 ethereumDa:
-  # Pending blob transactions default to 8 for Ethereum DA mainnet, otherwise 10.
+  # Pending blob transactions are fixed at 10 for Ethereum DA mainnet; otherwise default to 10.
   # The DA chain below selects the default, not metadata.environment.
   # Optional override: publish: {maxPendingBlobTxs: 10}
   chain: sepolia

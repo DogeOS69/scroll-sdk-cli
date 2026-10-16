@@ -29,7 +29,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {verifyDstackAcmCertificate} from '../../utils/dstack-internal-tls.js'
-import {type EthereumDaRuntimeConfig, ethereumDaRuntimeEnv} from '../../utils/ethereum-da-runtime.js'
+import {type EthereumDaRuntimeConfig, ethereumDaMainnetPolicyErrors, ethereumDaRuntimeEnv, resolveEthereumDaSubmitterPolicy} from '../../utils/ethereum-da-runtime.js'
 import {ETHEREUM_RPC_KEYS, proofCoordinatorRpcKeys, readEthereumRpcSecretStore, reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {projectExistingAlbDirectory, readExistingAlbSpec, suppressExistingAlbIngress, validateExistingAlb} from '../../utils/existing-alb.js'
 import {frontendDepositEnv, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
@@ -587,6 +587,7 @@ export function buildFeeOraclePrepEnv(input: {
 
 export function buildEthDaSubmitterPrepEnv(input: {
   batch?: Pick<NonNullable<NonNullable<DogeConfig['ethereumDa']>['batch']>, 'cutover'> | undefined
+  chain?: NonNullable<DogeConfig['ethereumDa']>['chain']
   ethereumRpcUrl: string | undefined
   l2RpcUrl: string | undefined
   l2StartBlockNumber?: number | string | undefined
@@ -599,14 +600,15 @@ export function buildEthDaSubmitterPrepEnv(input: {
   s3KeyPrefix?: string | undefined
   s3Region?: string | undefined
 }): Record<string, string | undefined> {
+  const policy = resolveEthereumDaSubmitterPolicy(input.chain === 'mainnet' ? 'mainnet' : undefined, input.runtime, input.maxPendingBlobTxs)
   const env: Record<string, string | undefined> = {
     DOGEOS_ETH_DA_SUBMITTER_BATCH__GENESIS_JSON_PATH: '/app/genesis/genesis.json',
     DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: input.ethereumRpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__RPC_URL: input.l2RpcUrl,
     DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: optionalConfigString(input.l2StartBlockNumber),
     DOGEOS_ETH_DA_SUBMITTER_PROTOCOL_CONTEXT_JSON: '/app/protocol_context.json',
-    DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS: optionalConfigString(input.maxPendingBlobTxs),
-    ...ethereumDaRuntimeEnv(input.runtime ?? {}),
+    DOGEOS_ETH_DA_SUBMITTER_PUBLISH__MAX_PENDING_BLOB_TXS: optionalConfigString(policy.maxPendingBlobTxs),
+    ...ethereumDaRuntimeEnv(policy.runtime),
   }
 
   const {batch} = input
@@ -743,7 +745,10 @@ function validateOptionalNonEmptyStringConfig(errors: string[], path: string, va
 }
 
 export function validateDogeConfigEthereumDaForPrep(ethereumDa: DogeConfig['ethereumDa'] | undefined): void {
-  const errors: string[] = []
+  const errors = ethereumDaMainnetPolicyErrors(
+    ethereumDa?.chain ?? (String(ethereumDa?.chainId) === '1' ? 'mainnet' : undefined),
+    ethereumDa, ethereumDa?.publish?.maxPendingBlobTxs,
+  ).map(error => error.message)
   const batch = ethereumDa?.batch
   const cutover = batch?.cutover
   const hasCutover = cutover !== undefined
@@ -3059,6 +3064,7 @@ export default class SetupPrepCharts extends Command {
         const s3Archive = this.dogeConfig.ethereumDa?.blobArchive?.s3
         const todoMappings = buildEthDaSubmitterPrepEnv({
           batch: this.dogeConfig.ethereumDa?.batch,
+          chain: this.dogeConfig.ethereumDa?.chain ?? (String(this.dogeConfig.ethereumDa?.chainId) === '1' ? 'mainnet' : undefined),
           ethereumRpcUrl: this.getConfigValue("ethereumDa.submitterRpcUrl"),
           l2RpcUrl: this.getConfigValue("general.L2_RPC_ENDPOINT"),
           l2StartBlockNumber: this.dogeConfig.ethereumDa?.l2StartBlockNumber,
