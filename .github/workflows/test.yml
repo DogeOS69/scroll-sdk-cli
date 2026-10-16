@@ -16,12 +16,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: 58acf6b9b64adf59f2e0d4a095010958d4e16472
+          ref: c2eb8bab629f16bb8ea982223351aaa08d52ed81
           path: .test-sdk
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: 25d6cd18eaca2a0693f7c5704c029b20d7433680
+          ref: 7a047ea87721a0c666aa3f312103392554f30260
           path: .test-sdk-specs
       - uses: azure/setup-helm@v4.3.0
         with:

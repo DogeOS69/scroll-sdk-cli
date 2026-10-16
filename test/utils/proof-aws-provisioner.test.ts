@@ -1067,9 +1067,23 @@ describe('proof-aws-provisioner worker-credential master', () => {
       run() { return '' },
       text() { return JSON.stringify(existing) },
     }
-    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws as any) as any
-    return {provisioner, writes}
+    const messages: string[] = []
+    const context = new JsonOutputContext('test', true)
+    context.info = (message: string) => { messages.push(message) }
+    const provisioner = new ProofAwsProvisioner(context, undefined, aws as any) as any
+    return {messages, provisioner, writes}
   }
+
+  it('rotates both tokens and requires Secret synchronization and WP restart', () => {
+    const {messages, provisioner, writes} = fakeSecret({'proof-work-token': 'old-wp', 'prover-worker-master': 'old-master', 'prover-worker-token': 'legacy'})
+    expect(provisioner.ensureTokenSecret('us-west-2', 'test/proof', true)).to.equal('rotated')
+    expect(Object.keys(writes[0]).sort()).to.deep.equal(['proof-work-token', 'prover-worker-master'])
+    expect(writes[0]['proof-work-token']).not.to.equal('old-wp')
+    expect(writes[0]['prover-worker-master']).not.to.equal('old-master')
+    expect(messages.join(' ')).to.include('ExternalSecrets and Kubernetes Secrets to synchronize')
+    expect(messages.join(' ')).to.include('restart WP, the coordinator and capacity manager')
+    expect(messages.join(' ')).not.to.include(writes[0]['prover-worker-master'])
+  })
 
   it('adds a fresh master to a shared-token secret instead of promoting the shared token', () => {
     const {provisioner, writes} = fakeSecret({'proof-work-token': 'kept-wp-token', 'prover-worker-token': 'legacy-shared'})

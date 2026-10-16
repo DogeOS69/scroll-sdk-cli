@@ -417,18 +417,19 @@ function configureWorkerValues(
   const deployment = input.topology.deployment || {}
   const tokenPath = workerArgument(worker, '--worker-token-file')
   const tokenName = path.posix.basename(tokenPath)
-  // TODO(per-worker credentials): provision this key automatically. Until
-  // then the operator stores `proof-coordinator mint-worker-credential --name
-  // <this Worker's --worker-id>` under it; a missing key fails the Pod closed.
+  // setup proof-worker provisions only this worker credential in a dedicated Secret.
+  const workerSecretName = deployment.workerSecretName || 'prover-worker-credentials'
+  if (workerSecretName === (input.proofCoordinator?.secrets?.name || 'proof-coordinator-secrets')) {
+    throw new Error('workerSecretName must differ from the coordinator master Secret')
+  }
+
   const tokenKey = WORKER_CREDENTIAL_SECRET_KEY
   values.persistence ||= {}
   values.persistence[WORKER_TOKEN_VOLUME] = {
     enabled: true,
     items: [{key: tokenKey, path: tokenName}],
     mountPath: tokenPath,
-    name: deployment.workerSecretName
-      || input.proofCoordinator?.secrets?.name
-      || 'proof-coordinator-secrets',
+    name: workerSecretName,
     readOnly: true,
     subPath: tokenName,
     type: 'secret',

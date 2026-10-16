@@ -1621,7 +1621,7 @@ describe('deployment-spec-generator', () => {
       const files = generateValuesFiles(createMinimalSpec());
       const tso = yaml.load(files['tso-service-production.yaml']) as any;
 
-      expect(tso.image).to.include({repository: 'dogeos69/tso-service', tag: 'v0.3.0-beta.7'});
+      expect(tso.image).to.include({repository: 'dogeos69/tso-service', tag: 'v0.3.0-beta.8'});
       expect(tso.ingress.main.hosts[0].paths).to.deep.equal([
         {path: '/health', pathType: 'Exact'},
         {path: '/signer', pathType: 'Prefix'},

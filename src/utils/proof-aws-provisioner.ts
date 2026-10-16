@@ -938,7 +938,7 @@ export class ProofAwsProvisioner {
     if (rotate) {
       // Also drops a legacy shared `prover-worker-token` property.
       this.aws.json(['secretsmanager', 'put-secret-value', '--secret-id', secretName, '--secret-string', secretString], { region })
-      this.jsonCtx.info(`proof-aws: rotated token secret: ${secretName} (drain workers first; restart the coordinator and capacity manager, then re-mint every worker credential)`)
+      this.jsonCtx.info(`proof-aws: rotated token secret: ${secretName} (drain workers first; wait for ExternalSecrets and Kubernetes Secrets to synchronize; restart WP, the coordinator and capacity manager, then re-mint every worker credential)`)
       return 'rotated'
     }
 

@@ -7,16 +7,18 @@ import {
   verifyCompiledProverWorkerBundle,
 } from '../../utils/compiled-prover-worker-bundle.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
+import {kubernetesWorkerCredentialTarget, provisionKubernetesWorkerCredential} from '../../utils/kubernetes-prover-worker-credential.js'
 import { readOptionalProofAwsConfig } from '../../utils/proof-aws-config.js'
 import {
   readProofDeploymentContract,
   resolveContractFile,
+  validateProofDeploymentContract,
 } from '../../utils/proof-deployment-contract.js'
 import {readProverWorkerMasterFromSecretsManager} from '../../utils/proof-worker-token.js'
 import {mintWorkerCredential} from '../../utils/prover-worker-credential.js'
 
 export default class ProofWorker extends Command {
-  static override description = 'Hydrate a compiler-generated Docker Compose prover-worker bundle with a per-worker credential minted for its Worker id (never the coordinator master)'
+  static override description = 'Provision a per-worker credential for a compiler-generated Compose bundle or local Kubernetes worker (never the coordinator master)'
 
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
@@ -28,6 +30,8 @@ export default class ProofWorker extends Command {
     'aws-region': Flags.string({ description: 'AWS region of the proof coordinator secret; inferred from .data/proof-aws.json when omitted' }),
     'deployment-dir': Flags.string({ default: '.', description: 'Deployment root containing .data/proof-deployment.json' }),
     json: Flags.boolean({ default: false, description: 'Output structured JSON' }),
+    'kube-context': Flags.string({description: 'Explicit Kubernetes context for a compiled-local worker'}),
+    namespace: Flags.string({description: 'Explicit Kubernetes namespace for a compiled-local worker'}),
     'secret-name': Flags.string({ description: 'Secrets Manager secret containing prover-worker-master; inferred from .data/proof-aws.json when omitted' }),
     'worker-token-env': Flags.string({ default: 'DOGEOS_PROVER_WORKER_TOKEN', description: 'Environment variable containing an already minted credential for this Worker id; when unset, mint one from the Secrets Manager master' }),
   }
@@ -38,6 +42,16 @@ export default class ProofWorker extends Command {
     try {
       const deploymentDir = path.resolve(flags['deployment-dir'])
       const {contract} = readProofDeploymentContract(deploymentDir)
+      if (contract.worker.kind === 'compiled-local') {
+        const target = kubernetesWorkerCredentialTarget(deploymentDir, validateProofDeploymentContract(deploymentDir), flags['kube-context'], flags.namespace)
+        const credential = this.workerCredential(deploymentDir, target.workerId, flags)
+        provisionKubernetesWorkerCredential(target, credential)
+        json.logSuccess(`Provisioned worker credential Secret ${target.secretName} in ${target.namespace}`)
+        json.info('Start or restart the local worker after provisioning; an existing subPath token mount does not refresh in place.')
+        json.success(target)
+        return
+      }
+
       if (!['compiled-compose', 'compiled-external'].includes(contract.worker.kind)) {
         throw new Error(
           `setup proof-worker requires a generated Docker Compose Worker bundle; `
@@ -56,26 +70,7 @@ export default class ProofWorker extends Command {
         expectedBundleId: contract.worker.bundleId,
       })
 
-      const tokenFromEnvironment = process.env[flags['worker-token-env']]?.trim()
-      const proofAwsConfig = readOptionalProofAwsConfig(deploymentDir)?.config
-      const secretName = flags['secret-name'] || proofAwsConfig?.secret.name
-      if (!tokenFromEnvironment && !secretName) {
-        throw new Error(
-          'cannot infer the deployment-specific proof secret; run setup proof-aws-init, '
-          + 'pass --secret-name, or set the configured worker credential environment variable',
-        )
-      }
-
-      // The coordinator master stays in memory only; the bundle gets this
-      // Worker's credential, which cannot mint other names.
-      const workerToken = tokenFromEnvironment || mintWorkerCredential(
-        readProverWorkerMasterFromSecretsManager({
-          awsProfile: flags['aws-profile'],
-          awsRegion: flags['aws-region'] || proofAwsConfig?.secret.region,
-          secretName: secretName as string,
-        }),
-        compiledBundleWorkerId(bundleDir),
-      )
+      const workerToken = this.workerCredential(deploymentDir, compiledBundleWorkerId(bundleDir), flags)
       const bundle = hydrateCompiledProverWorkerBundle({
         bundleDir,
         expectedBundleId: contract.worker.bundleId,
@@ -105,5 +100,23 @@ export default class ProofWorker extends Command {
         true,
       )
     }
+  }
+
+  private workerCredential(deploymentDir: string, workerId: string, flags: {
+    'aws-profile'?: string; 'aws-region'?: string; 'secret-name'?: string; 'worker-token-env': string
+  }): string {
+    const tokenFromEnvironment = process.env[flags['worker-token-env']]?.trim()
+    if (tokenFromEnvironment) return tokenFromEnvironment
+    const proofAwsConfig = readOptionalProofAwsConfig(deploymentDir)?.config
+    const secretName = flags['secret-name'] || proofAwsConfig?.secret.name
+    if (!secretName) {
+      throw new Error('cannot infer the deployment-specific proof secret; run setup proof-aws-init, pass --secret-name, or set the configured worker credential environment variable')
+    }
+
+    return mintWorkerCredential(readProverWorkerMasterFromSecretsManager({
+      awsProfile: flags['aws-profile'],
+      awsRegion: flags['aws-region'] || proofAwsConfig?.secret.region,
+      secretName,
+    }), workerId)
   }
 }
