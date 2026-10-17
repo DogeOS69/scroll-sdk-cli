@@ -11,7 +11,7 @@ export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationSt
     genesis: ['bootstrap', 'genesis-local'],
     'proof-materials': ['cubesigner-policy-build', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials', 'charts', 'proof-publish', 'charts-published', 'deployment-kit', 'deployment-kit-published'],
     'protocol-context': ['protocol-context'],
-    render: ['render-final', 'secrets', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
+    render: ['render-final', 'secrets', 'cubesigner-session', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
     'upload-secrets': ['secret-upload'],
   }
   const steps = new Map(legacy.map(step => [step.id, step]))

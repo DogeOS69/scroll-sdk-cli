@@ -214,15 +214,19 @@ generation so a retry uses the same identity.
 | `setup bridge-funding` | Bind genesis/DA anchor; verify helper funding; invoke Core setup and marked funding; verify all resulting outpoints. | One operator wallet handoff. Setup and Bridge funding broadcast transactions and require manual reconciliation after ambiguous failures. |
 | `setup protocol-context` | Generate canonical `.data/protocol_context.json` and its runtime YAML from completed Bridge funding. | Stops before CubeSigner policy builds, proof baking, publication and governance. No funding is replayed. |
 | `setup proof-materials` | Export the selected policy compiler output; import declared inputs; bake/import proof materials; compile/publish proof configuration; export the deployment kit and record its publication. | Preliminary chart compilation is needed to bind the kit. Wait for its immutable URL and manifest digest within this stage. |
-| `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets; prepare optional capacity-manager values and WP access; run proof checks. | Helm releases remain uninstalled. |
+| `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets and refresh the configured CubeSigner session; prepare optional capacity-manager values and WP access; run proof checks. | CubeSigner session creation contacts the provider. Helm releases remain uninstalled. |
 | `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
 
-When CubeSigner is configured, `setup upload-secrets` requires nonempty
-`secrets/cubesigner-signer-session.json` and `secrets/cubesigner-signer.env` before
-uploading any files. If they are missing, run `scrollsdk setup cubesigner-refresh`
-from the deployment directory, then resume the upload stage. File completeness
-does not establish provider-side session validity or Kubernetes Secret readiness;
-check those separately before installation.
+When CubeSigner is configured, `setup render` runs `setup cubesigner-refresh -N
+--doge-config .data/doge-config.toml` from the deployment directory after generating
+the other Secrets. It creates a fresh session for the saved role even when old
+session files exist. An authenticated `cs` CLI is required; login or refresh
+failure stops render and blocks upload. Resume render after correcting the failure.
+The successful refresh is checkpointed, so resuming later render steps does not
+issue another session. Older staged plans automatically gain this step without
+replaying funding; their upload receipt is cleared so the new seed is uploaded.
+The upload stage also checks that both session inputs remain present and nonempty.
+Kubernetes Secret readiness is still checked separately after upload.
 
 `setup proof-materials --generation ...` and other explicit material flags retain
 the standalone material utility. Without material flags, the command runs the

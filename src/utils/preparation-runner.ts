@@ -275,6 +275,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(['gen-secrets', '-N']); break
       }
 
+      case 'cubesigner-session': {await command(['cubesigner-refresh', '-N', '--doge-config', '.data/doge-config.toml']); break}
       case 'deployment-kit': {await exportPreparationDeploymentKit(root); break}
       case 'deployment-kit-published': {
         await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup proof-materials' : 'scrollsdk setup apply'));

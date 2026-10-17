@@ -890,6 +890,75 @@ describe('resumable preparation plan', () => {
     expect(resumed.warnings?.join('\n')).include('plan.json').and.include('intent.json').and.include('missing: config.toml')
   })
 
+  it('refreshes the configured CubeSigner session during render even when old files exist', async () => {
+    const spec = fixture()
+    spec.signing = {...spec.signing, cubesigner: {}}
+    fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+    for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_OLD_INPUT')
+    const steps = preparationSteps(spec, true)
+    const session = steps.find(step => step.id === 'cubesigner-session')!
+    expect(session).to.include({effect: 'cloud', retry: 'safe', stage: 'render'})
+    expect(steps.indexOf(session)).to.be.greaterThan(steps.findIndex(step => step.id === 'secrets'))
+    expect(steps.indexOf(session)).to.be.lessThan(steps.findIndex(step => step.id === 'proof-check'))
+    const calls: {args: string[]; root: string}[] = []
+    await new CommandPreparationRunner(async (root, _step, args) => {calls.push({args, root})}).run(session, spec, deployment, {} as PreparationPlan)
+    expect(calls).to.deep.equal([{args: ['cubesigner-refresh', '-N', '--doge-config', '.data/doge-config.toml'], root: deployment}])
+    delete spec.signing.cubesigner
+    expect(preparationSteps(spec, true).map(step => step.id)).not.to.include('cubesigner-session')
+  })
+
+  it('stops render on session refresh failure and retries without replaying completed preparation', async () => {
+    const spec = fixture()
+    spec.signing = {...spec.signing, cubesigner: {}}
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+    const calls: string[] = []
+    let failRefresh = true
+    const runner = {async run(step: {id: string}) {
+      calls.push(step.id)
+      if (step.id === 'cubesigner-session' && failRefresh) throw new Error('CubeSigner login required')
+    }}
+    for (const stage of PREPARATION_STAGES.slice(0, PREPARATION_STAGES.indexOf('render'))) await applyPreparation(deployment, runner, undefined, {stage})
+    calls.length = 0
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'render'})).status).to.equal('failed')
+    expect(calls).to.deep.equal(['render-final', 'secrets', 'cubesigner-session'])
+    await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'}), 'Prerequisite render')
+    calls.length = 0
+    failRefresh = false
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'render'})).nextStage).to.equal('upload-secrets')
+    expect(calls).to.deep.equal(['cubesigner-session', 'proof-check'])
+    calls.length = 0
+    await applyPreparation(deployment, runner, undefined, {stage: 'render'})
+    expect(calls).to.deep.equal([])
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'})).status).to.equal('prepared')
+    expect(calls).to.deep.equal(['secret-upload'])
+  })
+
+  it('adds session refresh to a completed old staged plan and requires uploading the new seed', async () => {
+    const spec = fixture()
+    spec.signing = {...spec.signing, cubesigner: {}}
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    const fresh = await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+    const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...fresh}
+    delete body.id
+    body.steps = body.steps.filter(step => step.id !== 'cubesigner-session')
+    const old = {...body, id: createHash('sha256').update(JSON.stringify(body)).digest('hex')}
+    fs.writeFileSync(path.join(deployment, '.scrollsdk/plan.json'), JSON.stringify(old))
+    const statePath = path.join(deployment, '.scrollsdk/state.json')
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    fs.writeFileSync(statePath, JSON.stringify({...state, planId: old.id, status: 'prepared', steps: Object.fromEntries(old.steps.map(step => [step.id, 'completed']))}))
+    const calls: string[] = []
+    const runner = {async run(step: {id: string}) {calls.push(step.id)}}
+    await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'}), 'Prerequisite render')
+    const rendered = await applyPreparation(deployment, runner, undefined, {stage: 'render'})
+    expect(calls).to.deep.equal(['cubesigner-session'])
+    expect(rendered.nextStage).to.equal('upload-secrets')
+    expect(rendered.steps['secret-upload']).to.equal(undefined)
+    expect(rendered.planId).to.equal(fresh.id)
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'})).status).to.equal('prepared')
+    expect(calls).to.deep.equal(['cubesigner-session', 'secret-upload'])
+  })
+
   it('waits for both CubeSigner Secret inputs before uploading anything', async () => {
     const spec = fixture()
     spec.signing = {...spec.signing, cubesigner: {}}

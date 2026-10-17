@@ -100,6 +100,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   }
 
   add('secrets', 'Generate private runtime Secrets')
+  if (staged && spec.signing?.cubesigner) add('cubesigner-session', 'Refresh the CubeSigner runtime session for the configured role', 'cloud')
   if (spec.proofTopology?.enforcement === 'enforce') {
     add('deployment-kit', 'Export the signer deployment kit')
     if (p.deploymentKitPublication?.mode === 's3') add('deployment-kit-published', 'Publish and verify the signer deployment kit in the selected S3 bucket', 'cloud')
@@ -326,6 +327,16 @@ export function migratePolicyBuildStep(plan: PreparationPlan, spec: DeploymentSp
   return {...next, id: digest(JSON.stringify(next))}
 }
 
+/** Older render receipts did not create a signer session. Preserve all other work. */
+function migrateCubesignerSessionStep(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
+  if (plan.schema !== 'scrollsdk/preparation/v2' || !spec.signing?.cubesigner || plan.steps.some(step => step.id === 'cubesigner-session')) return plan
+  const session = preparationSteps(spec, true).find(step => step.id === 'cubesigner-session')!
+  const steps = plan.steps.flatMap(step => step.id === 'secrets' ? [step, session] : [step])
+  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
+  delete next.id
+  return {...next, id: digest(JSON.stringify(next))}
+}
+
 /** Split context generation out of proof preparation without resetting any step receipt. */
 export function migrateProtocolContextStage(plan: PreparationPlan): PreparationPlan {
   if (plan.schema !== 'scrollsdk/preparation/v2') return plan
@@ -357,7 +368,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
   const staged = plan.schema === 'scrollsdk/preparation/v2'
-  const migrated = migratePolicyBuildStep(migrateProtocolContextStage(migrateSignerHandoffSteps(plan, spec)), spec)
+  const migrated = migratePolicyBuildStep(migrateCubesignerSessionStep(migrateProtocolContextStage(migrateSignerHandoffSteps(plan, spec)), spec), spec)
   if (JSON.stringify(preparationSteps(spec, staged)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
@@ -384,6 +395,8 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     if (migrated.id !== id) {
       // State first, then the plan: a crash between them is recovered on the next run.
       for (const step of SIGNER_HANDOFF_STEPS) delete state.steps[step]
+      // A newly generated seed must be uploaded even if an older plan finished upload.
+      if (!plan.steps.some(step => step.id === 'cubesigner-session') && migrated.steps.some(step => step.id === 'cubesigner-session')) delete state.steps['secret-upload']
       // Recheck the new publication evidence when a staged deployment renders.
       if (staged && spec.proofTopology?.enforcement === 'enforce' && plan.steps.some(step => SIGNER_HANDOFF_STEPS.has(step.id))) delete state.steps['proof-check']
       state.planId = migrated.id
