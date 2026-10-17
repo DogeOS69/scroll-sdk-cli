@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
+import sinon from 'sinon'
 
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 import type {Rpc} from '../../src/utils/preparation-funding.js'
@@ -64,6 +65,34 @@ describe('resumable preparation plan', () => {
   })
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
+
+  it('leaves no partial plan after an initial state write fails and allows retry', async () => {
+    const rename = fs.renameSync
+    const stub = sinon.stub(fs, 'renameSync').callsFake((from, to) => {
+      if (path.basename(String(to)) === 'state.json') throw new Error('Injected initial state write failure')
+      return rename(from, to)
+    })
+    try {await rejected(makePlan, 'Injected initial state write failure')} finally {stub.restore()}
+    expect(fs.existsSync(path.join(deployment, '.scrollsdk/intent.json'))).false
+    expect(fs.existsSync(path.join(deployment, '.scrollsdk/plan.json'))).false
+    const plan = await makePlan()
+    expect(JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/state.json'), 'utf8'))).to.include({planId: plan.id, status: 'pending'})
+    expect(fs.readdirSync(root).filter(name => name.includes('.plan-'))).empty
+  })
+
+  it('does not overwrite files added to an empty output directory while saving a plan', async () => {
+    fs.mkdirSync(deployment)
+    const rename = fs.renameSync
+    const stub = sinon.stub(fs, 'renameSync').callsFake((from, to) => {
+      if (path.basename(String(to)) === 'state.json') fs.writeFileSync(path.join(deployment, 'operator-note'), 'preserve')
+      return rename(from, to)
+    })
+    let error: unknown
+    try {await makePlan()} catch (error_) {error = error_} finally {stub.restore()}
+    expect(error).to.be.instanceOf(Error)
+    expect(fs.readFileSync(path.join(deployment, 'operator-note'), 'utf8')).eq('preserve')
+    expect(fs.existsSync(path.join(deployment, '.scrollsdk'))).false
+  })
 
   it('rejects an SDK without selected ALB support before querying CubeSigner', async () => {
     const spec = fixture()

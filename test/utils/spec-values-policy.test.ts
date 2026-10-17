@@ -54,6 +54,30 @@ describe('spec values runtime policy across entry points', () => {
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
 
+  it('rolls back a failed bootstrap and preserves an operator Makefile on retry', async () => {
+    const directory = path.join(root, 'deployment')
+    const obstruction = path.join(directory, '.data/protocol_seed.toml')
+    fs.mkdirSync(obstruction, {recursive: true})
+    fs.writeFileSync(path.join(directory, '.scrollsdkignore'), '.scrollsdk/\n')
+    fs.mkdirSync(path.join(directory, '.scrollsdk'))
+    fs.writeFileSync(path.join(directory, '.scrollsdk/state.json'), 'private workflow state')
+    let error: unknown
+    try {await run('--bootstrap', directory, '--sdk-dir', sdk, '--force')} catch (error_) {error = error_}
+    expect(error).to.be.instanceOf(Error)
+    expect(fs.existsSync(path.join(directory, 'Makefile'))).false
+    expect(fs.existsSync(path.join(directory, 'config.toml'))).false
+    expect(fs.existsSync(path.join(directory, 'values'))).false
+    expect(fs.readFileSync(path.join(directory, '.scrollsdk/state.json'), 'utf8')).eq('private workflow state')
+    fs.rmdirSync(obstruction)
+    const makefile = '# operator-owned Makefile\nNAMESPACE ?= reviewed-test\n'
+    fs.writeFileSync(path.join(directory, 'Makefile'), makefile)
+    await run('--bootstrap', directory, '--sdk-dir', sdk, '--force')
+    expect(fs.readFileSync(path.join(directory, 'Makefile'), 'utf8')).eq(makefile)
+    expect(fs.existsSync(path.join(directory, 'config.toml'))).true
+    expect(fs.existsSync(path.join(directory, 'values/frontends-config.yaml'))).true
+    expect(fs.readdirSync(root).filter(name => name.includes('.scrollsdk-generation-'))).empty
+  })
+
   for (const network of ['mainnet', 'testnet'] as const) {
     it(`bootstraps ${network} before policy receipts exist without downgrading enforcement`, async () => {
       spec.dogecoin.network = network

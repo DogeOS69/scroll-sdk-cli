@@ -10,6 +10,13 @@ commands from the private working directory containing your spec and environment
 file. A stage checks its prerequisites and never executes another stage for you.
 They do not install Helm releases or claim that a running chain has passed acceptance.
 
+The initial plan is written in a temporary sibling directory and published only
+after all plan records are saved. If writing fails, rerun `setup plan` with the
+same output directory. Bootstrap stages its generated files before publishing
+them and rolls back if publication fails. An existing Makefile is preserved,
+including with `generate-from-spec --bootstrap --force`, so retrying bootstrap
+does not discard operator edits.
+
 The CLI does not create or modify `.gitignore` in generated deployment directories
 or bundles. Operators manage Git ignore rules; existing `.gitignore` files are
 left untouched. `.scrollsdkignore` remains the CLI deployment-sync exclusion file

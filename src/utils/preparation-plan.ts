@@ -284,12 +284,20 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   }
 
   if (fs.existsSync(root) && fs.readdirSync(root).length > 0) throw new Error('setup plan requires an empty output directory')
-  fs.mkdirSync(root, {mode: 0o700, recursive: true})
-  fs.chmodSync(root, 0o700)
-  privateWrite(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
-  privateWrite(path.join(directory, 'intent.json'), specText)
-  writeJson(path.join(directory, 'plan.json'), plan)
-  writeJson(path.join(directory, 'state.json'), {files: {}, ...(options.staged ? {nextStage: 'genesis' as const} : {}), planId: plan.id, status: 'pending', steps: {}} satisfies PreparationState)
+  // Publish the initial plan as one directory, so an interrupted write cannot
+  // leave a nonempty output with no state from which to resume.
+  fs.mkdirSync(path.dirname(root), {mode: 0o700, recursive: true})
+  const staging = fs.mkdtempSync(path.join(path.dirname(root), `.${path.basename(root)}.plan-`))
+  try {
+    privateWrite(path.join(staging, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
+    privateWrite(path.join(staging, WORKFLOW_DIR, 'intent.json'), specText)
+    writeJson(path.join(staging, WORKFLOW_DIR, 'plan.json'), plan)
+    writeJson(path.join(staging, WORKFLOW_DIR, 'state.json'), {files: {}, ...(options.staged ? {nextStage: 'genesis' as const} : {}), planId: plan.id, status: 'pending', steps: {}} satisfies PreparationState)
+    // Rename may replace an empty directory, but refuses a concurrent writer's
+    // nonempty output. Never remove the destination to make room.
+    fs.renameSync(staging, root)
+  } finally {fs.rmSync(staging, {force: true, recursive: true})}
+
   return plan
 }
 
