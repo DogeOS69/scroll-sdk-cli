@@ -21,8 +21,9 @@ import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
-import {prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
+import {CAPACITY_MANAGER_STATE_PATHS, prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
@@ -70,7 +71,7 @@ import {
 } from '../../utils/signer-roles.js'
 import {specDstackController} from '../../utils/spec-kubernetes-target.js'
 import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
-import {reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
+import {TSO_ALB_EDGE_RECEIPT, reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
 import {tsoSignerNetwork} from '../../utils/tso-signer-network.js'
 import {
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
@@ -1336,7 +1337,7 @@ export default class SetupPrepCharts extends Command {
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
-  // Resolve pinned governance inputs at the source: .scrollsdk/ is excluded from staging.
+  // Resolve pinned governance inputs at the source: governance receipts remain excluded from staging.
   private policyInputRoot?: string
   private proofIntent?: ResolvedProofIntent
   private skipL2ContractDeploymentBlock: boolean = false
@@ -1414,7 +1415,7 @@ export default class SetupPrepCharts extends Command {
 
     const deploymentRoot = process.cwd()
     const originalValuesDir = path.resolve(deploymentRoot, flags['values-dir'])
-    const transaction = GenerationTransaction.begin(deploymentRoot)
+    const transaction = GenerationTransaction.begin(deploymentRoot, this.flags['proof-preparation'] ? [] : [...CAPACITY_MANAGER_STATE_PATHS, TSO_ALB_EDGE_RECEIPT])
     let generation: PrepChartGenerationResult
     let changedFiles: string[] = []
     try {
@@ -2045,6 +2046,7 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
           REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
           REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_L1_GAS_PRICE_ORACLE: this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),
           REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
@@ -2527,26 +2529,6 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        /*
-        NEXT_PUBLIC_NETWORK_ID: "221122420"
-        */
-        const oldNetworkName = frontend?.env?.NEXT_PUBLIC_NETWORK_NAME;
-        const newNetworkName = this.getConfigValue("general.CHAIN_NAME_L2");
-        if (!oldNetworkName || oldNetworkName !== newNetworkName) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_NAME`, newValue: newNetworkName, oldValue: oldNetworkName });
-          frontend.env.NEXT_PUBLIC_NETWORK_NAME = newNetworkName;
-          ingressUpdated = true;
-        }
-
-        const oldValue = frontend?.env?.NEXT_PUBLIC_NETWORK_ID;
-        const newValue = this.getConfigValue("general.CHAIN_ID_L2");
-        if (!oldValue || oldValue !== this.getConfigValue("general.CHAIN_ID_L2")) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_ID`, newValue, oldValue });
-          frontend.env.NEXT_PUBLIC_NETWORK_ID = newValue;
-          ingressUpdated = true;
-        }
-
-
         interface BlockscoutEnvMapping {
           configKey: string;
           defaultValue?: string;
@@ -2921,6 +2903,7 @@ export default class SetupPrepCharts extends Command {
           l2MessengerAddress: this.getConfigValue('contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR'),
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
           networkStr: this.withdrawalProcessorConfig.network_str,
+          productionVerifierKeyPolicy: this.dogeConfig.cubesigner?.mode === 'production_verifier_key_policy',
         })
 
         const nativeConfigPath = path.resolve(path.dirname(path.resolve(valuesDir)), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
@@ -3346,6 +3329,14 @@ export default class SetupPrepCharts extends Command {
           changes.push({key: 'ingress', newValue: 'reconciled controller settings', oldValue: 'previous controller settings'})
           updated = true
         }
+      }
+
+      // Existing ALB projection above may disable Ingress, so choose the host
+      // environment only after the effective ingress state is known.
+      if (chartName === 'blockscout' && reconcileBlockscoutFrontend(productionYaml['blockscout-stack'],
+        this.getConfigValue('ingress.BLOCKSCOUT_HOST'), this.getConfigValue('general.CHAIN_NAME_L2'), this.getConfigValue('general.CHAIN_ID_L2'))) {
+        changes.push({key: 'blockscout-stack.frontend', newValue: 'canonical network config and unique environment', oldValue: 'legacy environment'})
+        updated = true
       }
 
       const pcRpcFile = path.resolve(path.dirname(path.resolve(valuesDir)), 'proof-coordinator/ProofCoordinator.toml')

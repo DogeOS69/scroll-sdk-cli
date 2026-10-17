@@ -19,7 +19,7 @@ export async function runPreparationStage(stage: PreparationStage, directory: st
   try {
     const state = await applyPreparation(directory, new CommandPreparationRunner(), step => output.info(`${step.id}: ${step.title}`), {stage, warn: message => output.addWarning(message)})
     const nextCommand = state.nextStage ? stageCommand(state.nextStage, directory === DEFAULT_DEPLOYMENT ? undefined : directory) : undefined
-    const policyBuild = state.steps['cubesigner-policy-build'] === 'completed' ? {directory: `${directory}/${POLICY_OUTPUT}`, governanceHandoff: `${directory}/.data/cubesigner-policy-governance-handoff.json`, status: 'built-not-published-or-attached'} : undefined
+    const policyBuild = state.steps['cubesigner-policy-build'] === 'completed' ? {directory: `${directory}/${POLICY_OUTPUT}`, governanceHandoff: `${directory}/.data/cubesigner-policy-governance-handoff.json`, status: 'build-prepared-governance-status-not-inferred'} : undefined
     const report = {completed: Object.keys(state.steps).filter(id => state.steps[id] === 'completed'), currentStep: state.currentStep, nextCommand, policyBuild, stage, status: state.status, waiting: state.waiting}
     if (!json) {
       output.info(JSON.stringify(report, null, 2))

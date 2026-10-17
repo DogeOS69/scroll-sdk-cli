@@ -191,6 +191,8 @@ USAGE
 * [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
 * [`scrollsdk setup bridge-init`](#scrollsdk-setup-bridge-init)
 * [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
+* [`scrollsdk setup cubesigner-policy import`](#scrollsdk-setup-cubesigner-policy-import)
+* [`scrollsdk setup cubesigner-policy reconcile`](#scrollsdk-setup-cubesigner-policy-reconcile)
 * [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
 * [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
 * [`scrollsdk setup dstack-config`](#scrollsdk-setup-dstack-config)
@@ -210,6 +212,7 @@ USAGE
 * [`scrollsdk setup proof-config-check`](#scrollsdk-setup-proof-config-check)
 * [`scrollsdk setup proof-image-tools`](#scrollsdk-setup-proof-image-tools)
 * [`scrollsdk setup proof-materials`](#scrollsdk-setup-proof-materials)
+* [`scrollsdk setup protocol-context`](#scrollsdk-setup-protocol-context)
 * [`scrollsdk setup proof-release-prepare`](#scrollsdk-setup-proof-release-prepare)
 * [`scrollsdk setup proof-topology-compile`](#scrollsdk-setup-proof-topology-compile)
 * [`scrollsdk setup proof-worker`](#scrollsdk-setup-proof-worker)
@@ -995,6 +998,36 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/cubesigner-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-init.ts)_
+
+## `scrollsdk setup cubesigner-policy reconcile`
+
+Read back an already attached immutable policy and generate the release/attachment
+receipts consumed by staged preparation. Preserves the role restriction; performs
+no provider mutation or signing. Requires reviewed release and test evidence.
+
+```sh
+scrollsdk setup cubesigner-policy reconcile --dir deployment --input .data/policy-review.json --json
+```
+
+See the [external policy runbook](docs/cubesigner-external-policy.md#4-reconcile-an-already-approved-attachment)
+for the input format, permission requirements, validation and resumption steps.
+
+## `scrollsdk setup cubesigner-policy import`
+
+Import an existing externally built policy Wasm into staged preparation without
+building, publishing, attaching, or changing preparation checkpoints.
+
+```text
+USAGE
+  $ scrollsdk setup cubesigner-policy import --dir deployment
+    --wasm <deployment-relative-path> --expected-wasm-sha256 <sha256>
+    --expected-protocol-context-sha256 <sha256> --core-revision <commit>
+    --build-script-revision <commit> --source-repo <core-repository> [--json]
+```
+
+See the [external policy runbook](docs/cubesigner-external-policy.md) for build
+provenance, Council approval, receipt boundaries, and signer-side acceptance.
+The import checks local evidence; it does not assert governance or live tests passed.
 
 ## `scrollsdk setup cubesigner-refresh`
 
@@ -1976,6 +2009,23 @@ DESCRIPTION
 ```
 
 _See code: [src/commands/setup/proof-image-tools.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-image-tools.ts)_
+
+## `scrollsdk setup protocol-context`
+
+Generate canonical protocol context from completed Bridge funding; stop before policy builds and proof preparation.
+
+```text
+USAGE
+  $ scrollsdk setup protocol-context [--dir <value>] [--json]
+
+FLAGS
+  --dir=<value>  [default: deployment] Saved deployment directory (alias: --deployment-dir).
+  --json         Output structured stage status and the next command.
+```
+
+Existing staged plans migrate without replaying completed steps. For external
+policy builds, stop here and follow the approved build/governance procedure.
+See [preparation stage boundaries](docs/spec-preparation.md#commands).
 
 ## `scrollsdk setup proof-materials`
 

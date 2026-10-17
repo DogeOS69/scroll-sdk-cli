@@ -9,10 +9,12 @@ import type {DogeConfig} from '../../src/types/doge-config.js'
 import type {ProofMaterialsV1} from '../../src/types/proof-materials.js'
 import type {ProofDeploymentContract} from '../../src/utils/proof-deployment-contract.js'
 
+import {importCubesignerPolicy} from '../../src/utils/cubesigner-policy-import.js'
 import {proofEnforcementReadiness} from '../../src/utils/proof-enforcement-readiness.js'
 import {prepareProofMaterials, readProofMaterials} from '../../src/utils/proof-materials.js'
 import {renderProofTopologySource} from '../../src/utils/proof-topology-compiler.js'
 import {buildProofTopology} from '../../src/utils/proof-topology-init.js'
+import {policyReceiptFixture} from '../helpers/cubesigner-policy-receipts.js'
 
 const raw = (character: string) => `0x${character.repeat(128)}`
 const hash = (value: Buffer | string) => createHash('sha256').update(value).digest('hex')
@@ -135,6 +137,110 @@ describe('real bake worker identity import', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'scrollsdk-real-identity-'))
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
+
+  function governedExternalPolicy() {
+    const prepared = prepareProofMaterials(fixture(root).options)
+    fs.mkdirSync(path.join(root, 'withdrawal-processor'), {recursive: true})
+    fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), '[proof_system]\ncorrectness_policy_transport = "bridge_proof_ref_v1"\n')
+    const receipts = policyReceiptFixture(root)
+    const refs = receipts.selection.policyReceipts
+    fs.mkdirSync(path.join(root, '.data'), {recursive: true})
+    fs.writeFileSync(path.join(root, '.data/protocol_context.json'), '{}')
+    fs.writeFileSync(path.join(root, 'context.json'), '{}')
+    refs.protocolContext.sha256 = `sha256:${hash('{}')}`
+    const component = Buffer.from([0, 97, 115, 109, 13, 0, 1, 0])
+    fs.writeFileSync(path.join(root, 'policy.wasm'), component)
+    const release = JSON.parse(fs.readFileSync(path.join(root, 'release.json'), 'utf8'))
+    release.protocolContextSha256 = refs.protocolContext.sha256
+    release.wasm.sha256 = `sha256:${hash(component)}`
+    release.requiresLiveEvidence = false
+    delete (refs as {liveEvidence?: unknown}).liveEvidence
+    release.verifierProvenance = {
+      aggregateVerifyingKeySha256: `sha256:${prepared.receipt.software.artifacts!.aggregateVerifyingKey.sha256}`,
+      bridgeProgramSha256: `sha256:${prepared.receipt.bridge!.artifacts.appExe.sha256}`,
+    }
+    const save = () => {
+      const body = JSON.stringify(release)
+      fs.writeFileSync(path.join(root, 'release.json'), body)
+      refs.release.sha256 = `sha256:${hash(body)}`
+      const attachment = JSON.parse(fs.readFileSync(path.join(root, 'attachment.json'), 'utf8'))
+      attachment.releaseSha256 = refs.release.sha256
+      attachment.policyArtifactDigest = release.wasm.sha256
+      const attached = JSON.stringify(attachment)
+      fs.writeFileSync(path.join(root, 'attachment.json'), attached)
+      refs.attachment.sha256 = `sha256:${hash(attached)}`
+    }
+
+    save()
+    importCubesignerPolicy({buildScriptRevision: 'b'.repeat(40), coreRevision: release.coreRevision,
+      directory: root, expectedProtocolContextSha256: hash('{}'), expectedWasmSha256: hash(component),
+      run: (_command, args) => args.includes('rev-parse') ? String(args.at(-1)).replace('^{commit}', '') : '#!/bin/sh\n',
+      sourceRepo: root, wasm: 'policy.wasm'})
+    const contract = {enforcement: 'enforce', generation: 'real', inputs: {materials: {path: prepared.receiptPath}, protocolContext: {sha256: hash('{}')}}, mode: 'active',
+      worker: {enabled: true}} as ProofDeploymentContract
+    const config = {cubesigner: {...receipts.selection,
+      roles: [{keys: [{key_id: 'key-1', material_id: 'material-1'}], role_id: 'role-1'}]}, network: 'mainnet'} as unknown as DogeConfig
+    const check = () => proofEnforcementReadiness(root, contract, config).blockers.filter(item => item.startsWith('CubeSigner:'))
+    return {check, release, save}
+  }
+
+  it('accepts a separately imported policy commit only with matching proof artifact bindings', () => {
+    const input = governedExternalPolicy()
+    expect(input.check()).to.deep.equal([])
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/compiler.json'))
+    expect(input.check().join(' ')).to.include('without a matching verified external-build import')
+    // Existing releases built from the same source still work without an external selection.
+    input.release.coreRevision = 'c'.repeat(40)
+    input.save()
+    expect(input.check()).to.deep.equal([])
+  })
+
+  it('rejects plain or absent WP transport for the governed production policy', () => {
+    const input = governedExternalPolicy()
+    for (const source of ['[proof_system]\ncorrectness_policy_transport = "plain"\n', '[proof_system]\n']) {
+      fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), source)
+      expect(input.check().join(' ')).to.include('requires WP proof_system.correctness_policy_transport')
+    }
+  })
+
+  it('rejects modified external build provenance even when governed release receipts still match', () => {
+    const input = governedExternalPolicy()
+    fs.appendFileSync(path.join(root, '.data/cubesigner-policy/build-receipt.json'), ' ')
+    expect(input.check().join(' ')).to.include('External policy receipt digest mismatch')
+  })
+
+  it('does not expose private WP TOML in a parsing failure', () => {
+    const input = governedExternalPolicy()
+    fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'password = NONFUNCTIONAL_PRIVATE_VALUE')
+    const blockers = input.check().join(' ')
+    expect(blockers).to.include('WP native configuration is missing or invalid')
+    expect(blockers).not.to.include('NONFUNCTIONAL_PRIVATE_VALUE')
+  })
+
+  it('rejects a different governed Wasm than the imported component', () => {
+    const input = governedExternalPolicy()
+    const different = Buffer.from([0, 97, 115, 109, 13, 0, 1, 0, 0])
+    fs.writeFileSync(path.join(root, 'policy.wasm'), different)
+    input.release.wasm.sha256 = `sha256:${hash(different)}`
+    input.release.wasm.sizeBytes = different.length
+    input.save()
+    expect(input.check().join(' ')).to.include('without a matching verified external-build import')
+  })
+
+  for (const field of ['bridgeProgramSha256', 'aggregateVerifyingKeySha256']) {
+    it(`retains the selected proof ${field} check for external policy builds`, () => {
+      const input = governedExternalPolicy()
+      input.release.verifierProvenance[field] = `sha256:${'f'.repeat(64)}`
+      input.save()
+      expect(input.check().join(' ')).to.include('does not bind selected proof release/program/VK/context')
+    })
+  }
+
+  it('rejects an external policy when its current protocol context changes', () => {
+    const input = governedExternalPolicy()
+    fs.writeFileSync(path.join(root, '.data/protocol_context.json'), '{"changed":true}')
+    expect(input.check().join(' ')).to.include('previous Bridge')
+  })
 
   it('keeps enforcement evidence checks independent of testnet CubeSigner transport mode', () => {
     const input = fixture(root)

@@ -17,6 +17,7 @@ import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {ALB_SERVICES, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
 import {validateExistingNlbSdk} from '../../utils/existing-nlb.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
+import {GenerationTransaction} from '../../utils/generation-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {loadPreparationEnv} from '../../utils/preparation-io.js'
 import {resolvePreparationProofRelease} from '../../utils/preparation-release.js'
@@ -420,44 +421,53 @@ export default class GenerateFromSpec extends Command {
       }
     }
 
-    // Create directories
+    // Bootstrap publishes its templates and projections together. Workflow
+    // records excluded by .scrollsdkignore remain owned by the stage runner.
     if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true })
+      fs.mkdirSync(outputDir, {mode: 0o700, recursive: true})
     }
 
-    if (generateConfigs && !fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true })
-    }
-
-    if (generateValues && !fs.existsSync(valuesDir)) {
-      fs.mkdirSync(valuesDir, { recursive: true })
-    }
-
-    // Write configuration files
+    const transaction = flags.bootstrap ? GenerationTransaction.begin(outputDir) : undefined
+    const writeRoot = transaction?.stagingRoot ?? outputDir
+    const writeDataDir = path.join(writeRoot, '.data')
+    const writeValuesDir = path.join(writeRoot, 'values')
     const writtenFiles: string[] = []
-    for (const [file, content] of Object.entries(bootstrapFiles)) {
-      const target = path.join(outputDir, file)
-      fs.mkdirSync(path.dirname(target), {mode: 0o700, recursive: true})
-      fs.writeFileSync(target, content, {mode: 0o600})
-      writtenFiles.push(file)
-    }
+    try {
+      if (generateConfigs) fs.mkdirSync(writeDataDir, {mode: 0o700, recursive: true})
+      if (generateValues) fs.mkdirSync(writeValuesDir, {mode: 0o700, recursive: true})
 
-    if (configs) {
-      writeGeneratedConfigs(configs, outputDir, dataDir)
-      writtenFiles.push('config.toml', '.data/doge-config.toml', '.data/setup_defaults.toml', '.data/protocol_seed.toml')
-      jsonCtx.logSuccess('Generated config.toml')
-      jsonCtx.logSuccess('Generated .data/doge-config.toml')
-      jsonCtx.logSuccess('Generated .data/setup_defaults.toml')
-      jsonCtx.logSuccess('Generated .data/protocol_seed.toml')
-    }
-
-    if (valuesFiles) {
-      for (const file of [...archiveRetiredGethValues(valuesDir), ...archiveRetiredServiceFiles(valuesDir)]) jsonCtx.info(`Archived retired values: ${file}`)
-      for (const [filename, content] of Object.entries(valuesFiles)) {
-        fs.writeFileSync(path.join(valuesDir, filename), content)
-        writtenFiles.push(`values/${filename}`)
-        jsonCtx.logSuccess(`Generated values/${filename}`)
+      for (const [file, content] of Object.entries(bootstrapFiles)) {
+        const target = path.join(writeRoot, file)
+        // A failed/old bootstrap may already have an operator-edited Makefile.
+        // --force permits regeneration, but does not discard that owned file.
+        if (file === 'Makefile' && fs.existsSync(target)) continue
+        fs.mkdirSync(path.dirname(target), {mode: 0o700, recursive: true})
+        fs.writeFileSync(target, content, {mode: 0o600})
+        writtenFiles.push(file)
       }
+
+      if (configs) {
+        writeGeneratedConfigs(configs, writeRoot, writeDataDir)
+        writtenFiles.push('config.toml', '.data/doge-config.toml', '.data/setup_defaults.toml', '.data/protocol_seed.toml')
+        jsonCtx.logSuccess('Generated config.toml')
+        jsonCtx.logSuccess('Generated .data/doge-config.toml')
+        jsonCtx.logSuccess('Generated .data/setup_defaults.toml')
+        jsonCtx.logSuccess('Generated .data/protocol_seed.toml')
+      }
+
+      if (valuesFiles) {
+        for (const file of [...archiveRetiredGethValues(writeValuesDir), ...archiveRetiredServiceFiles(writeValuesDir)]) jsonCtx.info(`Archived retired values: ${file}`)
+        for (const [filename, content] of Object.entries(valuesFiles)) {
+          fs.writeFileSync(path.join(writeValuesDir, filename), content)
+          writtenFiles.push(`values/${filename}`)
+          jsonCtx.logSuccess(`Generated values/${filename}`)
+        }
+      }
+
+      transaction?.commit()
+    } catch (error) {
+      transaction?.rollback()
+      throw error
     }
 
     jsonCtx.info('')

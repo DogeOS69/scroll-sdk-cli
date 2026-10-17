@@ -8,7 +8,7 @@ import path from 'node:path'
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
 import {GenerationTransaction} from '../../src/utils/generation-transaction.js'
-import {planTsoAlbEdge, reconcileTsoAlbEdge} from '../../src/utils/tso-alb-edge.js'
+import {TSO_ALB_EDGE_RECEIPT, planTsoAlbEdge, reconcileTsoAlbEdge} from '../../src/utils/tso-alb-edge.js'
 
 const annotation = 'alb.ingress.kubernetes.io/subnets'
 describe('TSO ALB edge discovery', () => {
@@ -99,13 +99,15 @@ describe('TSO ALB edge discovery', () => {
   })
   it('rolls back values and receipt together when a later rendering step fails', () => {
     fs.writeFileSync(path.join(root, '.scrollsdk/intent.json'), JSON.stringify(spec))
+    fs.writeFileSync(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n')
+    const included = ['.scrollsdk/intent.json', TSO_ALB_EDGE_RECEIPT]
     const before = fs.readFileSync(path.join(root, 'values/tso-service-production.yaml'))
-    const transaction = GenerationTransaction.begin(root)
+    const transaction = GenerationTransaction.begin(root, included)
     reconcileTsoAlbEdge(transaction.stagingRoot, dependencies())
     transaction.rollback()
     expect(fs.readFileSync(path.join(root, 'values/tso-service-production.yaml')).equals(before)).to.equal(true)
     expect(fs.existsSync(path.join(root, '.scrollsdk/tso-alb-edge.json'))).to.equal(false)
-    const success = GenerationTransaction.begin(root)
+    const success = GenerationTransaction.begin(root, included)
     reconcileTsoAlbEdge(success.stagingRoot, dependencies()); success.commit()
     expect(fs.existsSync(path.join(root, '.scrollsdk/tso-alb-edge.json'))).to.equal(true)
   })

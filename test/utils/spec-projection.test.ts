@@ -71,6 +71,16 @@ function proofFixture(): DeploymentSpec {
 }
 
 describe('spec intent through configuration and values projection', () => {
+  it('generates the frontend gas oracle from the same selection as genesis', () => {
+    const spec = fixture()
+    for (const override of [undefined, '0x0000000000000000000000000000000000000012']) {
+      spec.contracts.overrides = override ? {l1GasPriceOracle: override} : undefined
+      const main = toml.parse(generateAllConfigs(spec)['config.toml']) as any
+      const values = yaml.load(generateValuesFiles(spec)['frontends-config.yaml']) as any
+      expect(toml.parse(values.scrollConfig).REACT_APP_L1_GAS_PRICE_ORACLE).to.equal(main.contracts.overrides.L1_GAS_PRICE_ORACLE)
+    }
+  })
+
   it('projects one proof store into native config, Helm values and compiler input without duplicating source intent', () => {
     const spec = proofFixture()
     spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}

@@ -43,6 +43,32 @@ describe('generation transaction', () => {
     expect(fs.existsSync(transaction.stagingRoot)).to.equal(false)
   })
 
+  it('includes selected workflow paths while excluding locks and detects concurrent ownership changes', () => {
+    fs.mkdirSync(path.join(root, '.scrollsdk'))
+    fs.writeFileSync(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n')
+    fs.writeFileSync(path.join(root, '.scrollsdk/intent.json'), '{}\n')
+    fs.writeFileSync(path.join(root, '.scrollsdk/apply.lock'), 'operator lock\n')
+    const included = ['.scrollsdk/intent.json', '.scrollsdk/capacity-manager']
+    const transaction = GenerationTransaction.begin(root, included)
+    try {
+      expect(fs.existsSync(path.join(transaction.stagingRoot, '.scrollsdk/apply.lock'))).to.equal(false)
+      expect(fs.readFileSync(path.join(transaction.stagingRoot, '.scrollsdk/intent.json'), 'utf8')).to.equal('{}\n')
+      fs.mkdirSync(path.join(transaction.stagingRoot, '.scrollsdk/capacity-manager'))
+      fs.writeFileSync(path.join(transaction.stagingRoot, '.scrollsdk/capacity-manager/plan.json'), '{}\n')
+      // An unrelated lock update is excluded from both commit and conflict detection.
+      fs.writeFileSync(path.join(root, '.scrollsdk/apply.lock'), 'new lock\n')
+      transaction.commit()
+      expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(true)
+      expect(fs.readFileSync(path.join(root, '.scrollsdk/apply.lock'), 'utf8')).to.equal('new lock\n')
+    } finally {transaction.rollback()}
+
+    const conflict = GenerationTransaction.begin(root, included)
+    try {
+      fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'concurrent owner\n')
+      expect(() => conflict.commit()).to.throw('deployment files changed')
+    } finally {conflict.rollback()}
+  })
+
   it('discards the complete generation when rollback is requested', () => {
     const transaction = GenerationTransaction.begin(root)
     const stagedValues = transaction.toStagingPath(path.join(root, 'values'))

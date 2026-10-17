@@ -8,6 +8,17 @@ import path from 'node:path'
 const cli = path.resolve('bin/run.js')
 
 describe('setup capacity-manager credentials', () => {
+  it('explains absent plans and bounded-worker mode before any cluster call', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'capacity-no-plan-'))
+    try {
+      const result = spawnSync(process.execPath, [cli, 'setup', 'capacity-manager', 'credentials', '--dir', root, '--json'], {encoding: 'utf8'})
+      expect(result.status).not.to.equal(0)
+      expect(result.stdout + result.stderr).to.include('bounded proofWorkers')
+      expect(result.stdout + result.stderr).to.include('setup capacity-manager prepare')
+      expect(result.stdout + result.stderr).not.to.include('ENOENT')
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
   it('transfers only referenced credentials through stdin without starting workers or leaking values', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-credentials-'))
     try {

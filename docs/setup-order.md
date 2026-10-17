@@ -167,6 +167,19 @@ initialization. Regenerating protocol context alone does not enable it.
 
 ## 4. Prepare proof and service configuration
 
+Production CubeSigner policy mode projects WP's
+`proof_system.correctness_policy_transport = "bridge_proof_ref_v1"` during
+`prep-charts`; proof readiness also rejects a mismatched native configuration.
+The public Proof Coordinator route is limited to `/v1/prover/tasks` and its
+descendants. Its ALB health check still uses the internal `/healthz` endpoint.
+
+For a saved staged plan, complete `setup bridge-funding`, then run
+`scrollsdk setup protocol-context` from the operator directory. This generates
+`deployment/.data/protocol_context.json` and stops before policy/proof builds.
+Use this boundary to hand off the context for an independently reproduced policy
+build. Existing completion records survive the staged-plan migration; do not
+replan or repeat funding. See [stage boundaries](spec-preparation.md#commands).
+
 Follow the [Proof operator runbook](proof-operator-runbook.md) for the selected
 proof mode. For AWS storage, its dependency order is:
 
@@ -342,6 +355,12 @@ scrollsdk setup cubesigner-policy deploy \
   --key-id "$CUBESIGNER_KEY_ID" \
   --output .data/cubesigner-policy-deployment --json
 ```
+
+This command is a limited creation/attachment path, not the Council-governed
+upgrade workflow for an existing key with `RequireRoleSession`. It has no
+approval replay option and refuses an existing multi-policy attachment. For
+release-specific external builds and governed upgrades, use the
+[external policy runbook](cubesigner-external-policy.md) and Core governance tools.
 
 This command performs remote writes using the current `cs` login. It verifies
 the uploaded Wasm SHA-256, invokes the hosted policy to reject an empty request,

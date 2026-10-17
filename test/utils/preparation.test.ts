@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
+import sinon from 'sinon'
 
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 import type {Rpc} from '../../src/utils/preparation-funding.js'
@@ -19,7 +20,7 @@ import {generateConfigToml, generateSetupDefaultsToml} from '../../src/utils/dep
 import {BRIDGE_FUNDING_MARKER, inspectFunding, prepareEthereumAnchor, publicKeyAddress, verifyDogecoinNetwork} from '../../src/utils/preparation-funding.js'
 import {prepareLocalGenesis} from '../../src/utils/preparation-genesis.js'
 import {AwaitingInput, loadPreparationEnv} from '../../src/utils/preparation-io.js'
-import {type PreparationPlan, applyPreparation, createPreparationPlan, migrateSignerHandoffSteps, preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
+import {type PreparationPlan, applyPreparation, createPreparationPlan, migrateProtocolContextStage, migrateSignerHandoffSteps, preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
 import {POLICY_RECEIPTS_INPUT} from '../../src/utils/preparation-policy-receipts.js'
 import {resolvePreparationProofRelease} from '../../src/utils/preparation-release.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
@@ -65,6 +66,34 @@ describe('resumable preparation plan', () => {
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
 
+  it('leaves no partial plan after an initial state write fails and allows retry', async () => {
+    const rename = fs.renameSync
+    const stub = sinon.stub(fs, 'renameSync').callsFake((from, to) => {
+      if (path.basename(String(to)) === 'state.json') throw new Error('Injected initial state write failure')
+      return rename(from, to)
+    })
+    try {await rejected(makePlan, 'Injected initial state write failure')} finally {stub.restore()}
+    expect(fs.existsSync(path.join(deployment, '.scrollsdk/intent.json'))).false
+    expect(fs.existsSync(path.join(deployment, '.scrollsdk/plan.json'))).false
+    const plan = await makePlan()
+    expect(JSON.parse(fs.readFileSync(path.join(deployment, '.scrollsdk/state.json'), 'utf8'))).to.include({planId: plan.id, status: 'pending'})
+    expect(fs.readdirSync(root).filter(name => name.includes('.plan-'))).empty
+  })
+
+  it('does not overwrite files added to an empty output directory while saving a plan', async () => {
+    fs.mkdirSync(deployment)
+    const rename = fs.renameSync
+    const stub = sinon.stub(fs, 'renameSync').callsFake((from, to) => {
+      if (path.basename(String(to)) === 'state.json') fs.writeFileSync(path.join(deployment, 'operator-note'), 'preserve')
+      return rename(from, to)
+    })
+    let error: unknown
+    try {await makePlan()} catch (error_) {error = error_} finally {stub.restore()}
+    expect(error).to.be.instanceOf(Error)
+    expect(fs.readFileSync(path.join(deployment, 'operator-note'), 'utf8')).eq('preserve')
+    expect(fs.existsSync(path.join(deployment, '.scrollsdk'))).false
+  })
+
   it('rejects an SDK without selected ALB support before querying CubeSigner', async () => {
     const spec = fixture()
     const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
@@ -107,7 +136,7 @@ describe('resumable preparation plan', () => {
       if (step.id === 'charts' || step.id === 'render-final') await charts.run(step, saved, deployment, plan)
     }}
     const stage = (selected: typeof PREPARATION_STAGES[number]) => applyPreparation(deployment, runner, undefined, {stage: selected})
-    for (const selected of ['genesis', 'aws', 'bridge-funding'] as const) await stage(selected)
+    for (const selected of ['genesis', 'aws', 'bridge-funding', 'protocol-context'] as const) await stage(selected)
     const waiting = await stage('proof-materials')
     expect(waiting.status).eq('waiting')
     expect(waiting.currentStep).eq('charts')
@@ -306,10 +335,13 @@ describe('resumable preparation plan', () => {
     expect(bridgeWait.currentStep).to.equal('production-funding')
     expect(calls.filter(id => id === 'bridge-info')).to.have.length(1)
     bridgeFunded = true
-    expect((await stage('bridge-funding')).nextStage).to.equal('proof-materials')
+    expect((await stage('bridge-funding')).nextStage).to.equal('protocol-context')
     expect(calls.filter(id => id === 'production-wallets')).to.have.length(2)
     expect(calls.filter(id => id === 'genesis-local')).to.have.length(1)
     expect(calls).not.to.include('protocol-context')
+    await rejected(() => stage('proof-materials'), 'Prerequisite protocol-context')
+    expect((await stage('protocol-context')).nextStage).to.equal('proof-materials')
+    expect(calls.filter(id => id === 'protocol-context')).to.have.length(1)
     expect((await stage('proof-materials')).nextStage).to.equal('render')
     expect(calls).not.to.include('secrets')
     expect(calls).not.to.include('secret-upload')
@@ -625,6 +657,51 @@ describe('resumable preparation plan', () => {
     await rejected(() => resolvePreparationProofRelease(spec, deployment), 'digest mismatch')
   })
 
+  for (const prior of ['funded', 'policy-waiting', 'completed', 'interrupted-migration', 'without-policy'] as const) it(`splits protocol context for a ${prior} saved plan without replaying funding or building policy`, async () => {
+    await makePlan()
+    const intentPath = path.join(deployment, '.scrollsdk/intent.json')
+    const spec = JSON.parse(fs.readFileSync(intentPath, 'utf8')) as DeploymentSpec
+    spec.signing = {...spec.signing, cubesigner: {}}
+    const intent = JSON.stringify(spec, null, 2) + '\n'
+    fs.writeFileSync(intentPath, intent)
+    const planPath = path.join(deployment, '.scrollsdk/plan.json')
+    const statePath = path.join(deployment, '.scrollsdk/state.json')
+    const original = JSON.parse(fs.readFileSync(planPath, 'utf8')) as PreparationPlan
+    const current = preparationSteps(spec, true)
+    const context = current.find(step => step.id === 'protocol-context')!
+    const steps = current.filter(step => step !== context && (prior !== 'without-policy' || step.id !== 'cubesigner-policy-build'))
+    const index = steps.findIndex(step => step.stage === 'proof-materials')
+    steps.splice(index + (prior === 'without-policy' ? 0 : 1), 0, {...context, stage: 'proof-materials'})
+    const body = {deploymentName: original.deploymentName, schema: 'scrollsdk/preparation/v2' as const, sdkDirectory: original.sdkDirectory, specHash: createHash('sha256').update(intent).digest('hex'), steps}
+    const old = {...body, id: createHash('sha256').update(JSON.stringify(body)).digest('hex')}
+    const migrated = migrateProtocolContextStage(old)
+    expect(migrateProtocolContextStage(migrated)).eq(migrated)
+    fs.writeFileSync(planPath, JSON.stringify(old))
+    const completed = steps.filter(step => prior === 'completed' || ['aws', 'bridge-funding', 'genesis'].includes(step.stage!))
+    const statuses = Object.fromEntries(completed.map(step => [step.id, 'completed']))
+    if (prior === 'policy-waiting') statuses['cubesigner-policy-build'] = 'failed'
+    fs.writeFileSync(statePath, JSON.stringify({files: {}, planId: prior === 'interrupted-migration' ? migrated.id : old.id, status: prior === 'completed' ? 'prepared' : 'waiting', steps: statuses}))
+    const calls: string[] = []
+    const runner = {async run(step: {id: string}) {
+      calls.push(step.id)
+      if (step.id !== 'protocol-context') throw new Error('No other step may execute')
+      fs.mkdirSync(path.join(deployment, '.data'), {recursive: true})
+      fs.writeFileSync(path.join(deployment, '.data/protocol_context.json'), '{"fixtureContext":true}')
+    }}
+    const state = await applyPreparation(deployment, runner, undefined, {stage: 'protocol-context'})
+    expect(calls).deep.eq(prior === 'completed' ? [] : ['protocol-context'])
+    expect(state.steps['protocol-context']).eq('completed')
+    for (const step of completed) expect(state.steps[step.id]).eq('completed')
+    expect(state.steps['cubesigner-policy-build']).eq(prior === 'completed' ? 'completed' : prior === 'policy-waiting' ? 'failed' : undefined)
+    expect(state.nextStage).eq(prior === 'completed' ? undefined : 'proof-materials')
+    expect(state.status).eq(prior === 'completed' ? 'prepared' : 'stage-complete')
+    expect(fs.readFileSync(intentPath, 'utf8')).eq(intent)
+    expect(JSON.parse(fs.readFileSync(planPath, 'utf8')).steps).deep.eq(current)
+    calls.length = 0
+    await applyPreparation(deployment, runner, undefined, {stage: 'protocol-context'})
+    expect(calls).empty
+  })
+
   it('adds the policy export to a funded staged plan and resumes without repeating prior stages', async () => {
     await makePlan()
     const intentPath = path.join(deployment, '.scrollsdk/intent.json')
@@ -647,6 +724,8 @@ describe('resumable preparation plan', () => {
       calls.push(step.id)
       if (step.id === 'cubesigner-policy-build' && !ready) throw new AwaitingInput({message: 'Supply approved compiler'})
     }}
+    await applyPreparation(deployment, runner, undefined, {stage: 'protocol-context'})
+    calls.length = 0
     const waiting = await applyPreparation(deployment, runner, undefined, {stage: 'proof-materials'})
     expect(waiting.status).to.equal('waiting')
     expect(calls).to.deep.equal(['cubesigner-policy-build'])
@@ -690,8 +769,12 @@ describe('resumable preparation plan', () => {
       calls.push(step.id)
       if (step.id === 'deployment-kit-published' && !published) throw new AwaitingInput({message: 'Publish the kit'})
     }}
+    await applyPreparation(deployment, runner, undefined, {stage: 'protocol-context'})
+    calls.length = 0
     await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'render'}), 'Prerequisite proof-materials')
     expect(calls).to.deep.equal([])
+    await applyPreparation(deployment, runner, undefined, {stage: 'protocol-context'})
+    calls.length = 0
     const waiting = await applyPreparation(deployment, runner, undefined, {stage: 'proof-materials'})
     expect(waiting.status).to.equal('waiting')
     expect(waiting.currentStep).to.equal('deployment-kit-published')
@@ -836,16 +919,116 @@ describe('resumable preparation plan', () => {
     expect(resumed.warnings?.join('\n')).include('plan.json').and.include('intent.json').and.include('missing: config.toml')
   })
 
+  it('refreshes the configured CubeSigner session during render even when old files exist', async () => {
+    const spec = fixture()
+    spec.signing = {...spec.signing, cubesigner: {}}
+    fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+    for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_OLD_INPUT')
+    const steps = preparationSteps(spec, true)
+    const session = steps.find(step => step.id === 'cubesigner-session')!
+    expect(session).to.include({effect: 'cloud', retry: 'safe', stage: 'render'})
+    expect(steps.indexOf(session)).to.be.greaterThan(steps.findIndex(step => step.id === 'secrets'))
+    expect(steps.indexOf(session)).to.be.lessThan(steps.findIndex(step => step.id === 'proof-check'))
+    const calls: {args: string[]; root: string}[] = []
+    await new CommandPreparationRunner(async (root, _step, args) => {calls.push({args, root})}).run(session, spec, deployment, {} as PreparationPlan)
+    expect(calls).to.deep.equal([{args: ['cubesigner-refresh', '-N', '--doge-config', '.data/doge-config.toml'], root: deployment}])
+    delete spec.signing.cubesigner
+    expect(preparationSteps(spec, true).map(step => step.id)).not.to.include('cubesigner-session')
+  })
+
+  it('stops render on session refresh failure and retries without replaying completed preparation', async () => {
+    const spec = fixture()
+    spec.signing = {...spec.signing, cubesigner: {}}
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+    const calls: string[] = []
+    let failRefresh = true
+    const runner = {async run(step: {id: string}) {
+      calls.push(step.id)
+      if (step.id === 'cubesigner-session' && failRefresh) throw new Error('CubeSigner login required')
+    }}
+    for (const stage of PREPARATION_STAGES.slice(0, PREPARATION_STAGES.indexOf('render'))) await applyPreparation(deployment, runner, undefined, {stage})
+    calls.length = 0
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'render'})).status).to.equal('failed')
+    expect(calls).to.deep.equal(['render-final', 'secrets', 'cubesigner-session'])
+    await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'}), 'Prerequisite render')
+    calls.length = 0
+    failRefresh = false
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'render'})).nextStage).to.equal('upload-secrets')
+    expect(calls).to.deep.equal(['cubesigner-session', 'proof-check'])
+    calls.length = 0
+    await applyPreparation(deployment, runner, undefined, {stage: 'render'})
+    expect(calls).to.deep.equal([])
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'})).status).to.equal('prepared')
+    expect(calls).to.deep.equal(['secret-upload'])
+  })
+
+  it('adds session refresh to a completed old staged plan and requires uploading the new seed', async () => {
+    const spec = fixture()
+    spec.signing = {...spec.signing, cubesigner: {}}
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    const fresh = await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+    const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...fresh}
+    delete body.id
+    body.steps = body.steps.filter(step => step.id !== 'cubesigner-session')
+    const old = {...body, id: createHash('sha256').update(JSON.stringify(body)).digest('hex')}
+    fs.writeFileSync(path.join(deployment, '.scrollsdk/plan.json'), JSON.stringify(old))
+    const statePath = path.join(deployment, '.scrollsdk/state.json')
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+    fs.writeFileSync(statePath, JSON.stringify({...state, planId: old.id, status: 'prepared', steps: Object.fromEntries(old.steps.map(step => [step.id, 'completed']))}))
+    const calls: string[] = []
+    const runner = {async run(step: {id: string}) {calls.push(step.id)}}
+    await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'}), 'Prerequisite render')
+    const rendered = await applyPreparation(deployment, runner, undefined, {stage: 'render'})
+    expect(calls).to.deep.equal(['cubesigner-session'])
+    expect(rendered.nextStage).to.equal('upload-secrets')
+    expect(rendered.steps['secret-upload']).to.equal(undefined)
+    expect(rendered.planId).to.equal(fresh.id)
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'})).status).to.equal('prepared')
+    expect(calls).to.deep.equal(['cubesigner-session', 'secret-upload'])
+  })
+
+  it('waits for both CubeSigner Secret inputs before uploading anything', async () => {
+    const spec = fixture()
+    spec.signing = {...spec.signing, cubesigner: {}}
+    spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}
+    spec.preparation!.secretUpload = {awsRegion: 'us-east-1', provider: 'aws'}
+    fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+    const calls: string[][] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
+    const step = preparationSteps(spec).find(step => step.id === 'secret-upload')!
+    const run = () => runner.run(step, spec, deployment, {} as PreparationPlan)
+    for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) {
+      let failure: unknown
+      try {await run()} catch (error) {failure = error}
+      expect(failure).to.be.instanceOf(AwaitingInput)
+      expect(calls).to.deep.equal([])
+      fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_TEST_INPUT')
+    }
+
+    await run()
+    expect(calls[0][0]).to.equal('push-secrets')
+    calls.length = 0
+    fs.writeFileSync(path.join(deployment, 'secrets/cubesigner-signer-session.json'), '')
+    let failure: unknown
+    try {await run()} catch (error) {failure = error}
+    expect(failure).to.be.instanceOf(AwaitingInput)
+    expect(calls).to.deep.equal([])
+  })
+
   it('uploads to the same cluster-scoped prefix used by generated references', async () => {
     const spec = fixture()
+    const plan = await makePlan()
+    fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+    for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_TEST_INPUT')
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}, namespace: 'partner', provider: 'aws'}
     spec.preparation!.secretUpload = {provider: 'aws'}
     const calls: string[][] = []
     const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
-    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, plan)
     expect(calls[0][calls[0].indexOf('--aws-prefix') + 1]).to.equal(`dogeos/test-cluster/partner/${spec.metadata.name}`)
     delete spec.preparation!.secretUpload
-    await runner.run(preparationSteps(spec, true).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    await runner.run(preparationSteps(spec, true).find(step => step.id === 'secret-upload')!, spec, deployment, plan)
     expect(calls[1]).to.deep.equal(calls[0])
     spec.preparation!.secretUpload = {provider: 'aws'}
     spec.preparation!.secretUpload.awsPrefix = 'conflicting'
@@ -855,13 +1038,16 @@ describe('resumable preparation plan', () => {
 
   it('shares the infrastructure target with Secret upload and monitoring Secret apply', async () => {
     const spec = fixture()
+    const plan = await makePlan()
+    fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+    for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_TEST_INPUT')
     spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}
     spec.infrastructure.kubeContext = 'selected-cluster'
     spec.infrastructure.namespace = 'selected-namespace'
     spec.preparation!.secretUpload = {awsRegion: 'us-east-1', provider: 'aws'}
     const calls: string[][] = []
     const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
-    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, plan)
     expect(calls).to.have.length(2)
     for (const args of calls) {
       expect(args[args.indexOf('--kube-context') + 1]).to.equal('selected-cluster')

@@ -100,6 +100,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   }
 
   add('secrets', 'Generate private runtime Secrets')
+  if (staged && spec.signing?.cubesigner) add('cubesigner-session', 'Refresh the CubeSigner runtime session for the configured role', 'cloud')
   if (spec.proofTopology?.enforcement === 'enforce') {
     add('deployment-kit', 'Export the signer deployment kit')
     if (p.deploymentKitPublication?.mode === 's3') add('deployment-kit-published', 'Publish and verify the signer deployment kit in the selected S3 bucket', 'cloud')
@@ -283,12 +284,20 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   }
 
   if (fs.existsSync(root) && fs.readdirSync(root).length > 0) throw new Error('setup plan requires an empty output directory')
-  fs.mkdirSync(root, {mode: 0o700, recursive: true})
-  fs.chmodSync(root, 0o700)
-  privateWrite(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
-  privateWrite(path.join(directory, 'intent.json'), specText)
-  writeJson(path.join(directory, 'plan.json'), plan)
-  writeJson(path.join(directory, 'state.json'), {files: {}, ...(options.staged ? {nextStage: 'genesis' as const} : {}), planId: plan.id, status: 'pending', steps: {}} satisfies PreparationState)
+  // Publish the initial plan as one directory, so an interrupted write cannot
+  // leave a nonempty output with no state from which to resume.
+  fs.mkdirSync(path.dirname(root), {mode: 0o700, recursive: true})
+  const staging = fs.mkdtempSync(path.join(path.dirname(root), `.${path.basename(root)}.plan-`))
+  try {
+    privateWrite(path.join(staging, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
+    privateWrite(path.join(staging, WORKFLOW_DIR, 'intent.json'), specText)
+    writeJson(path.join(staging, WORKFLOW_DIR, 'plan.json'), plan)
+    writeJson(path.join(staging, WORKFLOW_DIR, 'state.json'), {files: {}, ...(options.staged ? {nextStage: 'genesis' as const} : {}), planId: plan.id, status: 'pending', steps: {}} satisfies PreparationState)
+    // Rename may replace an empty directory, but refuses a concurrent writer's
+    // nonempty output. Never remove the destination to make room.
+    fs.renameSync(staging, root)
+  } finally {fs.rmSync(staging, {force: true, recursive: true})}
+
   return plan
 }
 
@@ -326,6 +335,30 @@ export function migratePolicyBuildStep(plan: PreparationPlan, spec: DeploymentSp
   return {...next, id: digest(JSON.stringify(next))}
 }
 
+/** Older render receipts did not create a signer session. Preserve all other work. */
+function migrateCubesignerSessionStep(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
+  if (plan.schema !== 'scrollsdk/preparation/v2' || !spec.signing?.cubesigner || plan.steps.some(step => step.id === 'cubesigner-session')) return plan
+  const session = preparationSteps(spec, true).find(step => step.id === 'cubesigner-session')!
+  const steps = plan.steps.flatMap(step => step.id === 'secrets' ? [step, session] : [step])
+  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
+  delete next.id
+  return {...next, id: digest(JSON.stringify(next))}
+}
+
+/** Split context generation out of proof preparation without resetting any step receipt. */
+export function migrateProtocolContextStage(plan: PreparationPlan): PreparationPlan {
+  if (plan.schema !== 'scrollsdk/preparation/v2') return plan
+  const context = plan.steps.find(step => step.id === 'protocol-context')
+  if (context?.stage !== 'proof-materials') return plan
+  const steps = plan.steps.filter(step => step !== context)
+  const firstProof = steps.findIndex(step => step.stage === 'proof-materials')
+  if (firstProof < 0) return plan
+  steps.splice(firstProof, 0, {...context, stage: 'protocol-context'})
+  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
+  delete next.id
+  return {...next, id: digest(JSON.stringify(next))}
+}
+
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
 export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage; warn?: (message: string) => void} = {}): Promise<PreparationState> {
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
@@ -343,7 +376,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
   const staged = plan.schema === 'scrollsdk/preparation/v2'
-  const migrated = migratePolicyBuildStep(migrateSignerHandoffSteps(plan, spec), spec)
+  const migrated = migratePolicyBuildStep(migrateCubesignerSessionStep(migrateProtocolContextStage(migrateSignerHandoffSteps(plan, spec)), spec), spec)
   if (JSON.stringify(preparationSteps(spec, staged)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
@@ -370,8 +403,10 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     if (migrated.id !== id) {
       // State first, then the plan: a crash between them is recovered on the next run.
       for (const step of SIGNER_HANDOFF_STEPS) delete state.steps[step]
+      // A newly generated seed must be uploaded even if an older plan finished upload.
+      if (!plan.steps.some(step => step.id === 'cubesigner-session') && migrated.steps.some(step => step.id === 'cubesigner-session')) delete state.steps['secret-upload']
       // Recheck the new publication evidence when a staged deployment renders.
-      if (staged && spec.proofTopology?.enforcement === 'enforce') delete state.steps['proof-check']
+      if (staged && spec.proofTopology?.enforcement === 'enforce' && plan.steps.some(step => SIGNER_HANDOFF_STEPS.has(step.id))) delete state.steps['proof-check']
       state.planId = migrated.id
       writeJson(statePath, state)
       writeJson(localPath(root, `${WORKFLOW_DIR}/plan.json`), migrated)

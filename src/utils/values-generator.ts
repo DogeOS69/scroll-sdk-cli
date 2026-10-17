@@ -26,7 +26,7 @@ import {
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
-import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, CORE_DOCKER_DEFAULT_TAG, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
+import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, CORE_DOCKER_DEFAULT_TAG, GENESIS_PREDEPLOYS, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
 import {contractsDeploymentGasPrice} from './contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
@@ -436,6 +436,9 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
   }
 
   const sequencer = role === 'sequencer'
+  // Existing ALB bindings explicitly select which public RPC endpoints exist.
+  const alb = spec.infrastructure.aws?.alb
+  const rpcIngressEnabled = (binding: string): boolean => alb?.mode !== 'existing' || Object.hasOwn(alb.bindings, binding)
   return yaml.dump({
     controller: {replicas: 1, strategy: 'RollingUpdate', type: 'statefulset'},
     image,
@@ -445,11 +448,11 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
     env: [{name: 'RUST_BACKTRACE', value: '1'}],
     ...(publicRpc && {ingress: {
       main: {
-        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}],
+        enabled: rpcIngressEnabled('l2-reth-rpc-public'), hosts: [{host: spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix'}]}],
         primary: true,
       },
       websocket: {
-        enabled: true, hosts: [{host: spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix', service: {port: 8546}}]}],
+        enabled: rpcIngressEnabled('l2-reth-rpc-public-ws'), hosts: [{host: spec.frontend.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGateway, paths: [{path: '/', pathType: 'Prefix', service: {port: 8546}}]}],
       },
     }}),
     externalSecrets: {},
@@ -1252,7 +1255,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: spec.proofTopology?.mode === 'active' && spec.frontend.hosts.proofCoordinator
-        ? {enabled: true, hosts: [{host: spec.frontend.hosts.proofCoordinator, paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}]}]}
+        ? {enabled: true, hosts: [{host: spec.frontend.hosts.proofCoordinator, paths: [{path: '/v1/prover/tasks', pathType: 'Prefix', service: {port: 7788}}]}]}
         : {enabled: false},
     },
     persistence: {
@@ -1442,6 +1445,7 @@ function generateFrontendsConfigValues(spec: DeploymentSpec): string {
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
     REACT_APP_EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
     REACT_APP_EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
+    REACT_APP_L1_GAS_PRICE_ORACLE: spec.contracts.overrides?.l1GasPriceOracle || GENESIS_PREDEPLOYS.L1_GAS_PRICE_ORACLE,
     REACT_APP_ROLLUP: spec.network.l2ChainName,
   })
   return yaml.dump(values)
@@ -1491,6 +1495,7 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           paths: [{ path: '/api', pathType: 'Prefix' }],
         }
       },
+      config: {network: {currency: {decimals: 18, name: 'Dogecoin', symbol: spec.network.tokenSymbol}, id: String(spec.network.l2ChainId), name: spec.network.l2ChainName, shortname: 'DogeOS'}},
       frontend: {
         env: {
           NEXT_PUBLIC_AD_BANNER_PROVIDER: 'none',
@@ -1498,14 +1503,8 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           NEXT_PUBLIC_API_HOST: spec.frontend.hosts.blockscout,
           NEXT_PUBLIC_API_PROTOCOL: 'https',
           NEXT_PUBLIC_API_WEBSOCKET_PROTOCOL: 'wss',
+          NEXT_PUBLIC_APP_HOST: spec.frontend.hosts.blockscout,
           NEXT_PUBLIC_APP_PROTOCOL: 'https',
-          NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS: '18',
-          NEXT_PUBLIC_NETWORK_CURRENCY_NAME: 'Dogecoin',
-          NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL: spec.network.tokenSymbol,
-          NEXT_PUBLIC_NETWORK_ID: String(spec.network.l2ChainId),
-          NEXT_PUBLIC_NETWORK_NAME: spec.network.l2ChainName,
-          NEXT_PUBLIC_NETWORK_SHORT_NAME: 'DogeOS',
-          PROMETHEUS_METRICS_ENABLED: 'false'
         },
         ingress: {
           hostname: spec.frontend.hosts.blockscout,
