@@ -8,6 +8,11 @@ const CONTENT_COMPARE_LIMIT_BYTES = 16 * 1024 * 1024
 const FILE_COMPARE_BUFFER_BYTES = 1024 * 1024
 const CLONED_MTIME_TOLERANCE_MS = 1
 
+interface CloneFilter {
+  excludes: Set<string>
+  includes: Set<string>
+}
+
 interface TreeEntry {
   kind: 'directory' | 'file' | 'symlink'
   mode: number
@@ -56,8 +61,12 @@ function readCloneExcludes(root: string): Set<string> {
   return excludes
 }
 
-function isCloneExcluded(relativePath: string, excludes: Set<string>): boolean {
-  return [...excludes].some(
+function isCloneExcluded(relativePath: string, filter: CloneFilter): boolean {
+  // Traverse ancestors of explicitly managed paths even when their parent is ignored.
+  if ([...filter.includes].some(included => relativePath === included
+    || relativePath.startsWith(`${included}${path.sep}`)
+    || included.startsWith(`${relativePath}${path.sep}`))) return false
+  return [...filter.excludes].some(
     excluded => relativePath === excluded || relativePath.startsWith(`${excluded}${path.sep}`),
   )
 }
@@ -78,7 +87,7 @@ function copyFileClone(source: string, destination: string): void {
 function cloneTree(
   source: string,
   destination: string,
-  excludes: Set<string>,
+  excludes: CloneFilter,
   relative = '',
   sourceRoot = source,
 ): void {
@@ -109,7 +118,7 @@ function cloneTree(
   }
 }
 
-function scanTree(root: string, excludes: Set<string>): Map<string, TreeEntry> {
+function scanTree(root: string, excludes: CloneFilter): Map<string, TreeEntry> {
   const result = new Map<string, TreeEntry>()
   const visit = (directory: string, relative: string): void => {
     for (const item of fs.readdirSync(directory, {withFileTypes: true})) {
@@ -142,7 +151,7 @@ function scanTree(root: string, excludes: Set<string>): Map<string, TreeEntry> {
 
 // Capture content rather than only mtimes: external edits can preserve size
 // and timestamps. Stream large proof files with bounded memory.
-function fingerprintTree(root: string, excludes: Set<string>): Map<string, string> {
+function fingerprintTree(root: string, excludes: CloneFilter): Map<string, string> {
   const result = new Map<string, string>()
   for (const [relative, entry] of scanTree(root, excludes)) {
     const file = path.join(root, relative)
@@ -221,7 +230,7 @@ function sameFile(source: string, staged: string, original: TreeEntry, next: Tre
 function calculateChanges(
   originalRoot: string,
   stagingRoot: string,
-  excludes: Set<string>,
+  excludes: CloneFilter,
 ): GenerationChange[] {
   const original = scanTree(originalRoot, excludes)
   const staged = scanTree(stagingRoot, excludes)
@@ -290,18 +299,18 @@ export class GenerationTransaction {
   readonly originalRoot: string
   readonly stagingRoot: string
 
-  private readonly cloneExcludes: Set<string>
+  private readonly cloneExcludes: CloneFilter
   private finished = false
   private readonly originalFingerprint: Map<string, string>
 
-  private constructor(originalRoot: string, stagingRoot: string, cloneExcludes: Set<string>) {
+  private constructor(originalRoot: string, stagingRoot: string, cloneExcludes: CloneFilter) {
     this.originalRoot = originalRoot
     this.stagingRoot = stagingRoot
     this.cloneExcludes = cloneExcludes
     this.originalFingerprint = fingerprintTree(stagingRoot, cloneExcludes)
   }
 
-  static begin(originalRoot = '.'): GenerationTransaction {
+  static begin(originalRoot = '.', includedPaths: readonly string[] = []): GenerationTransaction {
     const resolved = path.resolve(originalRoot)
     if (!fs.statSync(resolved).isDirectory()) {
       throw new Error(`generation root is not a directory: ${resolved}`)
@@ -311,7 +320,7 @@ export class GenerationTransaction {
       path.join(path.dirname(resolved), `.${path.basename(resolved)}.scrollsdk-generation-`),
     )
     try {
-      const cloneExcludes = readCloneExcludes(resolved)
+      const cloneExcludes = {excludes: readCloneExcludes(resolved), includes: new Set(includedPaths.map(value => normalizeExcludedPath(resolved, value)))}
       cloneTree(resolved, stagingRoot, cloneExcludes)
       return new GenerationTransaction(resolved, stagingRoot, cloneExcludes)
     } catch (error) {

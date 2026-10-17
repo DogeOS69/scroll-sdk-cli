@@ -2,6 +2,7 @@
 import * as toml from '@iarna/toml'
 import * as yaml from 'js-yaml'
 import fs from 'node:fs'
+import path from 'node:path'
 import {isDeepStrictEqual} from 'node:util'
 
 import type {CapacityManagerConfig} from '../types/capacity-manager.js'
@@ -10,16 +11,43 @@ import type {ProofProgramPublicationV1} from '../types/proof-program-publication
 import type {ProofWorkerImageCheckV1} from '../types/proof-worker-image-check.js'
 import type {ProverWorkerContractV1} from './proof-topology-compiler.js'
 
+import {assertDeploymentSpecFields} from './deployment-spec-fields.js'
 import {validateDstackAwsBackend} from './dstack-credentials.js'
 import {assertDstackInternalIngress} from './dstack-internal-tls.js'
+import {GenerationTransaction} from './generation-transaction.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
 import {DEFAULT_PROOF_DEPLOYMENT_CONTRACT, readProofDeploymentContract, resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {workerCommand} from './proof-workers-plan.js'
-import {mergeBootstrapValues} from './spec-bootstrap.js'
+import {loadSdkTemplateFiles, mergeBootstrapValues} from './spec-bootstrap.js'
 import {specDstackController, specKubernetesTarget} from './spec-kubernetes-target.js'
 
 export const CAPACITY_MANAGER_VALUES = 'values/capacity-manager-production.yaml'
 export const CAPACITY_MANAGER_PLAN = '.scrollsdk/capacity-manager/plan.json'
+const CAPACITY_MANAGER_CONFIG = '.scrollsdk/capacity-manager/config.json'
+// Include only capacity inputs/outputs; workflow locks, env and receipts stay excluded.
+export const CAPACITY_MANAGER_STATE_PATHS = ['.scrollsdk/intent.json', '.scrollsdk/plan.json', '.scrollsdk/proof-workers/plan.json', '.scrollsdk/proof-workers/state.json', '.scrollsdk/capacity-manager'] as const
+
+interface CapacityPreparationOptions {
+  dstackUrl?: string
+  sdkDirectory?: string
+  specFile?: string
+}
+
+function capacitySpec(root: string, specFile?: string): DeploymentSpec {
+  const spec = JSON.parse(fs.readFileSync(localPath(root, '.scrollsdk/intent.json'), 'utf8')) as DeploymentSpec
+  const saved = localPath(root, CAPACITY_MANAGER_CONFIG)
+  const selection = specFile ? yaml.load(fs.readFileSync(specFile, 'utf8')) as DeploymentSpec
+    : fs.existsSync(saved) ? JSON.parse(fs.readFileSync(saved, 'utf8')) : undefined
+  if (selection) {
+    if (!selection.capacityManager || selection.proofWorkers) throw new Error('Select capacityManager without proofWorkers in --spec')
+    assertDeploymentSpecFields({capacityManager: selection.capacityManager})
+    spec.capacityManager = selection.capacityManager
+    delete spec.proofWorkers
+  }
+
+  return spec
+}
+
 const architectures = {A100: '80', A6000: '86', L4: '89', L40S: '89', RTX3090: '86', RTX4090: '89'}
 
 /** Match Core's transport boundary and preserve the operator's TLS endpoint. */
@@ -41,7 +69,7 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
   const wpUrl = new URL(spec.proofTopology.deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300')
   if (!['http:', 'https:'].includes(wpUrl.protocol) || wpUrl.username || wpUrl.password || wpUrl.search || wpUrl.hash) throw new Error('capacityManager requires a credential-free WP HTTP endpoint')
   const fleet = {action: input.fleet?.action ?? 'create', cpus: input.fleet?.cpus ?? 16, diskSizeGiB: input.fleet?.diskSizeGiB ?? 200, idleDurationSeconds: input.fleet?.idleDurationSeconds ?? 600, memoryGiB: input.fleet?.memoryGiB ?? (input.gpu === 'L40S' ? 128 : 64)}
-  const config = {...input, fleet, instanceTypes: input.instanceTypes ?? [], maxHourlyCostUsd: input.maxHourlyCostUsd ?? (input.provider === 'aws' ? 3 : 1.6), maxPricePerHourUsd: input.maxPricePerHourUsd ?? (input.provider === 'aws' ? 1.5 : 0.8), maxWorkers: input.maxWorkers ?? 2, minWorkers: input.minWorkers ?? 1, scaleDownTtlSeconds: input.scaleDownTtlSeconds ?? 300, targetDrainSeconds: input.targetDrainSeconds ?? 600, workerIdPrefix: input.workerIdPrefix ?? `cm-${digest(spec.metadata.name).slice(0, 16)}`}
+  const config = {...input, fleet, instanceTypes: input.instanceTypes ?? [], maxHourlyCostUsd: input.maxHourlyCostUsd ?? (input.provider === 'aws' ? 3 : 1.6), maxPricePerHourUsd: input.maxPricePerHourUsd ?? (input.provider === 'aws' ? 1.5 : 0.8), maxWorkers: input.maxWorkers ?? 2, minReliability: input.minReliability ?? 0.95, minWorkers: input.minWorkers ?? 1, scaleDownTtlSeconds: input.scaleDownTtlSeconds ?? 300, targetDrainSeconds: input.targetDrainSeconds ?? 600, workerIdPrefix: input.workerIdPrefix ?? `cm-${digest(spec.metadata.name).slice(0, 16)}`}
   if (!['aws', 'vastai'].includes(config.provider) || !Object.hasOwn(architectures, config.gpu)) throw new Error('Unsupported capacityManager provider/GPU')
   if (!config.image?.repository || !/^[\w./:-]+$/.test(config.image.repository) || !/^sha256:[\da-f]{64}$/.test(config.image.digest)) throw new Error('capacityManager.image must select a published immutable capacity-manager binary image')
   if (!/^[a-z][\da-z-]{0,29}$/.test(config.workerIdPrefix)) throw new Error('capacityManager.workerIdPrefix must be a lowercase resource prefix, at most 30 characters')
@@ -67,6 +95,8 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
     if (!Number.isSafeInteger(config[key]) || config[key] < (key === 'minWorkers' || key === 'scaleDownTtlSeconds' ? 0 : 1)) throw new Error(`capacityManager.${key} has an invalid integer value`)
   }
 
+  if (!Number.isFinite(config.minReliability) || config.minReliability < 0.95 || config.minReliability > 1) throw new Error('capacityManager.minReliability must be between 0.95 and 1')
+
   // Core's dstack adapter reserves eight extra slots and caps the inventory at 1024.
   if (config.maxWorkers > 1016 || config.minWorkers > config.maxWorkers) throw new Error('capacityManager worker bounds exceed Core capacity or minWorkers exceeds maxWorkers')
   for (const key of ['maxPricePerHourUsd', 'maxHourlyCostUsd'] as const) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`capacityManager.${key} must be positive and finite`)
@@ -78,6 +108,7 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
 export function capacityManagerFleets(spec: DeploymentSpec): {action: 'create' | 'reuse'; configurations: Record<string, any>[]} {
   const config = resolveCapacityManager(spec)
   return {action: config.fleet.action, configurations: config.fleets.map(name => ({
+    ...(config.provider === 'vastai' ? {backend_options: [{min_reliability: config.minReliability, offer_order: 'price', type: 'vastai'}]} : {}),
     backends: [config.provider],
     idle_duration: `${config.fleet.idleDurationSeconds}s`,
     ...(config.instanceTypes.length > 0 ? {instance_types: config.instanceTypes} : {}),
@@ -106,8 +137,21 @@ export function buildCapacityManagerValues(spec: DeploymentSpec, worker: ProverW
   return {image: config.image, manager: {dstack: {fleets: config.fleets, instanceTypes: config.instanceTypes, maxPricePerHourUsd: config.maxPricePerHourUsd, project: config.project, regions: config.regions}, policy: toml.stringify(policy as any), proofWorkBaseUrl: spec.proofTopology!.deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300', workerCommand: workerCommand(worker, publication, '{worker_id}', architectures[config.gpu]), workerIdPrefix: config.workerIdPrefix, workerImage: `${worker.image.repository}@${worker.image.digest}`}, prepared: true}
 }
 
-export function prepareCapacityManager(root: string, readContract = validateProofDeploymentContract): {namespace: string; project: string; valuesFile: string} {
-  const spec = JSON.parse(fs.readFileSync(localPath(root, '.scrollsdk/intent.json'), 'utf8')) as DeploymentSpec
+export function prepareCapacityManager(root: string, readContract = validateProofDeploymentContract, options: CapacityPreparationOptions = {}): {namespace: string; project: string; valuesFile: string} {
+  const transaction = GenerationTransaction.begin(root, CAPACITY_MANAGER_STATE_PATHS)
+  try {
+    const result = prepareCapacityManagerInDirectory(transaction.stagingRoot, readContract, options)
+    const valuesFile = transaction.toOriginalPath(result.valuesFile)
+    transaction.commit()
+    return {...result, valuesFile}
+  } catch (error) {
+    transaction.rollback()
+    throw error
+  }
+}
+
+function prepareCapacityManagerInDirectory(root: string, readContract: typeof validateProofDeploymentContract, options: CapacityPreparationOptions = {}): {namespace: string; project: string; valuesFile: string} {
+  const spec = capacitySpec(root, options.specFile)
   resolveCapacityManager(spec)
   assertSdkWorkersRetired(root)
   const contract = readContract(root)
@@ -115,15 +159,25 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   const read = (file: string) => JSON.parse(fs.readFileSync(resolveContractFile(root, file), 'utf8'))
   const projected = buildCapacityManagerValues(spec, read(contract.worker.contractFile), read(contract.inputs.publication.path), read('.data/proof-worker-image-check-v1.json'))
   const file = localPath(root, CAPACITY_MANAGER_VALUES)
-  if (!fs.existsSync(file)) throw new Error('Copy the capacity-manager production values template from the matching SDK checkout before preparation')
+  let template: string
+  if (fs.existsSync(file)) template = fs.readFileSync(file, 'utf8')
+  else {
+    const planFile = localPath(root, '.scrollsdk/plan.json')
+    const sdkDirectory = options.sdkDirectory ?? (fs.existsSync(planFile) ? read('.scrollsdk/plan.json').sdkDirectory : undefined)
+    if (!sdkDirectory || !spec.templates?.sdkRevision) throw new Error('Missing capacity-manager values: supply --sdk-dir with the frozen templates.sdkRevision available')
+    template = loadSdkTemplateFiles(path.resolve(sdkDirectory), spec.templates.sdkRevision).files[CAPACITY_MANAGER_VALUES]
+    if (!template) throw new Error('Pinned SDK revision lacks capacity-manager production values')
+  }
+
   const controller = yaml.load(fs.readFileSync(localPath(root, 'values/dstack-controller-production.yaml'), 'utf8')) as any
   const coordinator = yaml.load(fs.readFileSync(localPath(root, contract.components.proofCoordinator.valuesFile), 'utf8')) as any
   specDstackController(spec)
   const dstackNamespace = specKubernetesTarget(spec).namespace
   const dstackName = controller.fullnameOverride ?? 'dstack-controller'
-  const existing = yaml.load(fs.readFileSync(file, 'utf8')) as any
+  const existing = yaml.load(template) as any
   if (spec.dstackController?.internalTls) assertDstackInternalIngress(controller, spec.dstackController.internalTls)
-  projected.manager.dstack.serverUrl = capacityManagerDstackUrl(spec.dstackController?.internalTls ? `https://${spec.dstackController.internalTls.hostname}` : existing.manager?.dstack?.serverUrl)
+  projected.manager.dstack.serverUrl = capacityManagerDstackUrl(spec.dstackController?.internalTls ? `https://${spec.dstackController.internalTls.hostname}` : options.dstackUrl ?? existing.manager?.dstack?.serverUrl)
+  if (options.dstackUrl && options.dstackUrl !== projected.manager.dstack.serverUrl) throw new Error('--dstack-url must match the frozen internal TLS endpoint')
   projected.dstackAuth = controller.auth
   if (!controller.auth?.existingSecret || !controller.auth?.key) throw new Error('Dstack auth Secret reference is required')
   projected.wpAuth = {existingSecret: coordinator.persistence.secrets.name, key: 'proof-work-token'}
@@ -134,7 +188,7 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   // Clear a shared-token binding kept from older generated values; the chart
   // refuses both modes at once.
   projected.manager.workerTokenSecret = ''
-  const content = mergeBootstrapValues(fs.readFileSync(file, 'utf8'), yaml.dump(projected))
+  const content = mergeBootstrapValues(template, yaml.dump(projected))
   const values = yaml.load(content) as any
   // Fixed, separately named manager: deployment/selector and Secret destination are a shared contract.
   if (values.fullnameOverride !== 'capacity-manager') throw new Error('Keep capacity-manager fullnameOverride at its template name')
@@ -149,6 +203,7 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   wp.networkPolicy.allowFrom.capacityManager = [{podSelector: {matchLabels: {'app.kubernetes.io/name': 'capacity-manager'}}}]
   fs.writeFileSync(wpFile, yaml.dump(wp, {lineWidth: -1, noRefs: true}))
   fs.writeFileSync(file, content)
+  if (options.specFile) writeJson(localPath(root, CAPACITY_MANAGER_CONFIG), {capacityManager: spec.capacityManager})
   const fleetFiles = fleetIntent.configurations.map(configuration => {
     const relative = `.scrollsdk/capacity-manager/fleets/${configuration.name}.yaml`
     const content = yaml.dump(configuration, {lineWidth: -1, noRefs: true})
@@ -164,10 +219,10 @@ export function prepareCapacityManager(root: string, readContract = validateProo
 export function prepareCapacityManagerIfSelected(root: string): void {
   const intent = localPath(root, '.scrollsdk/intent.json')
   if (!fs.existsSync(intent)) return
-  const spec = JSON.parse(fs.readFileSync(intent, 'utf8')) as DeploymentSpec
+  const spec = capacitySpec(root)
   if (!spec.capacityManager) return
   // Initial proof rendering precedes publication. Final rendering must prepare it.
   if (!fs.existsSync(localPath(root, DEFAULT_PROOF_DEPLOYMENT_CONTRACT))) return
   if (!readProofDeploymentContract(root).contract.inputs?.publication) return
-  prepareCapacityManager(root)
+  prepareCapacityManagerInDirectory(root, validateProofDeploymentContract)
 }

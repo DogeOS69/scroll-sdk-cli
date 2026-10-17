@@ -23,7 +23,7 @@ import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validati
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
-import {prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
+import {CAPACITY_MANAGER_STATE_PATHS, prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
@@ -71,7 +71,7 @@ import {
 } from '../../utils/signer-roles.js'
 import {specDstackController} from '../../utils/spec-kubernetes-target.js'
 import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
-import {reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
+import {TSO_ALB_EDGE_RECEIPT, reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
 import {tsoSignerNetwork} from '../../utils/tso-signer-network.js'
 import {
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
@@ -1337,7 +1337,7 @@ export default class SetupPrepCharts extends Command {
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
-  // Resolve pinned governance inputs at the source: .scrollsdk/ is excluded from staging.
+  // Resolve pinned governance inputs at the source: governance receipts remain excluded from staging.
   private policyInputRoot?: string
   private proofIntent?: ResolvedProofIntent
   private skipL2ContractDeploymentBlock: boolean = false
@@ -1415,7 +1415,7 @@ export default class SetupPrepCharts extends Command {
 
     const deploymentRoot = process.cwd()
     const originalValuesDir = path.resolve(deploymentRoot, flags['values-dir'])
-    const transaction = GenerationTransaction.begin(deploymentRoot)
+    const transaction = GenerationTransaction.begin(deploymentRoot, this.flags['proof-preparation'] ? [] : [...CAPACITY_MANAGER_STATE_PATHS, TSO_ALB_EDGE_RECEIPT])
     let generation: PrepChartGenerationResult
     let changedFiles: string[] = []
     try {

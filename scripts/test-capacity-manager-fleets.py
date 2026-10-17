@@ -66,6 +66,17 @@ class CapacityFleets(unittest.TestCase):
         # preparation never writes a worker secret into the project.
         self.client.secret.assert_not_called()
 
+    def test_vast_reliability_is_retained_and_drift_blocks_reuse(self):
+        self.payload['fleets'][0]['backend_options'] = [
+            {'type': 'vastai', 'min_reliability': 0.99, 'offer_order': 'price'}]
+        adapter.prepare(self.client, self.payload)
+        stored = self.client.applied[0].spec.model_dump(mode='json')
+        self.assertEqual(stored['configuration']['backend_options'][0]['min_reliability'], 0.99)
+        self.payload['fleets'][0]['backend_options'][0]['min_reliability'] = 0.95
+        with self.assertRaisesRegex(adapter.PreparationError, 'differs'):
+            adapter.prepare(self.client, self.payload)
+        self.assertEqual(len(self.client.applied), 1)
+
     def test_missing_reuse_never_creates_or_writes_token(self):
         self.payload['fleetAction'] = 'reuse'
         with self.assertRaisesRegex(adapter.PreparationError, 'missing'):

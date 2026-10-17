@@ -13,7 +13,7 @@ import {validateServiceNetworkPolicy} from './service-network-policy.js'
 import {specKubernetesTarget} from './spec-kubernetes-target.js'
 
 const SUBNETS = 'alb.ingress.kubernetes.io/subnets'
-const RECEIPT = '.scrollsdk/tso-alb-edge.json'
+export const TSO_ALB_EDGE_RECEIPT = '.scrollsdk/tso-alb-edge.json'
 export interface TsoEdgeDependencies {
   aws?: Pick<AwsCliRunner, 'json'>
   kubectl?: (args: string[]) => string
@@ -45,7 +45,7 @@ export function planTsoAlbEdge(root: string, spec: DeploymentSpec, dependencies:
   const vpc = cluster?.resourcesVpcConfig?.vpcId
   if (!/^vpc-[\da-f]+$/.test(vpc ?? '') || !cluster.endpoint) throw new Error('EKS discovery did not return a VPC and endpoint')
   if (readKube(['config', 'view', '--minify', '-o', 'jsonpath={.clusters[0].cluster.server}']) !== cluster.endpoint) throw new Error('Selected Kubernetes context does not address the selected EKS cluster')
-  const file = localPath(root, RECEIPT)
+  const file = localPath(root, TSO_ALB_EDGE_RECEIPT)
   let previous: any
   if (fs.existsSync(file)) {
     try {previous = JSON.parse(fs.readFileSync(file, 'utf8'))} catch {throw new Error('Invalid TSO ALB discovery receipt')}
@@ -133,5 +133,5 @@ export function reconcileTsoAlbEdge(root: string, dependencies?: TsoEdgeDependen
   if (!spec.preparation?.tsoAlbEdge?.enabled) return
   const result = planTsoAlbEdge(root, spec, dependencies, valuesDirectory)
   privateWrite(localPath(root, path.join(valuesDirectory, 'tso-service-production.yaml')), yaml.dump(result.values, {lineWidth: -1, noRefs: true}))
-  writeJson(localPath(root, RECEIPT), result.receipt)
+  writeJson(localPath(root, TSO_ALB_EDGE_RECEIPT), result.receipt)
 }

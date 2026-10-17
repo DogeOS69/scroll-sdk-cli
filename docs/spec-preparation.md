@@ -1026,9 +1026,10 @@ this workflow neither builds nor publishes it.
   to dstack or rent GPU workers.
 - Install the supporting releases manually, including WP with the generated
   NetworkPolicy, proof token Secrets, and the dstack controller.
-- No separate capacity-manager preparation or credential command is required.
-  Make synchronizes the referenced Worker token to the selected dstack project
-  before Helm installs the manager. Its controller token is referenced in place.
+- For a newly planned deployment, no separate capacity preparation command is
+  required. Make validates the project and prepares empty fleets before Helm
+  installs the manager. The manager mounts existing Secret references and mints
+  a separate credential for each Worker; no shared Worker token is copied to dstack.
 - From `deployment/`, review the generated values and run
   `make install-capacity-manager`. **This explicit installation starts Core's
   capacity reconciliation and may rent paid workers.** `install-all` excludes it.
@@ -1040,10 +1041,39 @@ Deployment, not proof-worker acceptance. There is no SDK rental-duration cap on
 Core's continuous manager. Follow the SDK drain/retirement instructions: pausing
 or uninstalling the manager alone does not establish that remote billing stopped.
 
-Do not switch an existing frozen deployment by editing its intent JSON. This is
-an opt-in for newly planned deployments; a live controller handoff requires the
-SDK's explicit retirement procedure. The two capacity owners are mutually
-exclusive, and preparation refuses an unretired SDK Worker session.
+For an existing deployment, keep its frozen intent and preparation plan intact.
+After completing the SDK's Worker retirement procedure (`status` / `destroy`
+until the saved session is `destroyed`), select `capacityManager` in a separate
+spec file, without `proofWorkers`, then prepare locally:
+
+```bash
+scrollsdk setup capacity-manager prepare --dir ./deployment \
+  --spec ./capacity-manager-spec.yaml --sdk-dir /path/to/scroll-sdk \
+  --dstack-url https://controller.example.invalid
+```
+
+Only the `capacityManager` section is read from `--spec`. Kubernetes targeting,
+controller configuration and proof inputs remain those of the frozen deployment.
+The selection is saved separately in `.scrollsdk/capacity-manager/config.json`
+and reused on subsequent `prepare` and `prep-charts` runs. This command validates
+and reuses the existing proof contract, publication and checked Worker image;
+it does not replay genesis, funding, proof compilation or secret upload.
+
+If the production values file is missing, preparation reads its template from
+`templates.sdkRevision` in the frozen intent, using `--sdk-dir` or the SDK
+checkout saved in the preparation plan. It does not update other templates or
+the Makefile. The pinned SDK and existing Makefile must support Capacity Manager.
+The controller URL must already have working HTTPS (HTTP is allowed only for a
+literal loopback IP); `--dstack-url` records that endpoint, not a TLS deployment.
+With frozen `dstackController.internalTls`, it must match that configured endpoint.
+Without the flag, preparation preserves the URL in existing values or uses the
+frozen internal TLS configuration.
+
+Review the generated values, WP NetworkPolicy and empty fleet YAML before
+installing. Preparation commits these local outputs together; failure leaves
+existing files intact. It refuses an unretired SDK session and refuses to replace
+a changed prepared capacity plan until the old manager is drained and its plan
+archived. After a handoff, the saved capacity plan also blocks SDK Worker apply.
 
 ### Shared namespace and automatic capacity credentials
 
@@ -1060,10 +1090,11 @@ No extra capacity-manager admin-token Secret is created.
 
 After uploading Secrets, install dstack and the proof services with the generated
 Makefile. Then run `make install-capacity-manager`. That target first waits for
-dstack's rollout, reads the referenced worker token from Kubernetes (after the
-proof chart's ExternalSecret has synchronized), and registers it in the selected
-dstack project via its API. It then installs the manager. Failure to synchronize
-stops the recipe before Helm; retry the same Make target after fixing the cause.
+dstack's rollout and prepares the selected project fleets via the controller.
+It then installs the manager with the existing dstack, proof-work and
+worker-credential-master Secret references. Ensure the proof chart's ExternalSecret
+has synchronized before installation. A fleet preparation failure stops the
+recipe before Helm; retry the same Make target after fixing the cause.
 The preflight first checks project/backend availability and creates missing
 empty fleets (`fleet.action: create`, the default), or checks existing fleets
 (`fleet.action: reuse`). Both modes compare the effective fleet configuration;
@@ -1085,6 +1116,10 @@ configuration operator-owned and the install preflight verifies that it exists.
 
 For Vast, retain `providers: [vastai]` and `vastaiApiKeyEnv: VASTAI_API_KEY` in
 `preparation.dstack`; the value stays in `deployment.env` and generated Secrets.
+`capacityManager.minReliability` defaults to `0.95` and accepts values from `0.95`
+to `1`. It is projected to Vast fleet `backend_options.min_reliability`, with
+`offer_order: price`. Explicitly carry over any stricter reliability floor when
+switching from bounded Workers. AWS fleets do not receive Vast backend options.
 For AWS, use the controller's existing IRSA role and explicit existing VPCs:
 
 ```yaml

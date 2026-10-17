@@ -14,15 +14,24 @@ import {capacityExec} from '../../utils/proof-workers-lifecycle.js'
 export default class CapacityManager extends Command {
   static args = {action: Args.string({default: 'prepare', options: ['prepare', 'credentials', 'status']})}
   static description = 'Prepare Core capacity-manager configuration and credentials; install separately with Helm to start renting workers'
-  static flags = {'deployment-dir': Flags.string({aliases: ['dir'], default: DEFAULT_DEPLOYMENT}), json: Flags.boolean({default: false}), 'kube-context': Flags.string({description: 'Explicit Kubernetes context; otherwise uses the saved spec target'}), namespace: Flags.string({description: 'Must match the namespace saved during rendering'})}
+  static flags = {
+    'deployment-dir': Flags.string({aliases: ['dir'], default: DEFAULT_DEPLOYMENT}),
+    'dstack-url': Flags.string({description: 'Prepare only: verified controller HTTPS endpoint; does not provision TLS'}),
+    json: Flags.boolean({default: false}),
+    'kube-context': Flags.string({description: 'Explicit Kubernetes context; otherwise uses the saved spec target'}),
+    namespace: Flags.string({description: 'Must match the namespace saved during rendering'}),
+    'sdk-dir': Flags.string({description: 'Prepare only: SDK checkout containing the frozen template revision, for missing values'}),
+    spec: Flags.string({description: 'Prepare only: read capacityManager from this spec; preserve frozen deployment intent and proof materials'}),
+  }
 
   async run(): Promise<void> {
     const {args, flags} = await this.parse(CapacityManager)
     const out = new JsonOutputContext('setup capacity-manager', flags.json)
     try {
       const root = path.resolve(flags['deployment-dir'])
+      if (args.action !== 'prepare' && (flags.spec || flags['sdk-dir'] || flags['dstack-url'])) throw new Error('--spec, --sdk-dir and --dstack-url are only valid for prepare')
       if (args.action === 'prepare') {
-        const result = prepareCapacityManager(root)
+        const result = prepareCapacityManager(root, undefined, {dstackUrl: flags['dstack-url'], sdkDirectory: flags['sdk-dir'], specFile: flags.spec && path.resolve(flags.spec)})
         out.info('No GPU allocation. Install WP with the generated network policy, then explicitly run make install-capacity-manager.')
         out.success(result)
         return

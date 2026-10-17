@@ -23,7 +23,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.bridge.targetAmounts": {"keys":["bridge","feeWallet","sequencer"],"kind":"object"},
   "$.bridge.targetAmountsSats": {"keys":["bridge","feeWallet","sequencer"],"kind":"object"},
   "$.bridge.thresholds": {"keys":["attestation","recovery"],"kind":"object"},
-  "$.capacityManager": {"keys":["fleet","fleets","gpu","image","instanceTypes","maxHourlyCostUsd","maxPricePerHourUsd","maxWorkers","minWorkers","project","provider","regions","scaleDownTtlSeconds","targetDrainSeconds","workerIdPrefix"],"kind":"object"},
+  "$.capacityManager": {"keys":["fleet","fleets","gpu","image","instanceTypes","maxHourlyCostUsd","maxPricePerHourUsd","maxWorkers","minReliability","minWorkers","project","provider","regions","scaleDownTtlSeconds","targetDrainSeconds","workerIdPrefix"],"kind":"object"},
   "$.capacityManager.fleet": {"keys":["action","cpus","diskSizeGiB","idleDurationSeconds","memoryGiB"],"kind":"object"},
   "$.capacityManager.fleets": {"kind":"array"},
   "$.capacityManager.image": {"keys":["digest","repository"],"kind":"object"},

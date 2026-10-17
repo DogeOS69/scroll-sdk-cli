@@ -15,6 +15,8 @@ export interface CapacityManagerConfig {
   maxHourlyCostUsd?: number
   maxPricePerHourUsd?: number
   maxWorkers?: number
+  /** Vast offer reliability floor, between 0.95 and 1 (default 0.95). */
+  minReliability?: number
   minWorkers?: number
   /** Dedicated dstack project; defaults the imported controller project to this name. */
   project: string
