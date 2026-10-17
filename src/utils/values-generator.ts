@@ -26,7 +26,7 @@ import {
   L1_INTERFACE_RPC_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
-import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, CORE_DOCKER_DEFAULT_TAG, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
+import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, CORE_DOCKER_DEFAULT_TAG, GENESIS_PREDEPLOYS, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
 import {contractsDeploymentGasPrice} from './contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
@@ -1445,6 +1445,7 @@ function generateFrontendsConfigValues(spec: DeploymentSpec): string {
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
     REACT_APP_EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
     REACT_APP_EXTERNAL_RPC_URI_L2: spec.frontend.externalUrls.l2Rpc,
+    REACT_APP_L1_GAS_PRICE_ORACLE: spec.contracts.overrides?.l1GasPriceOracle || GENESIS_PREDEPLOYS.L1_GAS_PRICE_ORACLE,
     REACT_APP_ROLLUP: spec.network.l2ChainName,
   })
   return yaml.dump(values)

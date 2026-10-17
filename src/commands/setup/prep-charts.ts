@@ -2046,6 +2046,7 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
           REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
           REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_L1_GAS_PRICE_ORACLE: this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),
           REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),

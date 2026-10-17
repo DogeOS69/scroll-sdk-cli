@@ -154,17 +154,19 @@ describe('frontend dynamic deposit configuration', () => {
     command.proofIntent = {intent: {generation: 'real'}}
     command.configData = {general: {CHAIN_ID_L2: 534_352}, ingress: {FRONTEND_HOST: 'portal.example.invalid'}}
     command.dogeConfig = {network: 'testnet'}
+    command.contractsConfig = {L1_GAS_PRICE_ORACLE_ADDR: '0x0000000000000000000000000000000000000012'}
     command.jsonCtx = {addWarning() {}, info() {}, logSuccess() {}}
     sinon.stub(command, 'log')
     try {
       process.chdir(root)
-      for (const data of [{scrollConfig: 'REACT_APP_DOGE_BRIDGE_ADDRESS = "old"\n'}, {configMaps: {'frontend-config': {data: {'frontend-config': 'REACT_APP_DOGE_BRIDGE_ADDRESS = old\n'}}}}]) {
+      for (const data of [{scrollConfig: 'REACT_APP_DOGE_BRIDGE_ADDRESS = "old"\nREACT_APP_L1_GAS_PRICE_ORACLE = ""\n'}, {configMaps: {'frontend-config': {data: {'frontend-config': 'REACT_APP_DOGE_BRIDGE_ADDRESS = old\n'}}}}]) {
         fs.writeFileSync(file, yaml.dump(data))
         await command.processConfigYaml(path.join(root, 'values'))
         const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
         expect(values).not.to.have.property('configMaps')
         const config = toml.parse(values.scrollConfig)
         expect(config.REACT_APP_DOGEOS_GENESIS_STATE_HASH).eq(genesisHash)
+        expect(config.REACT_APP_L1_GAS_PRICE_ORACLE).eq(command.contractsConfig.L1_GAS_PRICE_ORACLE_ADDR)
         expect(config).not.to.have.property('REACT_APP_DOGE_BRIDGE_ADDRESS')
       }
     } finally {process.chdir(oldCwd)}
