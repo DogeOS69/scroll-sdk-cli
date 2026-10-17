@@ -1,6 +1,6 @@
 import type {PreparationStep} from './preparation-plan.js'
 
-export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'proof-materials', 'render', 'upload-secrets'] as const
+export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'protocol-context', 'proof-materials', 'render', 'upload-secrets'] as const
 export type PreparationStage = typeof PREPARATION_STAGES[number]
 
 /** Stage boundaries are explicit; prerequisites are checked, never executed implicitly. */
@@ -9,7 +9,8 @@ export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationSt
     aws: ['identities', 'proof-aws', 'archive', 'archive-access', 'bridge-sequencer-kms', 'dstack', 'dstack-db', 'blockscout-db'],
     'bridge-funding': ['bridge-fee-wallet', 'bridge-prepare', 'ethereum-anchor', 'managed-helper-prepare', 'managed-helper-funding', 'managed-helper-setup', 'production-wallets', 'helper-funding', 'helper-setup', 'bridge-info', 'production-funding', 'helper-fund', 'managed-helper-fund', 'managed-helper-verify'],
     genesis: ['bootstrap', 'genesis-local'],
-    'proof-materials': ['cubesigner-policy-build', 'protocol-context', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials', 'charts', 'proof-publish', 'charts-published', 'deployment-kit', 'deployment-kit-published'],
+    'proof-materials': ['cubesigner-policy-build', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials', 'charts', 'proof-publish', 'charts-published', 'deployment-kit', 'deployment-kit-published'],
+    'protocol-context': ['protocol-context'],
     render: ['render-final', 'secrets', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
     'upload-secrets': ['secret-upload'],
   }

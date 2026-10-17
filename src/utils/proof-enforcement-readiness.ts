@@ -6,6 +6,7 @@ import type {ProofProgramPublicationV1} from '../types/proof-program-publication
 import type {PolicyReceiptReference} from './cubesigner-policy-receipts.js'
 import type {ProofDeploymentContract} from './proof-deployment-contract.js'
 
+import {EXTERNAL_POLICY_INPUT, type ExternalPolicySelection, verifyExternalPolicy} from './cubesigner-policy-import.js'
 import {resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {deploymentKitBlockers} from './deployment-kit-record.js'
 import {readProofAwsConfig} from './proof-aws-config.js'
@@ -19,6 +20,20 @@ function pinnedJson(root: string, reference: PolicyReceiptReference): Record<str
   const value = JSON.parse(fs.readFileSync(file, 'utf8'))
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`Invalid evidence: ${reference.path}`)
   return value
+}
+
+/** A deployment-specific policy build can have a different source commit from the proof images. */
+function policySourceMatches(root: string, release: Record<string, unknown>, proofRevision: string | undefined): boolean {
+  if (release.coreRevision === proofRevision) return true
+  const selectionFile = path.resolve(root, EXTERNAL_POLICY_INPUT)
+  if (!fs.existsSync(selectionFile)) return false
+  const selection = JSON.parse(fs.readFileSync(proofRegularFile(selectionFile, 16 * 1024), 'utf8')) as ExternalPolicySelection
+  if (selection.method !== 'external' || selection.expectedCoreRevision !== release.coreRevision) return false
+  // Verify the pinned import receipt, script provenance, component bytes and current context.
+  // Merely declaring a different revision is not enough. Program/VK/context bindings
+  // to the selected proof release are checked separately below.
+  const imported = verifyExternalPolicy(root, selection)
+  return (release.wasm as {sha256?: unknown} | undefined)?.sha256 === `sha256:${imported.wasmSha256}`
 }
 
 /** Read-only evidence gate; missing provider/signer evidence is never fabricated. */
@@ -56,8 +71,8 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
     if (config.cubesigner.mode === 'production_verifier_key_policy') {
       const policyRelease = pinnedJson(root, config.cubesigner.policyReceipts!.release)
       const provenance = policyRelease.verifierProvenance as Record<string, unknown>
-      if (policyRelease.coreRevision !== materials.software.sourceRevisions?.dogeosCore
-        || policyRelease.protocolContextSha256 !== `sha256:${bindings.protocolContext.sha256}`
+      if (!policySourceMatches(root, policyRelease, materials.software.sourceRevisions?.dogeosCore)) throw new Error('CubeSigner policy source differs from the proof release without a matching verified external-build import')
+      if (policyRelease.protocolContextSha256 !== `sha256:${bindings.protocolContext.sha256}`
         || provenance.bridgeProgramSha256 !== `sha256:${materials.bridge?.artifacts.appExe.sha256}`
         || provenance.aggregateVerifyingKeySha256 !== `sha256:${materials.software.artifacts?.aggregateVerifyingKey.sha256}`) throw new Error('CubeSigner policy does not bind selected proof release/program/VK/context')
     }

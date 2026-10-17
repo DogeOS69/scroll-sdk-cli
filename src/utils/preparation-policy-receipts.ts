@@ -42,7 +42,7 @@ export function importPreparationPolicyReceipts(root: string): void {
   if (!fs.existsSync(input)) writeJson(input, inputTemplate)
   const waiting = () => new AwaitingInput({
     file: input, inputTemplate,
-    message: 'Complete policy publication and Council-approved attachment, then fill receipts.json with the governed release/attachment references and their SHA-256 digests. Paths are relative to the deployment directory. Include liveEvidence if required by the policy. Rerun the same preparation command; do not edit the spec, frozen intent or doge-config.toml.',
+    message: 'Release/attachment receipts are missing. If the policy is already published and Council-approved, use scrollsdk setup cubesigner-policy reconcile --dir <deployment> --input <reviewed-input.json>; do not repeat publication or approval. See docs/cubesigner-external-policy.md for the release/test inputs. Otherwise complete governance first. Include liveEvidence if required by the release. Rerun the same preparation command; do not edit the spec, frozen intent or doge-config.toml.',
   })
   let refs: CubesignerPolicyReceiptInputs
   try {refs = JSON.parse(fs.readFileSync(proofRegularFile(input, 64 * 1024), 'utf8'))} catch {throw waiting()}

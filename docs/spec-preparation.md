@@ -152,7 +152,7 @@ the L2 RPC; its fee sampling RPC is independent of that balance check and of DA.
 The complete bridge-operator sequence (inputs, funding, external Secrets,
 installation order, partner handoff, GPU startup and runtime acceptance) is in
 [`scroll-sdk/examples/bridge-operator-deployment.md`](https://github.com/DogeOS69/scroll-sdk/blob/feat/spec-preparation-examples/examples/bridge-operator-deployment.md).
-`plan` and the six stage commands are preparation entrypoints; they do not replace Helm installation
+`plan` and the seven stage commands are preparation entrypoints; they do not replace Helm installation
 or automatically rent a GPU.
 
 
@@ -165,6 +165,8 @@ scrollsdk setup bridge-funding
 # Fund the displayed helper address and record helper.txid/vout, then rerun.
 # Core distributes to the wallets and funds the final Bridge automatically.
 scrollsdk setup bridge-funding
+scrollsdk setup protocol-context
+# Hand off the context before selecting the approved policy build route.
 scrollsdk setup proof-materials
 # For enforce mode: publish the kit via Governance and save published.json, then rerun.
 scrollsdk setup proof-materials
@@ -210,7 +212,8 @@ generation so a retry uses the same identity.
 | `setup genesis` | Bootstrap pinned templates; pin the deployer; generate local genesis and contract addresses. | No AWS calls, funding or service identity creation. |
 | `setup aws` | Prepare declared service identities, proof store/IAM/token, archive access, Bridge sequencer KMS, controller credentials and selected existing databases. | Resource facts are saved automatically; no copy back into the spec. No GPU allocation. |
 | `setup bridge-funding` | Bind genesis/DA anchor; verify helper funding; invoke Core setup and marked funding; verify all resulting outpoints. | One operator wallet handoff. Setup and Bridge funding broadcast transactions and require manual reconciliation after ambiguous failures. |
-| `setup proof-materials` | Generate protocol context; import declared inputs; bake/import proof materials; compile/publish proof configuration; export the deployment kit and record its publication. | Preliminary chart compilation is needed to bind the kit. Wait for its immutable URL and manifest digest within this stage. |
+| `setup protocol-context` | Generate canonical `.data/protocol_context.json` and its runtime YAML from completed Bridge funding. | Stops before CubeSigner policy builds, proof baking, publication and governance. No funding is replayed. |
+| `setup proof-materials` | Export the selected policy compiler output; import declared inputs; bake/import proof materials; compile/publish proof configuration; export the deployment kit and record its publication. | Preliminary chart compilation is needed to bind the kit. Wait for its immutable URL and manifest digest within this stage. |
 | `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets; prepare optional capacity-manager values and WP access; run proof checks. | Helm releases remain uninstalled. |
 | `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
 
@@ -220,6 +223,28 @@ saved stage and defaults to `deployment/`, like the other stage commands.
 
 Existing v1 plans remain resumable with `setup apply`; new v2 plans require the
 explicit stage commands. `setup apply` does not execute an unfinished staged plan.
+
+`setup protocol-context` is an independent handoff boundary. It requires all
+Bridge funding prerequisites to be completed and runs only the existing context
+generation step. Rerunning a completed stage does not regenerate its artifacts.
+The command accepts the same `--dir` / `--deployment-dir` options as other stages.
+
+Older v2 plans that placed context generation inside `proof-materials` migrate
+when resumed. Migration moves that same step before proof preparation, preserves
+the frozen intent and every completed step, and does not replay genesis, AWS or
+funding. A plan whose context is already completed keeps that completion. Other
+unrecognized workflow changes are still rejected. No new plan is required.
+
+For a release requiring an external reproducible policy build (for example,
+`tools/cubesigner/build-verifier.sh <commit>`), stop after this context stage and
+follow that release's build and governance instructions. Import the reviewed
+artifact with `setup cubesigner-policy import` as described in the
+[external policy runbook](cubesigner-external-policy.md). That command selects
+the external build for the existing `cubesigner-policy-build` preparation step;
+it does not mark any workflow step complete or grant approval. On resume, the
+step revalidates the imported artifact and current context instead of exporting
+a compiler image. Do not use an incompatible compiler to advance a checkpoint.
+
 
 Planning validates the spec and pinned SDK templates, writes the private plan,
 and lists local, read-only, cloud and chain steps. It does not provision resources
@@ -555,8 +580,10 @@ the CLI verifies the exported Wasm and its SHA-256 and writes a v2 build receipt
 See [the CubeSigner setup guide](setup-order.md#cubesigner-wasm-preparation-and-attachment)
 for registry authentication and the implemented interface. For staged deployments
 with `signing.cubesigner` configured (except explicit `mode: transport_only`),
-`setup proof-materials` first exports the policy Wasm using the existing
-`setup cubesigner-policy build` command. It never publishes or attaches a policy.
+`setup proof-materials` first prepares the policy Wasm using the selected build
+source. The default is `setup cubesigner-policy build`; an explicit
+`setup cubesigner-policy import` selection reuses a verified external artifact.
+Neither preparation route publishes or attaches a policy.
 
 The proof release manifest does not select the private policy compiler. On the
 first run, the stage writes `.scrollsdk/inputs/cubesigner-policy/compiler.json`
@@ -616,7 +643,7 @@ and optional `waiting` instructions; the response's `warnings` lists detected
 local file changes. Exit codes: `0` for `stage-complete` or
 `prepared`, `2` for `waiting`, and `1` for failure or `recovery-required`.
 `stage-complete` means only the selected stage is complete. `prepared` means all
-six stages are complete; running-service acceptance remains separate. A wait or
+seven stages are complete; running-service acceptance remains separate. A wait or
 failure reports the same stage as the next command. A successfully printed JSON result with
 `status: waiting` is not a completed deployment.
 

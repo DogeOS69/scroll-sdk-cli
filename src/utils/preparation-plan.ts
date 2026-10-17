@@ -326,6 +326,20 @@ export function migratePolicyBuildStep(plan: PreparationPlan, spec: DeploymentSp
   return {...next, id: digest(JSON.stringify(next))}
 }
 
+/** Split context generation out of proof preparation without resetting any step receipt. */
+export function migrateProtocolContextStage(plan: PreparationPlan): PreparationPlan {
+  if (plan.schema !== 'scrollsdk/preparation/v2') return plan
+  const context = plan.steps.find(step => step.id === 'protocol-context')
+  if (context?.stage !== 'proof-materials') return plan
+  const steps = plan.steps.filter(step => step !== context)
+  const firstProof = steps.findIndex(step => step.stage === 'proof-materials')
+  if (firstProof < 0) return plan
+  steps.splice(firstProof, 0, {...context, stage: 'protocol-context'})
+  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
+  delete next.id
+  return {...next, id: digest(JSON.stringify(next))}
+}
+
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
 export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage; warn?: (message: string) => void} = {}): Promise<PreparationState> {
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
@@ -343,7 +357,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
   const staged = plan.schema === 'scrollsdk/preparation/v2'
-  const migrated = migratePolicyBuildStep(migrateSignerHandoffSteps(plan, spec), spec)
+  const migrated = migratePolicyBuildStep(migrateProtocolContextStage(migrateSignerHandoffSteps(plan, spec)), spec)
   if (JSON.stringify(preparationSteps(spec, staged)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
@@ -371,7 +385,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       // State first, then the plan: a crash between them is recovered on the next run.
       for (const step of SIGNER_HANDOFF_STEPS) delete state.steps[step]
       // Recheck the new publication evidence when a staged deployment renders.
-      if (staged && spec.proofTopology?.enforcement === 'enforce') delete state.steps['proof-check']
+      if (staged && spec.proofTopology?.enforcement === 'enforce' && plan.steps.some(step => SIGNER_HANDOFF_STEPS.has(step.id))) delete state.steps['proof-check']
       state.planId = migrated.id
       writeJson(statePath, state)
       writeJson(localPath(root, `${WORKFLOW_DIR}/plan.json`), migrated)

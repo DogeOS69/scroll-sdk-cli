@@ -161,6 +161,13 @@ publication receipt, `publish --apply` final-contract test, or real-proof E2E.
 
 ## CubeSigner receipts and external signer evidence
 
+For an already published and approved policy, use
+`scrollsdk setup cubesigner-policy reconcile` with the reviewed inputs described
+in the [external policy runbook](cubesigner-external-policy.md#4-reconcile-an-already-approved-attachment).
+It produces the canonical release/attachment pair after role-scoped provider
+readback. The older `deployment/v2` record is not a substitute for these schemas;
+do not rename its schema or repeat attachment to satisfy a local receipt wait.
+
 Use the same explicit `mode` in `signing.cubesigner` (DeploymentSpec) or
 `cubesigner` (doge-config):
 
