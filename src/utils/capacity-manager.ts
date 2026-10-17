@@ -38,8 +38,8 @@ function capacitySpec(root: string, specFile?: string): DeploymentSpec {
   const saved = localPath(root, CAPACITY_MANAGER_CONFIG)
   const selection = specFile ? yaml.load(fs.readFileSync(specFile, 'utf8')) as DeploymentSpec
     : fs.existsSync(saved) ? JSON.parse(fs.readFileSync(saved, 'utf8')) : undefined
-  if (selection) {
-    if (!selection.capacityManager || selection.proofWorkers) throw new Error('Select capacityManager without proofWorkers in --spec')
+  if (specFile || fs.existsSync(saved)) {
+    if (!selection || typeof selection !== 'object' || Array.isArray(selection) || !selection.capacityManager || selection.proofWorkers) throw new Error('Select capacityManager without proofWorkers in the explicit or saved capacity spec')
     assertDeploymentSpecFields({capacityManager: selection.capacityManager})
     spec.capacityManager = selection.capacityManager
     delete spec.proofWorkers

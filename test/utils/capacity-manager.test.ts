@@ -34,6 +34,25 @@ function fixture() {
 }
 
 describe('Core capacity manager', () => {
+  it('rejects empty explicit or saved capacity selections instead of reusing frozen intent', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-empty-selection-'))
+    try {
+      writeJson(path.join(root, '.scrollsdk/intent.json'), fixture().spec)
+      const specFile = path.join(root, 'capacity-selection.yaml')
+      let contractReads = 0
+      const readContract = (): never => {contractReads++; throw new Error('Unexpected proof contract read')}
+      for (const content of ['', '# no selection\n', 'null\n', 'false\n', '[]\n']) {
+        fs.writeFileSync(specFile, content)
+        expect(() => prepareCapacityManager(root, readContract, {specFile})).to.throw('Select capacityManager without proofWorkers')
+      }
+
+      writeJson(path.join(root, '.scrollsdk/capacity-manager/config.json'), null)
+      expect(() => prepareCapacityManager(root, readContract)).to.throw('Select capacityManager without proofWorkers')
+      expect(contractReads).to.equal(0)
+      expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
   it('requires Core-compatible controller transport without disclosing rejected URLs', () => {
     for (const url of ['https://controller.example.invalid', 'https://controller.example.invalid:8443/api/', 'http://127.0.0.1:3000', 'http://127.1.2.3:3000', 'http://[::1]:3000']) expect(capacityManagerDstackUrl(url)).to.equal(url)
     for (const url of [undefined, '', 'http://dstack-controller.chain.svc:3000', 'http://localhost:3000', 'http://192.0.2.1:3000', 'ftp://controller.example.invalid', 'https://user:FAKE_PASSWORD@controller.example.invalid', 'https://controller.example.invalid/?token=FAKE_TOKEN', 'https://controller.example.invalid/#fragment', 'https://<TODO>', 'https://controller.example.invalid?']) {

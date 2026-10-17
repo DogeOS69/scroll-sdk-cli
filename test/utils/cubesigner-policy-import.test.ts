@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {EXTERNAL_POLICY_INPUT, EXTERNAL_POLICY_OUTPUT, importCubesignerPolicy} from '../../src/utils/cubesigner-policy-import.js'
+import {EXTERNAL_POLICY_INPUT, EXTERNAL_POLICY_OUTPUT, importCubesignerPolicy, verifyExternalPolicy} from '../../src/utils/cubesigner-policy-import.js'
 import {prepareCubesignerPolicy} from '../../src/utils/preparation-cubesigner-policy.js'
 import {digest} from '../../src/utils/preparation-io.js'
 
@@ -76,6 +76,16 @@ describe('external policy import', () => {
     expect(() => importCubesignerPolicy(options())).to.throw('selection already exists')
     expect(fs.readFileSync(file, 'utf8')).eq(selected)
     expect(fs.existsSync(path.join(root, EXTERNAL_POLICY_OUTPUT))).false
+  })
+
+  it('does not expose malformed local selection or receipt contents in errors', () => {
+    const result = importCubesignerPolicy(options())
+    const malformed = 'PRIVATE_TEST_MARKER_NOT_A_CREDENTIAL'
+    fs.writeFileSync(result.selection, malformed)
+    expect(() => importCubesignerPolicy(options())).to.throw('Invalid policy JSON in compiler.json (contents omitted)')
+    fs.writeFileSync(result.buildReceipt, malformed)
+    expect(() => verifyExternalPolicy(root, {buildReceiptSha256: digest(malformed), expectedCoreRevision: options().coreRevision, method: 'external'}))
+      .to.throw('Invalid policy JSON in build-receipt.json (contents omitted)')
   })
 
   it('refuses to overwrite conflicting output', () => {

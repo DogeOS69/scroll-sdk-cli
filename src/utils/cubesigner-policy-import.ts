@@ -15,6 +15,14 @@ const MAGIC = Buffer.from([0, 97, 115, 109, 13, 0, 1, 0])
 const SHA = /^[\da-f]{64}$/
 const REVISION = /^[\da-f]{40}$/
 
+function readPolicyJson(file: string, limit: number) {
+  const content = fs.readFileSync(proofRegularFile(file, limit), 'utf8')
+  try {return JSON.parse(content)} catch {
+    // JSON parser diagnostics can echo private operator input to CLI output.
+    throw new Error(`Invalid policy JSON in ${path.basename(file)} (contents omitted)`)
+  }
+}
+
 export type ExternalPolicySelection = {
   buildReceiptSha256: string; expectedCoreRevision: string; method: 'external'
 }
@@ -25,7 +33,7 @@ export function verifyExternalPolicy(root: string, selection: ExternalPolicySele
   const output = localPath(root, EXTERNAL_POLICY_OUTPUT)
   const receiptFile = proofRegularFile(path.join(output, 'build-receipt.json'), 64 * 1024)
   if (proofFileHash(receiptFile) !== selection.buildReceiptSha256) throw new Error('External policy receipt digest mismatch')
-  const receipt = JSON.parse(fs.readFileSync(receiptFile, 'utf8'))
+  const receipt = readPolicyJson(receiptFile, 64 * 1024)
   const file = proofRegularFile(path.join(output, WASM), 128 * 1024 * 1024)
   const wasm = fs.readFileSync(file)
   const hash = digest(wasm)
@@ -76,7 +84,7 @@ export function importCubesignerPolicy(options: {
   const selection: ExternalPolicySelection = {buildReceiptSha256: digest(receiptText), expectedCoreRevision: options.coreRevision, method: 'external'}
   const input = localPath(root, EXTERNAL_POLICY_INPUT)
   if (fs.existsSync(input)) {
-    const existing = JSON.parse(fs.readFileSync(proofRegularFile(input, 16 * 1024), 'utf8'))
+    const existing = readPolicyJson(input, 16 * 1024)
     if (existing.method !== selection.method || existing.expectedCoreRevision !== selection.expectedCoreRevision || existing.buildReceiptSha256 !== selection.buildReceiptSha256
       || Object.keys(existing).length !== 3) throw new Error('Policy selection already exists with different inputs; inspect it before importing')
   }
