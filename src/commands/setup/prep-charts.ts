@@ -21,6 +21,7 @@ import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
 import {prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
@@ -2527,26 +2528,6 @@ export default class SetupPrepCharts extends Command {
           }
         }
 
-        /*
-        NEXT_PUBLIC_NETWORK_ID: "221122420"
-        */
-        const oldNetworkName = frontend?.env?.NEXT_PUBLIC_NETWORK_NAME;
-        const newNetworkName = this.getConfigValue("general.CHAIN_NAME_L2");
-        if (!oldNetworkName || oldNetworkName !== newNetworkName) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_NAME`, newValue: newNetworkName, oldValue: oldNetworkName });
-          frontend.env.NEXT_PUBLIC_NETWORK_NAME = newNetworkName;
-          ingressUpdated = true;
-        }
-
-        const oldValue = frontend?.env?.NEXT_PUBLIC_NETWORK_ID;
-        const newValue = this.getConfigValue("general.CHAIN_ID_L2");
-        if (!oldValue || oldValue !== this.getConfigValue("general.CHAIN_ID_L2")) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_ID`, newValue, oldValue });
-          frontend.env.NEXT_PUBLIC_NETWORK_ID = newValue;
-          ingressUpdated = true;
-        }
-
-
         interface BlockscoutEnvMapping {
           configKey: string;
           defaultValue?: string;
@@ -2921,6 +2902,7 @@ export default class SetupPrepCharts extends Command {
           l2MessengerAddress: this.getConfigValue('contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR'),
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
           networkStr: this.withdrawalProcessorConfig.network_str,
+          productionVerifierKeyPolicy: this.dogeConfig.cubesigner?.mode === 'production_verifier_key_policy',
         })
 
         const nativeConfigPath = path.resolve(path.dirname(path.resolve(valuesDir)), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
@@ -3346,6 +3328,14 @@ export default class SetupPrepCharts extends Command {
           changes.push({key: 'ingress', newValue: 'reconciled controller settings', oldValue: 'previous controller settings'})
           updated = true
         }
+      }
+
+      // Existing ALB projection above may disable Ingress, so choose the host
+      // environment only after the effective ingress state is known.
+      if (chartName === 'blockscout' && reconcileBlockscoutFrontend(productionYaml['blockscout-stack'],
+        this.getConfigValue('ingress.BLOCKSCOUT_HOST'), this.getConfigValue('general.CHAIN_NAME_L2'), this.getConfigValue('general.CHAIN_ID_L2'))) {
+        changes.push({key: 'blockscout-stack.frontend', newValue: 'canonical network config and unique environment', oldValue: 'legacy environment'})
+        updated = true
       }
 
       const pcRpcFile = path.resolve(path.dirname(path.resolve(valuesDir)), 'proof-coordinator/ProofCoordinator.toml')

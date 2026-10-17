@@ -283,6 +283,13 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'proof-check': {await command(['proof-config-check']); break}
       case 'secret-upload': {
+        if (spec.signing?.cubesigner) {
+          for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) {
+            const file = localPath(root, `secrets/${name}`)
+            if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) throw new AwaitingInput({file, message: 'Required CubeSigner runtime Secret input is missing or empty. Run scrollsdk setup cubesigner-refresh from the deployment directory, then rerun setup upload-secrets. Uploading other available files does not satisfy this prerequisite.'})
+          }
+        }
+
         const upload = p.secretUpload ?? (spec.infrastructure.provider === 'aws' ? {provider: 'aws' as const} : undefined)
         if (!upload) throw new Error('Configure preparation.secretUpload for the external Secret store before uploading')
         const {kubeContext, namespace} = specKubernetesTarget(spec)

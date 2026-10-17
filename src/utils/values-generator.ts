@@ -1255,7 +1255,7 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     image,
     ingress: {
       main: spec.proofTopology?.mode === 'active' && spec.frontend.hosts.proofCoordinator
-        ? {enabled: true, hosts: [{host: spec.frontend.hosts.proofCoordinator, paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}]}]}
+        ? {enabled: true, hosts: [{host: spec.frontend.hosts.proofCoordinator, paths: [{path: '/v1/prover/tasks', pathType: 'Prefix', service: {port: 7788}}]}]}
         : {enabled: false},
     },
     persistence: {
@@ -1494,6 +1494,7 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           paths: [{ path: '/api', pathType: 'Prefix' }],
         }
       },
+      config: {network: {currency: {decimals: 18, name: 'Dogecoin', symbol: spec.network.tokenSymbol}, id: String(spec.network.l2ChainId), name: spec.network.l2ChainName, shortname: 'DogeOS'}},
       frontend: {
         env: {
           NEXT_PUBLIC_AD_BANNER_PROVIDER: 'none',
@@ -1501,14 +1502,8 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
           NEXT_PUBLIC_API_HOST: spec.frontend.hosts.blockscout,
           NEXT_PUBLIC_API_PROTOCOL: 'https',
           NEXT_PUBLIC_API_WEBSOCKET_PROTOCOL: 'wss',
+          NEXT_PUBLIC_APP_HOST: spec.frontend.hosts.blockscout,
           NEXT_PUBLIC_APP_PROTOCOL: 'https',
-          NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS: '18',
-          NEXT_PUBLIC_NETWORK_CURRENCY_NAME: 'Dogecoin',
-          NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL: spec.network.tokenSymbol,
-          NEXT_PUBLIC_NETWORK_ID: String(spec.network.l2ChainId),
-          NEXT_PUBLIC_NETWORK_NAME: spec.network.l2ChainName,
-          NEXT_PUBLIC_NETWORK_SHORT_NAME: 'DogeOS',
-          PROMETHEUS_METRICS_ENABLED: 'false'
         },
         ingress: {
           hostname: spec.frontend.hosts.blockscout,

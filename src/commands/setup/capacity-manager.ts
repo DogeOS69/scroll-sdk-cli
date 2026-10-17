@@ -28,7 +28,9 @@ export default class CapacityManager extends Command {
         return
       }
 
-      const plan = JSON.parse(fs.readFileSync(localPath(root, CAPACITY_MANAGER_PLAN), 'utf8'))
+      const planFile = localPath(root, CAPACITY_MANAGER_PLAN)
+      if (!fs.existsSync(planFile)) throw new Error('Capacity Manager has no prepared plan. If this deployment selects bounded proofWorkers, use setup proof-workers plan/apply instead. For continuous capacity, explicitly enable capacityManager and run setup capacity-manager prepare after retiring bounded workers; do not copy another deployment\'s plan.')
+      const plan = JSON.parse(fs.readFileSync(planFile, 'utf8'))
       if (plan.schema !== 'scrollsdk/capacity-manager/v1') throw new Error('Unsupported capacity-manager plan')
       if (flags.namespace && flags.namespace !== plan.namespace) throw new Error('Namespace differs from prepared capacity-manager values; regenerate for the intended namespace')
       if (plan.dstack.namespace !== plan.namespace) throw new Error('Dstack and capacity-manager must use the same namespace; rerun setup render')

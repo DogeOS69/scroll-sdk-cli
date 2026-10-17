@@ -217,6 +217,13 @@ generation so a retry uses the same identity.
 | `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets; prepare optional capacity-manager values and WP access; run proof checks. | Helm releases remain uninstalled. |
 | `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
 
+When CubeSigner is configured, `setup upload-secrets` requires nonempty
+`secrets/cubesigner-signer-session.json` and `secrets/cubesigner-signer.env` before
+uploading any files. If they are missing, run `scrollsdk setup cubesigner-refresh`
+from the deployment directory, then resume the upload stage. File completeness
+does not establish provider-side session validity or Kubernetes Secret readiness;
+check those separately before installation.
+
 `setup proof-materials --generation ...` and other explicit material flags retain
 the standalone material utility. Without material flags, the command runs the
 saved stage and defaults to `deployment/`, like the other stage commands.

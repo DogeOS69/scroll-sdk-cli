@@ -167,6 +167,12 @@ initialization. Regenerating protocol context alone does not enable it.
 
 ## 4. Prepare proof and service configuration
 
+Production CubeSigner policy mode projects WP's
+`proof_system.correctness_policy_transport = "bridge_proof_ref_v1"` during
+`prep-charts`; proof readiness also rejects a mismatched native configuration.
+The public Proof Coordinator route is limited to `/v1/prover/tasks` and its
+descendants. Its ALB health check still uses the internal `/healthz` endpoint.
+
 For a saved staged plan, complete `setup bridge-funding`, then run
 `scrollsdk setup protocol-context` from the operator directory. This generates
 `deployment/.data/protocol_context.json` and stops before policy/proof builds.

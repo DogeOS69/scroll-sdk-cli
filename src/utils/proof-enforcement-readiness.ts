@@ -1,3 +1,4 @@
+import * as toml from '@iarna/toml'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -69,6 +70,12 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
     if (!config.cubesigner?.mode) throw new Error('Select an explicit CubeSigner policy mode')
     resolveCubesignerPolicy({deploymentDir: root, keys: (config.cubesigner.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network, selection: config.cubesigner})
     if (config.cubesigner.mode === 'production_verifier_key_policy') {
+      let wp: toml.JsonMap
+      try {wp = toml.parse(fs.readFileSync(proofRegularFile(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')), 'utf8'))} catch {
+        throw new Error('WP native configuration is missing or invalid; rerun prep-charts (private TOML contents omitted)')
+      }
+
+      if ((wp.proof_system as toml.JsonMap | undefined)?.correctness_policy_transport !== 'bridge_proof_ref_v1') throw new Error('Production CubeSigner policy requires WP proof_system.correctness_policy_transport = bridge_proof_ref_v1; rerun prep-charts')
       const policyRelease = pinnedJson(root, config.cubesigner.policyReceipts!.release)
       const provenance = policyRelease.verifierProvenance as Record<string, unknown>
       if (!policySourceMatches(root, policyRelease, materials.software.sourceRevisions?.dogeosCore)) throw new Error('CubeSigner policy source differs from the proof release without a matching verified external-build import')

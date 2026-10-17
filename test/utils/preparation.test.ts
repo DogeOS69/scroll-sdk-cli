@@ -890,16 +890,47 @@ describe('resumable preparation plan', () => {
     expect(resumed.warnings?.join('\n')).include('plan.json').and.include('intent.json').and.include('missing: config.toml')
   })
 
+  it('waits for both CubeSigner Secret inputs before uploading anything', async () => {
+    const spec = fixture()
+    spec.signing = {...spec.signing, cubesigner: {}}
+    spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}
+    spec.preparation!.secretUpload = {awsRegion: 'us-east-1', provider: 'aws'}
+    fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+    const calls: string[][] = []
+    const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
+    const step = preparationSteps(spec).find(step => step.id === 'secret-upload')!
+    const run = () => runner.run(step, spec, deployment, {} as PreparationPlan)
+    for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) {
+      let failure: unknown
+      try {await run()} catch (error) {failure = error}
+      expect(failure).to.be.instanceOf(AwaitingInput)
+      expect(calls).to.deep.equal([])
+      fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_TEST_INPUT')
+    }
+
+    await run()
+    expect(calls[0][0]).to.equal('push-secrets')
+    calls.length = 0
+    fs.writeFileSync(path.join(deployment, 'secrets/cubesigner-signer-session.json'), '')
+    let failure: unknown
+    try {await run()} catch (error) {failure = error}
+    expect(failure).to.be.instanceOf(AwaitingInput)
+    expect(calls).to.deep.equal([])
+  })
+
   it('uploads to the same cluster-scoped prefix used by generated references', async () => {
     const spec = fixture()
+    const plan = await makePlan()
+    fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+    for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_TEST_INPUT')
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}, namespace: 'partner', provider: 'aws'}
     spec.preparation!.secretUpload = {provider: 'aws'}
     const calls: string[][] = []
     const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
-    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, plan)
     expect(calls[0][calls[0].indexOf('--aws-prefix') + 1]).to.equal(`dogeos/test-cluster/partner/${spec.metadata.name}`)
     delete spec.preparation!.secretUpload
-    await runner.run(preparationSteps(spec, true).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    await runner.run(preparationSteps(spec, true).find(step => step.id === 'secret-upload')!, spec, deployment, plan)
     expect(calls[1]).to.deep.equal(calls[0])
     spec.preparation!.secretUpload = {provider: 'aws'}
     spec.preparation!.secretUpload.awsPrefix = 'conflicting'
@@ -909,13 +940,16 @@ describe('resumable preparation plan', () => {
 
   it('shares the infrastructure target with Secret upload and monitoring Secret apply', async () => {
     const spec = fixture()
+    const plan = await makePlan()
+    fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+    for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_TEST_INPUT')
     spec.infrastructure.aws = {accountId: '123456789012', eksClusterName: 'test-cluster', region: 'us-east-1'}
     spec.infrastructure.kubeContext = 'selected-cluster'
     spec.infrastructure.namespace = 'selected-namespace'
     spec.preparation!.secretUpload = {awsRegion: 'us-east-1', provider: 'aws'}
     const calls: string[][] = []
     const runner = new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)})
-    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, await makePlan())
+    await runner.run(preparationSteps(spec).find(step => step.id === 'secret-upload')!, spec, deployment, plan)
     expect(calls).to.have.length(2)
     for (const args of calls) {
       expect(args[args.indexOf('--kube-context') + 1]).to.equal('selected-cluster')

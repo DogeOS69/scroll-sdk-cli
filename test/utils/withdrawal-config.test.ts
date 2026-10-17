@@ -34,6 +34,15 @@ const FACTS_INPUT = {
 }
 
 describe('withdrawal-config deployment block', () => {
+  it('projects production policy transport while preserving other proof settings', () => {
+    const source = '[proof_system]\ncorrectness_policy_transport = "plain"\nmode = "disabled"\n'
+    const {facts} = buildWithdrawalDeploymentFacts({...FACTS_INPUT, productionVerifierKeyPolicy: true})
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts)
+    expect(toml.parse(merged).proof_system).to.deep.equal({correctness_policy_transport: 'bridge_proof_ref_v1', mode: 'disabled'})
+    expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).to.equal(merged)
+    expect(buildWithdrawalDeploymentFacts(FACTS_INPUT).facts).not.to.have.property('proof_system')
+  })
+
   it('requires explicit fresh initialization and rejects snapshot continuation', () => {
     const fresh = {...FACTS_INPUT, l2BootstrapNextStartingBlockHeight: undefined}
     expect(buildWithdrawalDeploymentFacts(fresh).facts.fresh_genesis_init).to.equal(false)

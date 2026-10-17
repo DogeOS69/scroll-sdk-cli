@@ -243,7 +243,7 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     })
     const actual = yaml.load(fs.readFileSync(file, 'utf8')) as any
     expect(actual.ingress.main.enabled).to.equal(true)
-    expect(actual.ingress.main.hosts[0]).to.deep.equal({host: 'proof-coordinator.example.com', paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}]})
+    expect(actual.ingress.main.hosts[0]).to.deep.equal({host: 'proof-coordinator.example.com', paths: [{path: '/v1/prover/tasks', pathType: 'Prefix', service: {port: 7788}}]})
     expect(actual.ingress.main.tls).to.equal(undefined)
     expect(actual.ingress.main.annotations.keep).to.equal('operator')
     expect(actual.service.main.ports.prover.port).to.equal(7788)

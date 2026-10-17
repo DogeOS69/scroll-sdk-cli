@@ -140,6 +140,8 @@ describe('real bake worker identity import', () => {
 
   function governedExternalPolicy() {
     const prepared = prepareProofMaterials(fixture(root).options)
+    fs.mkdirSync(path.join(root, 'withdrawal-processor'), {recursive: true})
+    fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), '[proof_system]\ncorrectness_policy_transport = "bridge_proof_ref_v1"\n')
     const receipts = policyReceiptFixture(root)
     const refs = receipts.selection.policyReceipts
     fs.mkdirSync(path.join(root, '.data'), {recursive: true})
@@ -193,10 +195,26 @@ describe('real bake worker identity import', () => {
     expect(input.check()).to.deep.equal([])
   })
 
+  it('rejects plain or absent WP transport for the governed production policy', () => {
+    const input = governedExternalPolicy()
+    for (const source of ['[proof_system]\ncorrectness_policy_transport = "plain"\n', '[proof_system]\n']) {
+      fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), source)
+      expect(input.check().join(' ')).to.include('requires WP proof_system.correctness_policy_transport')
+    }
+  })
+
   it('rejects modified external build provenance even when governed release receipts still match', () => {
     const input = governedExternalPolicy()
     fs.appendFileSync(path.join(root, '.data/cubesigner-policy/build-receipt.json'), ' ')
     expect(input.check().join(' ')).to.include('External policy receipt digest mismatch')
+  })
+
+  it('does not expose private WP TOML in a parsing failure', () => {
+    const input = governedExternalPolicy()
+    fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'password = NONFUNCTIONAL_PRIVATE_VALUE')
+    const blockers = input.check().join(' ')
+    expect(blockers).to.include('WP native configuration is missing or invalid')
+    expect(blockers).not.to.include('NONFUNCTIONAL_PRIVATE_VALUE')
   })
 
   it('rejects a different governed Wasm than the imported component', () => {

@@ -194,6 +194,7 @@ export interface WithdrawalDeploymentFactsInput {
   l2MessengerAddress: unknown
   l2RpcUrl: unknown
   networkStr: unknown
+  productionVerifierKeyPolicy?: boolean
   tsoUrl?: unknown
 }
 
@@ -222,6 +223,7 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
   const inboxStartBlock = asInteger(input.ethereumDa.inboxWorkerStartBlock, 'defaults.ethereumDaEmbeddedIndexerStartBlock')
   const beaconRpcUrl = nonEmpty(input.ethereumDa.beaconRpcUrl) ? ETHEREUM_BEACON_PLACEHOLDER : undefined
   const facts = {
+    ...(input.productionVerifierKeyPolicy ? {proof_system: {correctness_policy_transport: 'bridge_proof_ref_v1'}} : {}),
     dogecoin_indexer: {
       start_height: Math.max(0, input.dogecoinIndexerStartHeight),
     },
