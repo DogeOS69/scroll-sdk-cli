@@ -2162,7 +2162,7 @@ export default class SetupPrepCharts extends Command {
     }
 
     // attestation-signer is partner-operated through docker-compose. Remove
-    // values left by older CLI releases so a later `helm install-all` cannot
+    // values left by older CLI releases so later Helm installations cannot
     // accidentally resurrect the retired in-cluster deployment shape.
     for (const file of removeRetiredAttestationSignerValues(valuesDir)) {
       this.jsonCtx.info(`Removed retired in-cluster attestation signer values: ${file}`)

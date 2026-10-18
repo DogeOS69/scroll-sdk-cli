@@ -33,16 +33,16 @@ Secrets Manager or Vault, like Dogecoin RPC credentials. The monitor chart's
 ExternalSecret synchronizes the referenced Kubernetes Secret; do not upload a
 standalone Grafana admin YAML.
 See the SDK's `examples/deployment-spec.md` for the two releases' values and
-verification. Do not rerun `install-all` to add missing releases after contracts
-have already been deployed.
+verification. Use the individual installation targets and verify each release
+before proceeding.
 
 The SDK templates disable Grafana and Dogecoin ingress by default. The CLI
 preserves the ingress switches in deployment values; generating domains does
 not enable public access. Use local port forwarding, or explicitly configure
 and enable ingress in the relevant values file. Existing operator choices are
 preserved on regeneration. Blockscout values may be generated for later use,
-but `make install-all` does not install Blockscout or its contract verifier.
-Prepare its database and values, then opt in with `make install-blockscout`.
+and installation is explicit. Prepare its database and values, then install
+Blockscout and its contract verifier with `make install-blockscout`.
 Before final `setup render`, fill the enabled ingress certificate references and
 TSO edge network-policy CIDRs in the deployment values. Intermediate chart
 compilation inside `setup proof-materials` defers these edge inputs and status-page
@@ -1039,7 +1039,7 @@ this workflow neither builds nor publishes it.
   a separate credential for each Worker; no shared Worker token is copied to dstack.
 - From `deployment/`, review the generated values and run
   `make install-capacity-manager`. **This explicit installation starts Core's
-  capacity reconciliation and may rent paid workers.** `install-all` excludes it.
+  capacity reconciliation and may rent paid workers.**
 
 `setup capacity-manager` defaults to `./deployment` (override with `--dir`), and
 `credentials` (used automatically by Make) / `status` use the saved spec context unless `--kube-context` is
