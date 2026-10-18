@@ -46,10 +46,8 @@ export function reconcilePublicServiceIngress(existing: Record<string, any>, ser
     }
   }
 
-  // Helm recursively merges chart defaults: explicit tombstones prevent old
-  // packaged defaults from reintroducing nginx annotations/TLS at render time.
+  // Clear legacy TLS Secret lists when reconciling older Dogecoin values.
   if (service === 'dogecoin') {
-    ingress.annotations[`${NGINX}backend-protocol`] = null
     ingress.tls = []
   }
 
