@@ -2,7 +2,7 @@ import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils
 import type {MonitoringConfig} from '../utils/monitoring-slack.js'
 import type {CapacityManagerConfig} from './capacity-manager.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
-import type {ExistingAlbConfig} from './existing-alb.js'
+import type {ExistingAlbConfig, SharedAlbConfig} from './existing-alb.js'
 import type {PreparationConfig} from './preparation.js'
 import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
 import type {ProofWorkersConfig} from './proof-workers.js'
@@ -197,6 +197,8 @@ export interface InfrastructureConfig {
     region: string
     /** Secrets Manager prefix */
     secretsPrefix?: string
+    /** Opt in public services to one controller-managed HTTPS ALB. */
+    sharedAlb?: SharedAlbConfig
   }
 
   /** Number of bootnode instances */

@@ -33,7 +33,7 @@ import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {verifyDstackAcmCertificate} from '../../utils/dstack-internal-tls.js'
 import {type EthereumDaRuntimeConfig, ethereumDaMainnetPolicyErrors, ethereumDaRuntimeEnv, resolveEthereumDaSubmitterPolicy} from '../../utils/ethereum-da-runtime.js'
 import {ETHEREUM_RPC_KEYS, proofCoordinatorRpcKeys, readEthereumRpcSecretStore, reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
-import {projectExistingAlbDirectory, readExistingAlbSpec, suppressExistingAlbIngress, validateExistingAlb} from '../../utils/existing-alb.js'
+import {projectExistingAlbDirectory, projectSharedAlbValues, readExistingAlbSpec, suppressExistingAlbIngress, validateExistingAlb} from '../../utils/existing-alb.js'
 import {frontendDepositEnv, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
@@ -3322,6 +3322,7 @@ export default class SetupPrepCharts extends Command {
 
       {
         const previous = JSON.stringify(productionYaml)
+        projectSharedAlbValues(productionYaml, `${chartName}-production.yaml`, this.albSpec)
         suppressExistingAlbIngress(productionYaml, `${chartName}-production.yaml`, this.albSpec)
         reconcileDeploymentIngresses(productionYaml, chartName, !this.flags['proof-preparation'])
         validateServiceNetworkPolicy(productionYaml, chartName, this.flags['proof-preparation'])

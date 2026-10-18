@@ -1181,9 +1181,9 @@ describe('deployment-spec-generator', () => {
       for (const key of ['ADMIN_SYSTEM_DASHBOARD_HOST', 'BLOCKSCOUT_BACKEND_HOST', 'COORDINATOR_API_HOST', 'L1_EXPLORER_HOST', 'ROLLUP_EXPLORER_API_HOST']) expect(config.ingress).not.to.have.property(key);
       expect(config.frontend.EXTERNAL_EXPLORER_URI_L1).to.equal(spec.frontend.externalUrls.l1Explorer);
       expect(blockscout.blockscout.ingress.hostname).to.equal(config.ingress.BLOCKSCOUT_HOST);
-      expect(blockscout.blockscout.ingress.paths[0].path).to.equal('/api');
+      expect(blockscout.blockscout.ingress).not.to.have.property('paths');
       expect(blockscout.frontend.ingress.hostname).to.equal(config.ingress.BLOCKSCOUT_HOST);
-      expect(blockscout.frontend.ingress.paths[0].path).to.equal('/');
+      expect(blockscout.frontend.ingress).not.to.have.property('paths');
       expect(blockscout.frontend.env.NEXT_PUBLIC_API_HOST).to.equal(config.ingress.BLOCKSCOUT_HOST);
       const tso = (yaml.load(files['tso-service-production.yaml']) as any).ingress.main;
       expect(tso.hosts[0].host).to.equal(config.ingress.TSO_HOST);

@@ -5,6 +5,16 @@ export function reconcileBlockscoutFrontend(stack: Record<string, any>, host: st
   if (!stack.frontend) return false
   const before = JSON.stringify(stack)
   stack.frontend.env ??= {}
+  // Older ALB deployments used literal extraEnv entries to bypass duplicate
+  // upstream variables. Fold those back into the canonical map before pruning.
+  if (Array.isArray(stack.frontend.extraEnv)) {
+    stack.frontend.extraEnv = stack.frontend.extraEnv.filter((entry: any) => {
+      if (!entry || typeof entry.name !== 'string' || !Object.hasOwn(entry, 'value') || entry.valueFrom) return true
+      stack.frontend.env[entry.name] = entry.value
+      return false
+    })
+  }
+
   stack.config ??= {}
   stack.config.network ??= {}
   const {env} = stack.frontend
@@ -19,6 +29,11 @@ export function reconcileBlockscoutFrontend(stack: Record<string, any>, host: st
     ['symbol', 'NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL', 'DOGE'],
     ['decimals', 'NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS', 18],
   ] as const) network.currency[field] ??= env[key] ?? fallback
+  if (stack.blockscout?.env) {
+    delete stack.blockscout.env.COIN
+    delete stack.blockscout.env.COIN_NAME
+  }
+
   for (const key of ['NEXT_PUBLIC_NETWORK_ID', 'NEXT_PUBLIC_NETWORK_NAME', 'NEXT_PUBLIC_NETWORK_SHORT_NAME', 'NEXT_PUBLIC_NETWORK_CURRENCY_NAME', 'NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL', 'NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS']) delete env[key]
   for (const [service, key] of [['blockscout', 'NEXT_PUBLIC_API_HOST'], ['frontend', 'NEXT_PUBLIC_APP_HOST']]) {
     if (stack[service]?.ingress?.enabled) delete env[key]

@@ -36,6 +36,19 @@ describe('Blockscout frontend environment', () => {
     })
   }
 
+  it('normalizes the literal extraEnv workaround while retaining Secret references', () => {
+    const secret = {name: 'CUSTOM_SECRET', valueFrom: {secretKeyRef: {key: 'value', name: 'example-secret'}}}
+    const stack: any = {blockscout: {ingress: {enabled: true}}, frontend: {env: null, extraEnv: [
+      {name: 'NEXT_PUBLIC_API_HOST', value: 'old.example.invalid'},
+      {name: 'NEXT_PUBLIC_NETWORK_NAME', value: 'Old'},
+      {name: 'CUSTOM', value: 'preserved'}, secret,
+    ], ingress: {enabled: true}}}
+    reconcileBlockscoutFrontend(stack, 'explorer.example.invalid', 'Example', 1_122_005)
+    expect(stack.frontend.extraEnv).deep.eq([secret])
+    expect(stack.frontend.env).deep.eq({CUSTOM: 'preserved'})
+    expect(reconcileBlockscoutFrontend(stack, 'explorer.example.invalid', 'Example', 1_122_005)).eq(false)
+  })
+
   it('preserves explicit canonical currency and disabled metrics', () => {
     const stack: any = {config: {network: {currency: {decimals: 8, name: 'Custom', symbol: 'C'}}, prometheus: {enabled: false}}, frontend: {env: {PROMETHEUS_METRICS_ENABLED: 'false'}}}
     reconcileBlockscoutFrontend(stack, 'explorer.example.invalid', 'Example', '1122005')

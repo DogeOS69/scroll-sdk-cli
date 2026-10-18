@@ -14,7 +14,7 @@ import {
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
 import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
-import {ALB_SERVICES, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
+import {ALB_SERVICES, preserveSharedAlbPaths, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
 import {validateExistingNlbSdk} from '../../utils/existing-nlb.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import {GenerationTransaction} from '../../utils/generation-transaction.js'
@@ -340,6 +340,7 @@ export default class GenerateFromSpec extends Command {
         if (file && !allValues[file] && templateFiles[`values/${file}`]) allValues[file] = mergeBootstrapValues(templateFiles[`values/${file}`], '{}', existingValues(file))
       }
 
+      preserveSharedAlbPaths(allValues, spec, existingValues)
       projectExistingAlb(allValues, spec)
       Object.assign(valuesFiles, allValues)
     }

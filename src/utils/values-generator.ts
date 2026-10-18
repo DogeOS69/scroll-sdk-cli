@@ -438,7 +438,8 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
   const sequencer = role === 'sequencer'
   // Existing ALB bindings explicitly select which public RPC endpoints exist.
   const alb = spec.infrastructure.aws?.alb
-  const rpcIngressEnabled = (binding: string): boolean => alb?.mode !== 'existing' || Object.hasOwn(alb.bindings, binding)
+  const shared = spec.infrastructure.aws?.sharedAlb
+  const rpcIngressEnabled = (binding: 'l2-reth-rpc-public' | 'l2-reth-rpc-public-ws'): boolean => shared ? shared.services.includes(binding) || Object.hasOwn(alb?.bindings ?? {}, binding) : alb?.mode !== 'existing' || Object.hasOwn(alb.bindings, binding)
   return yaml.dump({
     controller: {replicas: 1, strategy: 'RollingUpdate', type: 'statefulset'},
     image,
@@ -1463,8 +1464,6 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
       blockscout: {
         env: {
           CHAIN_TYPE: 'scroll',
-          COIN: spec.network.tokenSymbol,
-          COIN_NAME: spec.network.tokenSymbol,
           ECTO_USE_SSL: true,
           ETHEREUM_JSONRPC_HTTP_INSECURE: false,
           ETHEREUM_JSONRPC_HTTP_URL: 'http://l2-rpc:8545',
@@ -1492,7 +1491,6 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
         ],
         ingress: {
           hostname: spec.frontend.hosts.blockscout,
-          paths: [{ path: '/api', pathType: 'Prefix' }],
         }
       },
       config: {network: {currency: {decimals: 18, name: 'Dogecoin', symbol: spec.network.tokenSymbol}, id: String(spec.network.l2ChainId), name: spec.network.l2ChainName, shortname: 'DogeOS'}},
@@ -1508,7 +1506,6 @@ function generateBlockscoutValues(spec: DeploymentSpec): string {
         },
         ingress: {
           hostname: spec.frontend.hosts.blockscout,
-          paths: [{ path: '/', pathType: 'Prefix' }],
         }
       }
     }

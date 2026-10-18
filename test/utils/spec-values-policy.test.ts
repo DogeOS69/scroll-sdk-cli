@@ -54,6 +54,26 @@ describe('spec values runtime policy across entry points', () => {
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
 
+  it('regenerates shared public ingress settings without losing Portal paths', async () => {
+    spec.infrastructure.aws!.sharedAlb = {
+      certificateArn: `arn:aws:acm:${spec.infrastructure.aws!.region}:${spec.infrastructure.aws!.accountId}:certificate/00000000-0000-0000-0000-000000000000`,
+      groupName: 'public-example', services: ['frontends', 'l2-reth-rpc-public'],
+    }
+    const directory = path.join(root, 'deployment')
+    await run('--bootstrap', directory, '--sdk-dir', sdk, '--force')
+    const portal = read(directory, 'frontends')
+    expect(portal.ingress.main.annotations['alb.ingress.kubernetes.io/group.name']).eq('public-example')
+    const routes = [{path: '/', pathType: 'Prefix'}, {path: '/api', pathType: 'Prefix', service: {name: 'example-api', port: 80}}]
+    portal.ingress.main.hosts[0].paths = routes
+    fs.writeFileSync(path.join(directory, 'values/frontends-production.yaml'), yaml.dump(portal))
+    spec.frontend.hosts = {...spec.frontend.hosts, frontend: 'renamed.example.invalid'}
+    await run('--with-values', directory, '--sdk-dir', sdk, '--force')
+    const regenerated = read(directory, 'frontends')
+    expect(regenerated.ingress.main.hosts[0]).deep.eq({host: 'renamed.example.invalid', paths: routes})
+    expect(regenerated.ingress.main.enabled).eq(true)
+    expect(read(directory, 'l2-reth-rpc-public').ingress.websocket.enabled).eq(false)
+  })
+
   it('rolls back a failed bootstrap and preserves an operator Makefile on retry', async () => {
     const directory = path.join(root, 'deployment')
     const obstruction = path.join(directory, '.data/protocol_seed.toml')

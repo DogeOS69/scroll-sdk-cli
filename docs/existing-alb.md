@@ -1,5 +1,9 @@
 # Existing ALB mode
 
+Public RPC, Portal and Blockscout can instead use a controller-managed
+[shared ALB](shared-alb.md), alongside dedicated external bindings for TSO and
+Proof Coordinator. A service must select only one of these ownership models.
+
 Set `infrastructure.aws.alb.mode: existing` to select externally managed ALBs.
 Each application chart owns its TargetGroupBindings alongside its ClusterIP
 Services and workloads. Managed Ingresses are disabled. Installing or removing
