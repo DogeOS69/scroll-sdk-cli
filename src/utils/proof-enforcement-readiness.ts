@@ -38,7 +38,7 @@ function policySourceMatches(root: string, release: Record<string, unknown>, pro
 }
 
 /** Read-only evidence gate; missing provider/signer evidence is never fabricated. */
-export function proofEnforcementReadiness(root: string, contract: ProofDeploymentContract, config: DogeConfig): {blockers: string[]; ready: boolean} {
+export function proofEnforcementReadiness(root: string, contract: ProofDeploymentContract, config: DogeConfig, scope: 'activation' | 'preparation' = 'activation'): {blockers: string[]; ready: boolean} {
   const blockers: string[] = []
   if (contract.mode !== 'active' || contract.generation !== 'real') return {blockers: ['Enforcement requires active real proving'], ready: false}
   const bindings = contract.inputs
@@ -68,7 +68,7 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
   if (!contract.worker.enabled || !materials.images.productionWorker) blockers.push('Production Worker image and Worker contract are required')
   try {
     if (!config.cubesigner?.mode) throw new Error('Select an explicit CubeSigner policy mode')
-    resolveCubesignerPolicy({deploymentDir: root, keys: (config.cubesigner.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network, selection: config.cubesigner})
+    resolveCubesignerPolicy({deploymentDir: root, keys: (config.cubesigner.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network, scope, selection: config.cubesigner})
     if (config.cubesigner.mode === 'production_verifier_key_policy') {
       let wp: toml.JsonMap
       try {wp = toml.parse(fs.readFileSync(proofRegularFile(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')), 'utf8'))} catch {
@@ -76,7 +76,7 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
       }
 
       if ((wp.proof_system as toml.JsonMap | undefined)?.correctness_policy_transport !== 'bridge_proof_ref_v1') throw new Error('Production CubeSigner policy requires WP proof_system.correctness_policy_transport = bridge_proof_ref_v1; rerun prep-charts')
-      const policyRelease = pinnedJson(root, config.cubesigner.policyReceipts!.release)
+      const policyRelease = pinnedJson(root, (scope === 'preparation' ? config.cubesigner.expectedPolicy ?? config.cubesigner.policyReceipts : config.cubesigner.policyReceipts)!.release)
       const provenance = policyRelease.verifierProvenance as Record<string, unknown>
       if (!policySourceMatches(root, policyRelease, materials.software.sourceRevisions?.dogeosCore)) throw new Error('CubeSigner policy source differs from the proof release without a matching verified external-build import')
       if (policyRelease.protocolContextSha256 !== `sha256:${bindings.protocolContext.sha256}`
@@ -85,6 +85,6 @@ export function proofEnforcementReadiness(root: string, contract: ProofDeploymen
     }
   } catch (error) { blockers.push(`CubeSigner: ${String(error)}`) }
 
-  blockers.push(...deploymentKitBlockers(root, contract, config))
+  if (scope === 'activation') blockers.push(...deploymentKitBlockers(root, contract, config))
   return {blockers, ready: blockers.length === 0}
 }

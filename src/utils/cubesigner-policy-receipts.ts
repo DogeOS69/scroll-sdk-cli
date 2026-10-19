@@ -3,6 +3,8 @@ import path from 'node:path'
 
 import type {CubesignerProductionPolicy} from '../types/doge-config.js'
 
+import {bridgeHash, parseBridgeScript} from './bridge-rotation.js'
+import {normalizeSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
 export type CubesignerPolicyMode = 'production_verifier_key_policy' | 'transport_only'
@@ -15,7 +17,18 @@ export interface CubesignerPolicyReceiptInputs {
   protocolContext: PolicyReceiptReference
   release: PolicyReceiptReference
 }
+/** Material identity for rendering; contains no attachment or governance assertion. */
+export interface CubesignerExpectedPolicyInputs extends Omit<CubesignerPolicyReceiptInputs, 'attachment'> {
+  aggregateVerifyingKey: PolicyReceiptReference
+  bridgeProgram: PolicyReceiptReference
+  buildReceipt: PolicyReceiptReference
+  key: {keyId: string; materialId: string; roleId: string}
+  materials: PolicyReceiptReference
+  publicBridge: PolicyReceiptReference
+  publishedVersion: PolicyReceiptReference
+}
 export interface CubesignerPolicySelection {
+  expectedPolicy?: CubesignerExpectedPolicyInputs
   mode?: CubesignerPolicyMode
   policyReceipts?: CubesignerPolicyReceiptInputs
   productionPolicy?: CubesignerProductionPolicy
@@ -55,7 +68,7 @@ function receipt(root: string, reference: PolicyReceiptReference, schema: string
   return {file, value}
 }
 
-function checkCurrentProtocol(root: string, refs: CubesignerPolicyReceiptInputs, release: ObjectValue): void {
+function checkCurrentProtocol(root: string, refs: Pick<CubesignerPolicyReceiptInputs, 'protocolContext'>, release: ObjectValue): void {
   const context = readFile(root, refs.protocolContext, 4 * 1024 * 1024)
   const expected = digest(release.protocolContextSha256, 'policy protocol digest')
   if (expected !== `sha256:${proofFileHash(context)}`) throw new Error('Policy release belongs to a different protocol context')
@@ -70,6 +83,7 @@ export function resolveCubesignerPolicy(input: {
   deploymentDir?: string
   keys: Array<{keyId: string; materialId: string; roleId: string}>
   network: string
+  scope?: 'activation' | 'preparation'
   selection?: CubesignerPolicySelection
 }): {liveEvidence?: string; mode: CubesignerPolicyMode; policy?: CubesignerProductionPolicy; warnings: string[]} {
   const {selection} = input
@@ -83,11 +97,12 @@ export function resolveCubesignerPolicy(input: {
 
   if (!['production_verifier_key_policy', 'transport_only'].includes(mode)) throw new Error('Unsupported CubeSigner policy mode')
   const root = path.resolve(input.deploymentDir ?? '.')
-  const refs = selection?.policyReceipts
+  const prepared = input.scope === 'preparation' ? selection?.expectedPolicy : undefined
+  const refs = prepared ?? selection?.policyReceipts
   if (mode === 'transport_only') {
     if (input.network === 'mainnet') throw new Error('CubeSigner transport_only is forbidden on mainnet')
     const warnings = ['CubeSigner transport_only does not independently verify proofs in CubeSigner; WP proof enforcement is configured separately']
-    if (refs?.attachment) {
+    if (refs && 'attachment' in refs && refs.attachment) {
       const attached = receipt(root, refs.attachment, 'dogeos/cubesigner-policy-attachment/v1').value
       if (attached.policyIdentifier) {
         const release = receipt(root, refs.release, 'dogeos/cubesigner-policy-release/v1')
@@ -114,7 +129,7 @@ export function resolveCubesignerPolicy(input: {
   if (input.keys.length !== 1) throw new Error('Policy attachment requires the exact singleton CubeSigner key and role')
   const key = input.keys[0]
   const release = receipt(root, refs.release, 'dogeos/cubesigner-policy-release/v1')
-  const attachment = receipt(root, refs.attachment, 'dogeos/cubesigner-policy-attachment/v1').value
+  const attachment = 'attachment' in refs ? receipt(root, refs.attachment, 'dogeos/cubesigner-policy-attachment/v1').value : undefined
   const r = release.value
   string(r.coreRevision, 'policy core revision', /^[\da-f]{40}$/)
   const identifier = string(r.policyIdentifier, 'immutable policy identifier', /^[\da-z][\d._a-z-]{2,63}\/v(?:0|[1-9]\d{0,8})$/)
@@ -133,10 +148,10 @@ export function resolveCubesignerPolicy(input: {
   readFile(path.dirname(release.file), {path: string(tests.path, 'policy tests path'), sha256: digest(tests.sha256, 'policy tests digest')}, 16 * 1024 * 1024)
   const bindings = {environment: string(refs.environment, 'CubeSigner environment'), organization: string(refs.organization, 'CubeSigner organization'), ...key, policyArtifactDigest: artifactDigest, policyIdentifier: identifier, proofResolverAuthority: authority, releaseSha256: `sha256:${proofFileHash(release.file)}`}
   for (const [field, expected] of Object.entries(bindings)) {
-    if (attachment[field] !== expected) throw new Error(`Policy attachment ${field} does not match selected release/key`)
+    if (attachment && attachment[field] !== expected) throw new Error(`Policy attachment ${field} does not match selected release/key`)
   }
 
-  if (attachment.readback !== 'verified' || attachment.c2fEgressAuthority !== authority) throw new Error('Policy attachment lacks matching provider readback/C2F egress')
+  if (attachment && (attachment.readback !== 'verified' || attachment.c2fEgressAuthority !== authority)) throw new Error('Policy attachment lacks matching provider readback/C2F egress')
   const policy: CubesignerProductionPolicy = {
     policyArtifactDigest: artifactDigest, policyIdentifier: identifier, programIdentityDigest: digest(r.programIdentityDigest, 'program identity digest'),
     proofResolverAuthority: authority,
@@ -146,16 +161,66 @@ export function resolveCubesignerPolicy(input: {
   digest(provenance.bridgeProgramSha256, 'BridgeState program provenance')
   digest(provenance.aggregateVerifyingKeySha256, 'aggregate VK provenance')
   let liveEvidence: string | undefined
-  if (r.requiresLiveEvidence === true || refs.liveEvidence) {
+  if ((!prepared && r.requiresLiveEvidence === true) || refs.liveEvidence) {
     if (!refs.liveEvidence) throw new Error('Selected policy requires live evidence')
     liveEvidence = readFile(root, refs.liveEvidence, 512 * 1024)
     const report = object(JSON.parse(fs.readFileSync(liveEvidence, 'utf8')), 'live evidence')
-    if (report.result !== 'passed' || report.policyIdentifier !== identifier || report.keyId !== key.keyId || report.protocolContextSha256 !== r.protocolContextSha256) throw new Error('Live evidence does not bind the selected policy, key and context')
+    const reviewedCanary = prepared && report.schema === 'scrollsdk/cubesigner-live-acceptance/v1' && report.scope === 'canary'
+      && report.targetKeyId === key.keyId && report.productionBindingReviewed === true
+    if (report.result !== 'passed' || report.policyIdentifier !== identifier || (!reviewedCanary && report.keyId !== key.keyId) || report.protocolContextSha256 !== r.protocolContextSha256) throw new Error('Live evidence does not bind the selected policy, key and context')
     policy.liveEvidenceReportDigest = `sha256:${proofFileHash(liveEvidence)}`
     policy.liveEvidenceReportPath = LIVE_POLICY_EVIDENCE_PATH
   }
 
-  return {liveEvidence, mode, policy, warnings: []}
+  if (prepared) {
+    for (const field of ['keyId', 'materialId', 'roleId'] as const) {
+      if (prepared.key?.[field] !== key[field]) throw new Error('Expected policy key/role mismatch')
+    }
+
+    if (!/\/v[1-9]\d*$/.test(identifier)) throw new Error('Expected production policy needs a concrete published version v1 or later')
+    for (const [ref, expected] of [[prepared.bridgeProgram, provenance.bridgeProgramSha256], [prepared.aggregateVerifyingKey, provenance.aggregateVerifyingKeySha256]] as const) {
+      if (`sha256:${proofFileHash(readFile(root, ref, 512 * 1024 * 1024))}` !== expected) throw new Error('Expected policy program/VK artifact mismatch')
+    }
+
+    const material = object(JSON.parse(fs.readFileSync(readFile(root, prepared.materials, 4 * 1024 * 1024), 'utf8')), 'proof materials')
+    const bridgeMaterial = object(material.bridge, 'real Bridge materials')
+    const software = object(material.software, 'real software materials')
+    if (material.schema !== 'scrollsdk/proof-materials/v1' || material.schemaVersion !== 1 || software.identitySource !== 'real_identity_probe'
+      || bridgeMaterial.protocolContextSha256 !== String(r.protocolContextSha256).replace('sha256:', '')
+      || object(object(bridgeMaterial.artifacts, 'Bridge artifacts').appExe, 'Bridge program').sha256 !== String(provenance.bridgeProgramSha256).replace('sha256:', '')
+      || object(object(software.artifacts, 'software artifacts').aggregateVerifyingKey, 'aggregate VK').sha256 !== String(provenance.aggregateVerifyingKeySha256).replace('sha256:', '')) throw new Error('Expected policy requires real context-bound material identities')
+    const bridge = object(JSON.parse(fs.readFileSync(readFile(root, prepared.publicBridge, 1024 * 1024), 'utf8')), 'public Bridge')
+    const script = string(bridge.redeem_script_hex, 'Bridge redeem script')
+    const parsed = parseBridgeScript(script)
+    const context = object(JSON.parse(fs.readFileSync(readFile(root, refs.protocolContext, 4 * 1024 * 1024), 'utf8')), 'protocol context')
+    if (object(context.genesis, 'protocol genesis').genesis_bridge_key_hash !== bridgeHash(script)) throw new Error('Public Bridge script differs from the protocol context')
+    const bindings = object(r.bindings, 'reviewed build bindings')
+    const baseUrl = normalizeSignerProofArtifactBaseUrl(string(bindings.proofArtifactBaseUrl, 'compiled resolver base URL'))
+    if (baseUrl !== bindings.proofArtifactBaseUrl || new URL(baseUrl).origin !== authority) throw new Error('Compiled resolver base URL differs from the release authority')
+    const identity = object(object(material.bridge, 'Bridge materials').identity, 'Bridge identity')
+    if (![identity.programCommitmentHash, identity.verificationKeyHash].every(value => /^(0x)?[\da-f]{64}$/.test(String(value))) || bindings.namespaceId !== parsed.namespace || bindings.bridgeKeyHash !== bridgeHash(script)
+      || bindings.teePublicKey !== parsed.tee || bindings.bridgeProgramCommitment !== identity.programCommitmentHash
+      || bindings.aggregateVkIdentity !== identity.verificationKeyHash) throw new Error('Policy namespace/Bridge/program commitment/VK bindings mismatch')
+    const testsReport = object(JSON.parse(fs.readFileSync(readFile(path.dirname(release.file), {path: string(tests.path, 'test report'), sha256: String(tests.sha256)}, 16 * 1024 * 1024), 'utf8')), 'tests')
+    for (const [field, value] of Object.entries(bindings)) {
+      if (object(testsReport.bindings, 'tested build bindings')[field] !== value) throw new Error('Reviewed tests do not bind compiled policy inputs')
+    }
+
+    const build = object(JSON.parse(fs.readFileSync(readFile(root, prepared.buildReceipt, 1024 * 1024), 'utf8')), 'build receipt')
+    if (!['dogeos/cubesigner-policy-build-receipt/v2', 'dogeos/cubesigner-policy-external-build/v1'].includes(String(build.schema))) throw new Error('Unsupported expected policy build receipt')
+    const buildWasm = object(build.wasm, 'build Wasm')
+    if (build.coreRevision !== r.coreRevision || `sha256:${buildWasm.sha256}` !== artifactDigest) throw new Error('Expected policy build provenance mismatch')
+    if (build.schema === 'dogeos/cubesigner-policy-external-build/v1') {
+      const script = object(build.buildScript, 'external build script')
+      if (!/^[\da-f]{40}$/.test(String(script.revision)) || !/^[\da-f]{64}$/.test(String(script.sha256))
+        || object(build.protocolContext, 'build context').sha256 !== String(r.protocolContextSha256).replace('sha256:', '')) throw new Error('External build script/context provenance is incomplete')
+    } else if (!/^.+@sha256:[\da-f]{64}$/.test(String(build.compilerImage))) throw new Error('Policy compiler image is not pinned')
+    const published = object(JSON.parse(fs.readFileSync(readFile(root, prepared.publishedVersion, 1024 * 1024), 'utf8')), 'published version')
+    if (published.schema !== 'scrollsdk/cubesigner-policy-published/v1' || published.policyIdentifier !== identifier
+      || published.policyArtifactDigest !== artifactDigest || published.environment !== refs.environment || published.organization !== refs.organization) throw new Error('Expected policy published version mismatch')
+  }
+
+  return {liveEvidence, mode, policy, warnings: prepared ? ['Configuration prepared; CubeSigner activation pending. Do not install cubesigner-signer until verify-activation passes.'] : []}
 }
 
 export function cubesignerPolicyEnvironment(resolved: ReturnType<typeof resolveCubesignerPolicy>): Record<string, string> {

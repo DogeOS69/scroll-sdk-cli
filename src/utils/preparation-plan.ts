@@ -19,7 +19,7 @@ import {usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
 import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
-import {PREPARATION_STAGES, type PreparationStage, stageCommand, stagedPreparationSteps} from './preparation-stages.js'
+import {PREPARATION_STAGES, type PreparationStage, prerequisiteStages, stageCommand, stagedPreparationSteps} from './preparation-stages.js'
 import {rentalEnvelope, resolveProofWorkers} from './proof-workers-config.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
@@ -33,6 +33,7 @@ export interface PreparationPlan {deploymentName: string; envFile?: string; id: 
 export interface PreparationState {
   completedStage?: PreparationStage
   currentStep?: string
+  deferred?: string[]
   files: Record<string, string>
   nextStage?: PreparationStage
   planId: string
@@ -100,7 +101,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   }
 
   add('secrets', 'Generate private runtime Secrets')
-  if (staged && spec.signing?.cubesigner) add('cubesigner-session', 'Refresh the CubeSigner runtime session for the configured role', 'cloud')
+  if (staged && spec.signing?.cubesigner) add('cubesigner-session', 'Validate/reuse or create the scoped CubeSigner runtime session (provider mutation when absent)', 'cloud')
   if (spec.proofTopology?.enforcement === 'enforce') {
     add('deployment-kit', 'Export the signer deployment kit')
     if (p.deploymentKitPublication?.mode === 's3') add('deployment-kit-published', 'Publish and verify the signer deployment kit in the selected S3 bucket', 'cloud')
@@ -108,6 +109,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   }
 
   add('proof-check', 'Validate proof configuration and required evidence')
+  if (staged && spec.signing?.cubesigner) add('cubesigner-secret-upload', 'Upload only the CubeSigner runtime Secrets', 'cloud')
   if (p.secretUpload) add('secret-upload', 'Upload declared runtime Secrets', 'cloud')
   if (spec.proofWorkers) {
     const workers = resolveProofWorkers(spec.proofWorkers)
@@ -302,69 +304,12 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
 }
 
 const DEPLOYMENT_KIT_DIRECTORY = /^deployment-kit-k-[\da-f]{12}$/
-/** Steps of the retired signer-policy bundle and partner receipts. */
-const SIGNER_HANDOFF_STEPS = new Set(['charts-validated', 'signer-policy', 'signer-receipts'])
-
-/**
- * Plans frozen by an earlier CLI listed the retired signer-policy steps. Replace
- * only those IDs, in place: an enforcing plan gets the two deployment-kit steps
- * where `signer-policy` was; everything else is untouched.
- */
-export function migrateSignerHandoffSteps(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
-  if (!plan.steps.some(step => SIGNER_HANDOFF_STEPS.has(step.id))) return plan
-  const staged = plan.schema === 'scrollsdk/preparation/v2'
-  const current = preparationSteps(spec, staged)
-  const kitSteps = current.filter(step => step.id === 'deployment-kit' || step.id === 'deployment-kit-published')
-  const steps = plan.steps.flatMap(step => {
-    if (step.id === 'signer-policy') return kitSteps
-    if (staged && step.id === 'charts-validated') return current.filter(item => item.id === 'render-final')
-    return SIGNER_HANDOFF_STEPS.has(step.id) ? [] : [step]
-  })
-  const body: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
-  delete body.id
-  return {...body, id: digest(JSON.stringify(body))}
-}
-
-/** Add only the local policy export to older staged plans, preserving every existing step. */
-export function migratePolicyBuildStep(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
-  if (plan.schema !== 'scrollsdk/preparation/v2' || !needsPreparationPolicy(spec) || plan.steps.some(step => step.id === 'cubesigner-policy-build')) return plan
-  const current = preparationSteps(spec, true)
-  if (JSON.stringify(current.filter(step => step.id !== 'cubesigner-policy-build')) !== JSON.stringify(plan.steps)) return plan
-  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps: current}
-  delete next.id
-  return {...next, id: digest(JSON.stringify(next))}
-}
-
-/** Older render receipts did not create a signer session. Preserve all other work. */
-function migrateCubesignerSessionStep(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
-  if (plan.schema !== 'scrollsdk/preparation/v2' || !spec.signing?.cubesigner || plan.steps.some(step => step.id === 'cubesigner-session')) return plan
-  const session = preparationSteps(spec, true).find(step => step.id === 'cubesigner-session')!
-  const steps = plan.steps.flatMap(step => step.id === 'secrets' ? [step, session] : [step])
-  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
-  delete next.id
-  return {...next, id: digest(JSON.stringify(next))}
-}
-
-/** Split context generation out of proof preparation without resetting any step receipt. */
-export function migrateProtocolContextStage(plan: PreparationPlan): PreparationPlan {
-  if (plan.schema !== 'scrollsdk/preparation/v2') return plan
-  const context = plan.steps.find(step => step.id === 'protocol-context')
-  if (context?.stage !== 'proof-materials') return plan
-  const steps = plan.steps.filter(step => step !== context)
-  const firstProof = steps.findIndex(step => step.stage === 'proof-materials')
-  if (firstProof < 0) return plan
-  steps.splice(firstProof, 0, {...context, stage: 'protocol-context'})
-  const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
-  delete next.id
-  return {...next, id: digest(JSON.stringify(next))}
-}
-
 export interface PreparationRunner {run(step: PreparationStep, spec: DeploymentSpec, root: string, plan: PreparationPlan): Promise<void>}
-export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage; warn?: (message: string) => void} = {}): Promise<PreparationState> {
+export async function applyPreparation(rootInput: string, runner: PreparationRunner, progress: (step: PreparationStep) => void = () => {}, options: {deferCubesigner?: boolean; dogecoinRoutingSpec?: string; refreshRuntime?: boolean; stage?: PreparationStage; warn?: (message: string) => void} = {}): Promise<PreparationState> {
   if (options.dogecoinRoutingSpec && !options.refreshRuntime) throw new Error('Dogecoin routing updates require --refresh-runtime')
   const root = fs.realpathSync(rootInput)
   const directory = localPath(root, WORKFLOW_DIR)
-  let plan = JSON.parse(fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/plan.json`), 'utf8')) as PreparationPlan
+  const plan = JSON.parse(fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/plan.json`), 'utf8')) as PreparationPlan
   const text = fs.readFileSync(localPath(root, `${WORKFLOW_DIR}/intent.json`), 'utf8')
   const {id, ...body} = plan
   const warnings: string[] = []
@@ -376,43 +321,28 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   const spec = JSON.parse(text) as DeploymentSpec
   validatePreparation(spec)
   const staged = plan.schema === 'scrollsdk/preparation/v2'
-  const migrated = migratePolicyBuildStep(migrateCubesignerSessionStep(migrateProtocolContextStage(migrateSignerHandoffSteps(plan, spec)), spec), spec)
-  if (JSON.stringify(preparationSteps(spec, staged)) !== JSON.stringify(migrated.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
+  if (JSON.stringify(preparationSteps(spec, staged)) !== JSON.stringify(plan.steps)) throw new Error('CLI workflow changed; this plan requires its original CLI version')
   const statePath = localPath(root, `${WORKFLOW_DIR}/state.json`)
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PreparationState
   state.warnings = warnings
-  // A migration interrupted after writing state.json leaves state on the migrated id.
-  if (state.planId !== id && state.planId !== migrated.id) throw new Error('Workflow state does not match plan')
+  if (state.planId !== id) throw new Error('Workflow state does not match plan')
   if (options.stage && !staged) throw new Error('Stage commands require a new staged plan; resume this legacy plan with setup apply')
-  if (staged && !options.stage && (state.status !== 'prepared' || migrated.id !== id)) throw new Error(`Select a preparation stage: ${stageCommand(migrated.steps.find(step => state.steps[step.id] !== 'completed')?.stage ?? 'genesis', root)}`)
+  if (staged && !options.stage && state.status !== 'prepared') throw new Error(`Select a preparation stage: ${stageCommand(plan.steps.find(step => state.steps[step.id] !== 'completed' && !state.deferred?.includes(step.id))?.stage ?? 'genesis', root)}`)
   if (staged && options.refreshRuntime) throw new Error('Runtime refresh is a legacy apply operation; it is not a staged deployment operation')
   if (options.stage) {
     const index = PREPARATION_STAGES.indexOf(options.stage)
     if (index < 0) throw new Error('Unknown preparation stage')
-    const missing = migrated.steps.find(step => PREPARATION_STAGES.indexOf(step.stage!) < index && state.steps[step.id] !== 'completed')
+    const missing = plan.steps.find(step => prerequisiteStages(options.stage!).includes(step.stage!) && state.steps[step.id] !== 'completed' && !state.deferred?.includes(step.id))
     if (missing) throw new Error(`Prerequisite ${missing.stage} is incomplete. Run ${stageCommand(missing.stage!, root)}`)
   }
 
-  if (staged) state.nextStage = migrated.steps.find(step => state.steps[step.id] !== 'completed')?.stage
+  if (staged) state.nextStage = plan.steps.find(step => state.steps[step.id] !== 'completed' && !state.deferred?.includes(step.id))?.stage
   const lock = path.join(directory, 'apply.lock')
   // Never steal an ambiguous lock. An interrupted process leaves an explicit recovery record.
   let fd: number
   try {fd = fs.openSync(lock, 'wx', 0o600)} catch {throw new Error('Another apply owns .scrollsdk/apply.lock; if interrupted, verify its recorded host/PID is no longer running before removing that lock')}
   fs.writeFileSync(fd, JSON.stringify({host: os.hostname(), pid: process.pid})); fs.closeSync(fd)
   try {
-    if (migrated.id !== id) {
-      // State first, then the plan: a crash between them is recovered on the next run.
-      for (const step of SIGNER_HANDOFF_STEPS) delete state.steps[step]
-      // A newly generated seed must be uploaded even if an older plan finished upload.
-      if (!plan.steps.some(step => step.id === 'cubesigner-session') && migrated.steps.some(step => step.id === 'cubesigner-session')) delete state.steps['secret-upload']
-      // Recheck the new publication evidence when a staged deployment renders.
-      if (staged && spec.proofTopology?.enforcement === 'enforce' && plan.steps.some(step => SIGNER_HANDOFF_STEPS.has(step.id))) delete state.steps['proof-check']
-      state.planId = migrated.id
-      writeJson(statePath, state)
-      writeJson(localPath(root, `${WORKFLOW_DIR}/plan.json`), migrated)
-      plan = migrated
-    }
-
     for (const [file, hash] of Object.entries(state.files)) {
       // Also release hashes recorded by older CLI versions.
       if (operatorEditableArtifact(file)) {delete state.files[file]; continue}
@@ -429,6 +359,11 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     for (const step of plan.steps) {
       if (options.stage && step.stage !== options.stage) continue
       if (state.steps[step.id] === 'completed') continue
+      if (['cubesigner-secret-upload', 'cubesigner-session'].includes(step.id)) {
+        if (options.deferCubesigner) {state.deferred = [...new Set([...(state.deferred ?? []), step.id])]; continue}
+        state.deferred = state.deferred?.filter(id => id !== step.id)
+      }
+
       if (state.steps[step.id] === 'recovery-required' || state.steps[step.id] === 'running' && step.retry === 'reconcile') {
         state.status = 'recovery-required'; state.currentStep = step.id
         state.waiting = {message: 'A transaction may already have been broadcast. Reconcile on-chain results and partial artifacts; this workflow will not replay this step automatically'}
@@ -462,7 +397,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     state.status = plan.steps.every(step => state.steps[step.id] === 'completed') ? 'prepared' : 'stage-complete'
     if (options.stage) {
       state.completedStage = options.stage
-      state.nextStage = plan.steps.find(step => state.steps[step.id] !== 'completed')?.stage
+      state.nextStage = plan.steps.find(step => state.steps[step.id] !== 'completed' && !state.deferred?.includes(step.id))?.stage
     }
 
     delete state.currentStep; delete state.waiting

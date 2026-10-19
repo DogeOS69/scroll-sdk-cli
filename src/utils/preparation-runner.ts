@@ -250,7 +250,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         const args = ['prep-charts', '-N', '--skip-auth-check', '--skip-l2-contract-deployment-block']
         // Proof preparation needs compiled service configuration, not a ready
         // HTTPS edge. The final render still validates deployment ingress.
-        if (step.stage === 'proof-materials') args.push('--proof-preparation')
+        if (step.id !== 'render-final' && step.stage) args.push('--proof-preparation')
         const receipt = p.proofMaterials.receipt ?? '.data/proof-materials-v1.json'
         if (fs.existsSync(path.resolve(root, receipt))) args.push('--proof-materials-receipt', receipt)
         if (p.proofPublication && step.id !== 'charts') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
@@ -275,19 +275,43 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(['gen-secrets', '-N']); break
       }
 
-      case 'cubesigner-session': {await command(['cubesigner-refresh', '-N', '--doge-config', '.data/doge-config.toml']); break}
-      case 'deployment-kit': {await exportPreparationDeploymentKit(root); break}
-      case 'deployment-kit-published': {
-        await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup proof-materials' : 'scrollsdk setup apply'));
+      case 'cubesigner-session': {
+        const config = toml.parse(fs.readFileSync(localPath(root, '.data/doge-config.toml'), 'utf8')) as any
+        if (config.cubesigner?.mode === 'production_verifier_key_policy' || config.cubesigner?.expectedPolicy || fs.existsSync(localPath(root, '.scrollsdk/inputs/cubesigner-policy/governance.json'))) {
+          await command(['cubesigner-policy', 'prepare-session', '--dir', '.'])
+        } else {
+          // Keep completed deployments' explicit legacy flow. Never rotate a complete seed on resume.
+          const files = ['secrets/cubesigner-signer-session.json', 'secrets/cubesigner-signer.env']
+          if (files.every(file => fs.existsSync(localPath(root, file)) && fs.statSync(localPath(root, file)).size > 0)) {
+            let session: any
+            try {session = JSON.parse(fs.readFileSync(localPath(root, files[0]), 'utf8'))} catch {throw new AwaitingInput({message: 'Existing runtime session is invalid; explicit recovery is required, no session was rotated'})}
+            const role = config.cubesigner?.roles?.[0]
+            if (!role || session.role_id !== role.role_id || !(session.session_exp > Date.now() / 1000) || !(session.session_info?.refresh_token_exp > Date.now() / 1000)
+              || fs.readFileSync(localPath(root, files[1]), 'utf8').trim() !== `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"`) throw new AwaitingInput({message: 'Existing runtime session/key/expiry mismatch; explicit recovery is required, no session was rotated'})
+          }
+
+          if (!files.every(file => fs.existsSync(localPath(root, file)) && fs.statSync(localPath(root, file)).size > 0)) {
+            if (files.some(file => fs.existsSync(localPath(root, file)))) throw new AwaitingInput({message: 'Partial CubeSigner session files require explicit recovery; no session was rotated'})
+            await command(['cubesigner-refresh', '-N', '--doge-config', '.data/doge-config.toml'])
+          }
+        }
+
         break
       }
 
-      case 'proof-check': {await command(['proof-config-check']); break}
-      case 'secret-upload': {
-        if (spec.signing?.cubesigner) {
+      case 'deployment-kit': {await exportPreparationDeploymentKit(root); break}
+      case 'deployment-kit-published': {
+        await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup signer-kit-publish' : 'scrollsdk setup apply'));
+        break
+      }
+
+      case 'proof-check': {await command(['proof-config-check', ...(step.stage ? ['--scope', 'preparation'] : [])]); break}
+      case 'secret-upload': case 'cubesigner-secret-upload': {
+        const signerOnly = step.id === 'cubesigner-secret-upload'
+        if (spec.signing?.cubesigner && (signerOnly || !step.stage)) {
           for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) {
             const file = localPath(root, `secrets/${name}`)
-            if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) throw new AwaitingInput({file, message: 'Required CubeSigner runtime Secret input is missing or empty. Run scrollsdk setup cubesigner-refresh from the deployment directory, then rerun setup upload-secrets. Uploading other available files does not satisfy this prerequisite.'})
+            if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) throw new AwaitingInput({file, message: 'Required CubeSigner runtime Secret input is missing or empty. Run scrollsdk setup cubesigner-policy prepare-session --dir . for the prepared production workflow, or explicitly recover legacy credentials, then rerun setup upload-secrets. Uploading other available files does not satisfy this prerequisite.'})
           }
         }
 
@@ -295,8 +319,8 @@ export class CommandPreparationRunner implements PreparationRunner {
         if (!upload) throw new Error('Configure preparation.secretUpload for the external Secret store before uploading')
         const {kubeContext, namespace} = specKubernetesTarget(spec)
         if (spec.monitoring?.slack?.enabled && !kubeContext) throw new AwaitingInput({message: 'Set infrastructure.kubeContext to upload monitoring Secrets'})
-        await command(['push-secrets', '-N', '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.provider === 'aws' ? specAwsSecretPrefix(spec) : undefined), ...optional('kube-context', kubeContext), ...optional('namespace', namespace)])
-        if (kubeContext) await command(['monitoring-secrets', '--apply', '--kube-context', kubeContext, '--namespace', namespace])
+        await command(['push-secrets', '-N', ...(step.stage ? [signerOnly ? '--cubesigner-only' : '--exclude-cubesigner'] : []), '--provider', upload.provider, ...optional('aws-region', upload.awsRegion ?? spec.infrastructure.aws?.region), ...optional('aws-prefix', upload.provider === 'aws' ? specAwsSecretPrefix(spec) : undefined), ...optional('kube-context', kubeContext), ...optional('namespace', namespace)])
+        if (kubeContext && !signerOnly) await command(['monitoring-secrets', '--apply', '--kube-context', kubeContext, '--namespace', namespace])
         break
       }
 

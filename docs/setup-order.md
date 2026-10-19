@@ -42,6 +42,12 @@ cross-repository corrections and shadowfork configuration rehearsal.
 Production Bridge initialization follows the [staged production flow](spec-preparation.md#production-funding-and-resume).
 The legacy full `bridge-init` command uses a deterministic test helper.
 
+For staged CubeSigner deployments, follow [preparation and activation](cubesigner-preparation.md):
+`protocol-context → proof-materials / policy-prepare → proof-publish → signer-kit → render → upload-secrets`.
+`signer-kit-publish` is a separate publication handoff. Attachment approval does not
+block expected configuration or an already authorized role's session preparation.
+Only fresh activation verification authorizes the guarded signer install target.
+
 ## 1. Prepare configuration and identities
 
 For the spec path, use `generate-from-spec --bootstrap --sdk-dir` with the

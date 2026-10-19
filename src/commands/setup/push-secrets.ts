@@ -27,7 +27,7 @@ const DEFAULT_VAULT_TOKEN_SECRET_NAME = 'vault-token'
 const DEFAULT_VAULT_VERSION = 'v2'
 
 interface SecretService {
-  pushSecrets(cubesignerOnly?: boolean, secretFile?: string): Promise<PushedSecret[]>
+  pushSecrets(cubesignerOnly?: boolean, secretFile?: string, excludeCubesigner?: boolean): Promise<PushedSecret[]>
 }
 
 interface PushedSecret {
@@ -38,13 +38,13 @@ interface PushedSecret {
 
 type DstackUploadOptions = Parameters<typeof publishDstackSecrets>[0]
 
-function selectedLegacyFiles(cubesignerOnly: boolean, secretFile?: string): string[] {
+function selectedLegacyFiles(cubesignerOnly: boolean, secretFile?: string, excludeCubesigner = false): string[] {
   const {filename, secretsDir} = resolveSecretFile(secretFile)
   if (!fs.existsSync(secretsDir)) return []
   const allowed = new Set(['cubesigner-signer-session.json', 'cubesigner-signer.env'])
   if (cubesignerOnly && filename && !allowed.has(filename)) throw new Error('The selected file is not a singleton CubeSigner Secret')
   return fs.readdirSync(secretsDir)
-    .filter(file => (file.endsWith('.env') || file.endsWith('.json')) && (!filename || file === filename) && (!cubesignerOnly || allowed.has(file)))
+    .filter(file => (!excludeCubesigner || !file.startsWith('cubesigner-signer')) && (file.endsWith('.env') || file.endsWith('.json')) && (!filename || file === filename) && (!cubesignerOnly || allowed.has(file)))
     .sort().map(file => path.join(secretsDir, file))
 }
 
@@ -131,7 +131,7 @@ class AWSSecretService implements SecretService {
     }
   }
 
-  async pushSecrets(cubesignerOnly: boolean = false, secretFile?: string): Promise<PushedSecret[]> {
+  async pushSecrets(cubesignerOnly: boolean = false, secretFile?: string, excludeCubesigner?: boolean): Promise<PushedSecret[]> {
     const pushedSecrets: PushedSecret[] = []
     const { filename, secretsDir } = resolveSecretFile(secretFile)
 
@@ -177,7 +177,7 @@ class AWSSecretService implements SecretService {
     }
 
     // Process JSON files
-    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file));
+    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && (!excludeCubesigner || !file.startsWith('cubesigner-signer')) && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file));
     if (filename && filename.endsWith('.json')) {
       jsonFiles = jsonFiles.filter((f) => f === filename)
     } else if (filename) {
@@ -197,7 +197,7 @@ class AWSSecretService implements SecretService {
     }
 
     // Process ENV files
-    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env') && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file))
+    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env') && (!excludeCubesigner || !file.startsWith('cubesigner-signer')) && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file))
     if (filename && filename.endsWith('.env')) {
       envFiles = envFiles.filter((f) => f === filename)
     } else if (filename) {
@@ -337,7 +337,7 @@ class HashicorpVaultDevService implements SecretService {
     }
   }
 
-  async pushSecrets(cubesignerOnly: boolean = false, secretFile?: string): Promise<PushedSecret[]> {
+  async pushSecrets(cubesignerOnly: boolean = false, secretFile?: string, excludeCubesigner?: boolean): Promise<PushedSecret[]> {
     const pushedSecrets: PushedSecret[] = []
     if (!(await this.isVaultPodRunning())) {
       this.log(chalk.yellow('Vault pod is not running. Please install Vault using the following commands:'))
@@ -417,7 +417,7 @@ class HashicorpVaultDevService implements SecretService {
     }
 
     // Process JSON files
-    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file));
+    let jsonFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.json') && (!excludeCubesigner || !file.startsWith('cubesigner-signer')) && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file));
 
     if (filename && filename.endsWith('.json')) {
       jsonFiles = jsonFiles.filter(f => f === filename);
@@ -438,7 +438,7 @@ class HashicorpVaultDevService implements SecretService {
     }
 
     // Process ENV files
-    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env') && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file))
+    let envFiles = fs.readdirSync(secretsDir).filter((file) => file.endsWith('.env') && (!excludeCubesigner || !file.startsWith('cubesigner-signer')) && !isRetiredGethSecretFile(file) && !isRetiredServiceFile(file))
 
     if (filename && filename.endsWith('.env')) {
       envFiles = envFiles.filter(f => f === filename);
@@ -673,6 +673,7 @@ export default class SetupPushSecrets extends Command {
     'doge-config': Flags.string({description: 'Dstack public TOML configuration (default .data/doge-config.toml)', exclusive: ['spec']}),
     'dry-run': Flags.boolean({default: false, description: 'Plan selected Secret uploads and validate dstack files locally; no remote requests or changes'}),
     'dstack-only': Flags.boolean({default: false, description: 'Upload only dstack Secrets to Kubernetes; omit to include all configured services', exclusive: ['cubesigner-only', 'secret-file']}),
+    'exclude-cubesigner': Flags.boolean({default: false, description: 'Defer CubeSigner runtime Secret upload; exclude even stale signer files', exclusive: ['cubesigner-only', 'secret-file']}),
     json: Flags.boolean({
       default: false,
       description: 'Output in JSON format (stdout for data, stderr for logs)',
@@ -748,7 +749,7 @@ export default class SetupPushSecrets extends Command {
     let dstack: DstackUploadOptions | undefined
     let legacyFiles: string[]
     try {
-      legacyFiles = flags['dstack-only'] ? [] : selectedLegacyFiles(flags['cubesigner-only'], flags['secret-file'])
+      legacyFiles = flags['dstack-only'] ? [] : selectedLegacyFiles(flags['cubesigner-only'], flags['secret-file'], flags['exclude-cubesigner'])
       dstack = await this.prepareDstackUpload()
       if (flags.provider === 'kubernetes' && legacyFiles.length > 0) {
         throw new Error('The selected scope includes .env/.json secrets. Use --provider aws or vault for those files; enabled dstack Secrets will still upload to Kubernetes. Use --dstack-only to narrow the scope.')
@@ -817,7 +818,7 @@ export default class SetupPushSecrets extends Command {
 
       // Check Kubernetes identity/admission before mutating AWS/Vault.
       if (dstack) await publishDstackSecrets({...dstack, preflightOnly: true})
-      const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags['secret-file'])
+      const pushedSecrets = await service.pushSecrets(flags['cubesigner-only'], flags['secret-file'], flags['exclude-cubesigner'])
       const pushedSecretNames = pushedSecrets.map(secret => secret.name)
       this.jsonCtx.logSuccess('Secrets pushed successfully')
 

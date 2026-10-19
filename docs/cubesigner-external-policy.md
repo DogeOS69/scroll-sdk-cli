@@ -1,5 +1,11 @@
 # External CubeSigner policy build and governed attachment
 
+For the current implementation audit and proposed stage/governance boundaries,
+see [CubeSigner preparation workflow requirements](cubesigner-preparation-workflow-requirements.md).
+The implemented [preparation and activation workflow](cubesigner-preparation.md)
+uses this external-build route and prepares configuration before attachment approval.
+The reconciliation section below remains the strict already-attached receipt route.
+
 Use this route when the release owner requires Core's
 `tools/cubesigner/build-verifier.sh` rather than the CLI compiler image.
 This runbook uses placeholders, not production identities. Obtain the exact

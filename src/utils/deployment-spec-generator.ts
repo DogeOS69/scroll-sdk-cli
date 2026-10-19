@@ -1660,6 +1660,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   if (spec.signing.cubesigner) {
     config.cubesigner = {
       ...(spec.signing.cubesigner.mode ? {mode: spec.signing.cubesigner.mode} : {}),
+      ...(spec.signing.cubesigner.expectedPolicy ? {expectedPolicy: spec.signing.cubesigner.expectedPolicy} : {}),
       ...(spec.signing.cubesigner.policyReceipts ? {policyReceipts: spec.signing.cubesigner.policyReceipts} : {}),
       ...(spec.signing.cubesigner.productionPolicy
         ? {productionPolicy: spec.signing.cubesigner.productionPolicy}

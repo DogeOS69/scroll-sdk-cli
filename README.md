@@ -95,7 +95,8 @@ bin/run.js --help
 - [核心服务配置（中文）](docs/service-config-runbook.zh.md) — 当前 signer、Bridge、proof 与服务部署流程。
 - [Branch integration decisions](docs/branch-integration.md) — resolutions for the v0.3.0 branch consolidation.
 
-- [Staged spec preparation](docs/spec-preparation.md) — plan plus six resumable stages, local genesis, funding handoffs and explicit Secret upload.
+- [CubeSigner preparation and activation](docs/cubesigner-preparation.md) — expected configuration before approval, exact governance handoff, credential deferral and guarded installation.
+- [Staged spec preparation](docs/spec-preparation.md) — plan plus eleven resumable stages, local genesis, funding handoffs and explicit Secret upload.
 - [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
 - [Existing ALBs](docs/existing-alb.md) — select ALB/listener/target-group references in spec, verify them, and retain AWS edges when uninstalling Helm releases.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
@@ -201,8 +202,14 @@ USAGE
 * [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
 * [`scrollsdk setup bridge-init`](#scrollsdk-setup-bridge-init)
 * [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
+* [`scrollsdk setup cubesigner-policy handoff`](#scrollsdk-setup-cubesigner-policy-handoff)
 * [`scrollsdk setup cubesigner-policy import`](#scrollsdk-setup-cubesigner-policy-import)
+* [`scrollsdk setup cubesigner-policy import-acceptance`](#scrollsdk-setup-cubesigner-policy-import-acceptance)
+* [`scrollsdk setup cubesigner-policy prepare`](#scrollsdk-setup-cubesigner-policy-prepare)
+* [`scrollsdk setup cubesigner-policy prepare-input`](#scrollsdk-setup-cubesigner-policy-prepare-input)
+* [`scrollsdk setup cubesigner-policy prepare-session`](#scrollsdk-setup-cubesigner-policy-prepare-session)
 * [`scrollsdk setup cubesigner-policy reconcile`](#scrollsdk-setup-cubesigner-policy-reconcile)
+* [`scrollsdk setup cubesigner-policy verify-activation`](#scrollsdk-setup-cubesigner-policy-verify-activation)
 * [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
 * [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
 * [`scrollsdk setup dstack-config`](#scrollsdk-setup-dstack-config)
@@ -216,12 +223,14 @@ USAGE
 * [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
 * [`scrollsdk setup gen-secrets`](#scrollsdk-setup-gen-secrets)
 * [`scrollsdk setup generate-from-spec`](#scrollsdk-setup-generate-from-spec)
+* [`scrollsdk setup policy-prepare`](#scrollsdk-setup-policy-prepare)
 * [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
 * [`scrollsdk setup proof-aws-init`](#scrollsdk-setup-proof-aws-init)
 * [`scrollsdk setup proof-bundle-publish`](#scrollsdk-setup-proof-bundle-publish)
 * [`scrollsdk setup proof-config-check`](#scrollsdk-setup-proof-config-check)
 * [`scrollsdk setup proof-image-tools`](#scrollsdk-setup-proof-image-tools)
 * [`scrollsdk setup proof-materials`](#scrollsdk-setup-proof-materials)
+* [`scrollsdk setup proof-publish`](#scrollsdk-setup-proof-publish)
 * [`scrollsdk setup protocol-context`](#scrollsdk-setup-protocol-context)
 * [`scrollsdk setup proof-release-prepare`](#scrollsdk-setup-proof-release-prepare)
 * [`scrollsdk setup proof-topology-compile`](#scrollsdk-setup-proof-topology-compile)
@@ -229,7 +238,11 @@ USAGE
 * [`scrollsdk setup proof-worker-check`](#scrollsdk-setup-proof-worker-check)
 * [`scrollsdk setup proof-worker-image-check`](#scrollsdk-setup-proof-worker-image-check)
 * [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
+* [`scrollsdk setup render`](#scrollsdk-setup-render)
+* [`scrollsdk setup signer-kit`](#scrollsdk-setup-signer-kit)
+* [`scrollsdk setup signer-kit-publish`](#scrollsdk-setup-signer-kit-publish)
 * [`scrollsdk setup tls`](#scrollsdk-setup-tls)
+* [`scrollsdk setup upload-secrets`](#scrollsdk-setup-upload-secrets)
 * [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
 * [`scrollsdk signer init`](#scrollsdk-signer-init)
 * [`scrollsdk signer kms-pubkey`](#scrollsdk-signer-kms-pubkey)
@@ -971,6 +984,145 @@ EXAMPLES
 
 _See code: [src/commands/setup/cubesigner-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-init.ts)_
 
+## `scrollsdk setup cubesigner-policy handoff`
+
+Archive reviewed Core governance config, state, exact operation log and approval snapshots; never approves or executes an attachment
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy handoff --config <value> --kind initial-provisioning|sealed-upgrade --operations <value>
+    --session-lifetime <value> --state <value> [--approval <value>...] [--dir <value>] [--initial-seal-last-reviewed]
+    [--json] [--provisioning <value>]
+
+FLAGS
+  --approval=<value>...         [default: ] JSON captured by the pinned Core mfa command, one per pending operation
+  --config=<value>              (required) Reviewed Core governance config JSON
+  --dir=<value>                 [default: deployment]
+  --initial-seal-last-reviewed  Explicitly declare reviewed unregistered/unfunded setup and sealing before Bridge
+                                registration; not an on-chain check
+  --json
+  --kind=<option>               (required)
+                                <options: initial-provisioning|sealed-upgrade>
+  --operations=<value>          (required) Pinned Core governance-log.jsonl; preserve proposal and executed request
+                                records
+  --provisioning=<value>        Reviewed seal-last, unregistered/unfunded initial provisioning evidence
+  --session-lifetime=<value>    (required) Reviewed maximum runtime session lifetime, seconds
+  --state=<value>               (required) Core governance state JSON
+
+DESCRIPTION
+  Archive reviewed Core governance config, state, exact operation log and approval snapshots; never approves or executes
+  an attachment
+```
+
+_See code: [src/commands/setup/cubesigner-policy/handoff.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/handoff.ts)_
+
+## `scrollsdk setup cubesigner-policy import-acceptance`
+
+Import a reviewed real signing/denial report and update only signer evidence references; does not sign or certify installation
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy import-acceptance --report <value> [--dir <value>] [--json]
+
+FLAGS
+  --dir=<value>     [default: deployment]
+  --json
+  --report=<value>  (required) Actual reviewed exercise report; see docs/cubesigner-preparation.md
+
+DESCRIPTION
+  Import a reviewed real signing/denial report and update only signer evidence references; does not sign or certify
+  installation
+```
+
+_See code: [src/commands/setup/cubesigner-policy/import-acceptance.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/import-acceptance.ts)_
+
+## `scrollsdk setup cubesigner-policy prepare`
+
+Prepare expected production policy from reviewed artifacts and a concrete published version; no attachment required
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy prepare --input <value> [--dir <value>] [--json] [--output <value>]
+  [--session-file <value>]
+
+FLAGS
+  --dir=<value>           [default: deployment]
+  --input=<value>         (required) Reviewed release inputs JSON, relative to deployment; see
+                          docs/cubesigner-external-policy.md
+  --json
+  --output=<value>        [default: .data/cubesigner-policy-prepared] New evidence directory relative to deployment;
+                          existing output is never overwritten
+  --session-file=<value>  Management session; defaults to the cs CLI session
+
+DESCRIPTION
+  Prepare expected production policy from reviewed artifacts and a concrete published version; no attachment required
+
+EXAMPLES
+  $ scrollsdk setup cubesigner-policy prepare --dir deployment --input .data/policy-review.json --json
+```
+
+_See code: [src/commands/setup/cubesigner-policy/prepare.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/prepare.ts)_
+
+## `scrollsdk setup cubesigner-policy prepare-input`
+
+Derive the expected-policy input from actual artifacts; external reviewed identity digests and real test evidence are required, never synthesized
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy prepare-input --environment beta|gamma|prod --organization <value> --policy <value>
+    --program-identity-digest <value> --requires-live-evidence --resolver-base-url <value> --tests <value>
+    --verifier-identity-digest <value> [--build-receipt <value>] [--dir <value>] [--json] [--live-evidence <value>]
+    [--materials <value>] [--output <value>] [--wasm <value>]
+
+FLAGS
+  --build-receipt=<value>             [default: .data/cubesigner-policy/build-receipt.json]
+  --dir=<value>                       [default: deployment]
+  --environment=<option>              (required)
+                                      <options: beta|gamma|prod>
+  --json
+  --live-evidence=<value>             Reviewed real acceptance report, if already available; never generated by this
+                                      command
+  --materials=<value>                 [default: .data/proof-materials-v1.json]
+  --organization=<value>              (required)
+  --output=<value>                    [default: .scrollsdk/inputs/cubesigner-policy/preparation.json]
+  --policy=<value>                    (required) Published concrete name/vN, v1 or later
+  --program-identity-digest=<value>   (required) Reviewed release program identity digest; not the VM executable file
+                                      hash
+  --[no-]requires-live-evidence       (required) Selected release requirement; disabling a required check is not a
+                                      canary workaround
+  --resolver-base-url=<value>         (required) Exact compiled proof artifact root, including path
+  --tests=<value>                     (required) Actual reviewed test report with result, source/Wasm/context and
+                                      compiled bindings
+  --verifier-identity-digest=<value>  (required)
+  --wasm=<value>                      [default: .data/cubesigner-policy/cubesigner_verifier_policy.wasm]
+
+DESCRIPTION
+  Derive the expected-policy input from actual artifacts; external reviewed identity digests and real test evidence are
+  required, never synthesized
+```
+
+_See code: [src/commands/setup/cubesigner-policy/prepare-input.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/prepare-input.ts)_
+
+## `scrollsdk setup cubesigner-policy prepare-session`
+
+Reuse a valid scoped signer session or explicitly create one when the role permits it, independently of attachment approval; no upload or pod restart
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy prepare-session [--dir <value>] [--json] [--session-file <value>]
+
+FLAGS
+  --dir=<value>           [default: deployment]
+  --json
+  --session-file=<value>  Management session file
+
+DESCRIPTION
+  Reuse a valid scoped signer session or explicitly create one when the role permits it, independently of attachment
+  approval; no upload or pod restart
+```
+
+_See code: [src/commands/setup/cubesigner-policy/prepare-session.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/prepare-session.ts)_
+
 ## `scrollsdk setup cubesigner-policy reconcile`
 
 Read back an already attached immutable policy and generate the release/attachment
@@ -1000,6 +1152,35 @@ USAGE
 See the [external policy runbook](docs/cubesigner-external-policy.md) for build
 provenance, Council approval, receipt boundaries, and signer-side acceptance.
 The import checks local evidence; it does not assert governance or live tests passed.
+
+## `scrollsdk setup cubesigner-policy verify-activation`
+
+Check current rendered signer values, remote attachment, Council evidence and runtime session before installation; read-only provider calls, no Helm mutation
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy verify-activation [--chart <value>] [--chart-version <value>] [--dir <value>] [--governance <value>]
+    [--json] [--kube-context <value>] [--namespace <value>] [--policy-only] [--session-file <value>] [--values <value>]
+
+FLAGS
+  --chart=<value>          [default: oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer]
+  --chart-version=<value>  [default: 0.1.9]
+  --dir=<value>            [default: deployment]
+  --governance=<value>     [default: .scrollsdk/inputs/cubesigner-policy/governance.json]
+  --json
+  --kube-context=<value>   Cluster context used by the installation target
+  --namespace=<value>      [default: default]
+  --policy-only            Verify policy before preparing credentials; reports activation pending and cannot authorize
+                           installation
+  --session-file=<value>   Management session file; credentials are never printed
+  --values=<value>         [default: values/cubesigner-signer-production.yaml]
+
+DESCRIPTION
+  Check current rendered signer values, remote attachment, Council evidence and runtime session before installation;
+  read-only provider calls, no Helm mutation
+```
+
+_See code: [src/commands/setup/cubesigner-policy/verify-activation.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/verify-activation.ts)_
 
 ## `scrollsdk setup cubesigner-refresh`
 
@@ -1716,6 +1897,26 @@ EXAMPLES
 
 _See code: [src/commands/setup/generate-from-spec.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/generate-from-spec.ts)_
 
+## `scrollsdk setup policy-prepare`
+
+Resume the saved policy-prepare stage; runs only its declared effects
+
+```
+USAGE
+  $ scrollsdk setup policy-prepare [--defer-cubesigner] [--dir <value>] [--json]
+
+FLAGS
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
+
+DESCRIPTION
+  Resume the saved policy-prepare stage; runs only its declared effects
+```
+
+_See code: [src/commands/setup/policy-prepare.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/policy-prepare.ts)_
+
 ## `scrollsdk setup prep-charts`
 
 ```text
@@ -1925,8 +2126,8 @@ Validate generated proof configs, bundle revision, two switches, Worker bundle a
 
 ```
 USAGE
-  $ scrollsdk setup proof-config-check [-c <value>] [--contract <value>] [--deployment-dir <value>] [--json]
-    [--kube-context <value> --live] [--namespace <value> ] [--spec <value>]
+  $ scrollsdk setup proof-config-check [-c <value>] [--contract <value>] [--deployment-dir <value>] [--json] [--kube-context
+    <value> --live] [--namespace <value> ] [--scope activation|preparation] [--spec <value>]
 
 FLAGS
   -c, --config=<value>          doge-config.toml path
@@ -1934,9 +2135,12 @@ FLAGS
       --deployment-dir=<value>  [default: .] Deployment root
       --json                    Output structured JSON
       --kube-context=<value>    Kubernetes context for --live
-      --live                    After rollout: also require a fresh authenticated TSO poll from every Attestation
-                                signer in the WP tsoSigners
+      --live                    After rollout: also require a fresh authenticated TSO poll from every Attestation signer
+                                in the WP tsoSigners
       --namespace=<value>       [default: default] Kubernetes namespace for --live
+      --scope=<option>          [default: activation] Preparation validates expected policy materials; it never
+                                authorizes signer installation
+                                <options: activation|preparation>
       --spec=<value>            Optional DeploymentSpec proof source
 
 DESCRIPTION
@@ -1982,6 +2186,26 @@ DESCRIPTION
 
 _See code: [src/commands/setup/proof-image-tools.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-image-tools.ts)_
 
+## `scrollsdk setup proof-publish`
+
+Resume the saved proof-publish stage; runs only its declared effects
+
+```
+USAGE
+  $ scrollsdk setup proof-publish [--defer-cubesigner] [--dir <value>] [--json]
+
+FLAGS
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
+
+DESCRIPTION
+  Resume the saved proof-publish stage; runs only its declared effects
+```
+
+_See code: [src/commands/setup/proof-publish.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-publish.ts)_
+
 ## `scrollsdk setup protocol-context`
 
 Generate canonical protocol context from completed Bridge funding; stop before policy builds and proof preparation.
@@ -1995,35 +2219,41 @@ FLAGS
   --json         Output structured stage status and the next command.
 ```
 
-Existing staged plans migrate without replaying completed steps. For external
-policy builds, stop here and follow the approved build/governance procedure.
+Saved plans must match the current workflow; older step layouts are not migrated.
+For external policy builds, stop here and follow the approved build/governance procedure.
 See [preparation stage boundaries](docs/spec-preparation.md#commands).
 
 ## `scrollsdk setup proof-materials`
 
-Prepare shared proof identities for mock, or identities plus real proving artifacts for production
+Resume the saved proof-materials stage; --generation or --preparation-receipt explicitly selects standalone material preparation
 
 ```
 USAGE
-  $ scrollsdk setup proof-materials [--aggregate-verifying-key <value>] [--batch-materializer <value>]
-    [--bridge-artifact-dir <value>] [--chunk-materializer <value>] [--compiler-image <value>] [--deployment-dir <value>]
-    [--generation mock|real] [--identity-env <value>] [--json] [--materials-dir <value>] [--mock-worker-image <value>]
-    [-N] [--output <value>] [--preparation-receipt <value>] [--production-worker-image <value>]
-    [--production-worker-receipt <value>] [--protocol-context <value>] [--scroll-identity-evidence <value>]
-    [--software-manifest <value>] [--worker-identity-bundle <value>]
+  $ scrollsdk setup proof-materials [--aggregate-verifying-key <value>] [--artifact-root <value>] [--batch-materializer
+    <value>] [--bridge-artifact-dir <value>] [--chunk-materializer <value>] [--compiler-image <value>] [--deployment-dir
+    <value>] [--dir <value>] [--expected-core-revision <value>] [--generation mock|real] [--identity-env <value>]
+    [--json] [--materials-dir <value>] [--mock-worker-image <value>] [-N] [--output <value>] [--preparation-receipt
+    <value>] [--production-worker-image <value>] [--production-worker-receipt <value>] [--protocol-context <value>]
+    [--worker-identity-bundle <value>]
 
 FLAGS
-  -N, --non-interactive                    Do not prompt; omitted generation defaults to mock
+  -N, --non-interactive                    Do not prompt; standalone preparation requires an explicit generation or
+                                           preparation receipt
       --aggregate-verifying-key=<value>    Root aggregate verifying key; required with mock real-materialization and
-                                           supplied by the real software manifest for real generation
-      --batch-materializer=<value>         Built dogeos-core Batch materializer binary; required for real
-                                           materialization
+                                           supplied by --artifact-root for real generation
+      --artifact-root=<value>              prepare-real output holding chunk/, batch/ and verifier/aggregate-vk; real
+                                           only
+      --batch-materializer=<value>         scroll-runtime-materializer from the release proof-coordinator image (setup
+                                           proof-image-tools --action export); required for real materialization
       --bridge-artifact-dir=<value>        Optional output of prover-worker --stage-bridge-artifact, including
                                            worker-identity-bundle.json; real only
-      --chunk-materializer=<value>         Built dogeos-core Chunk materializer binary; required for real
-                                           materialization
+      --chunk-materializer=<value>         materialize-chunk-oneshot from the release proof-coordinator image (setup
+                                           proof-image-tools --action export); required for real materialization
       --compiler-image=<value>             dogeos-proof-topology tag or digest from the approved release lineage
       --deployment-dir=<value>             [default: .] Deployment directory
+      --dir=<value>                        Saved deployment directory for stage mode (default: ./deployment); use
+                                           --generation for standalone preparation
+      --expected-core-revision=<value>     Full dogeos-core Git SHA that baked --artifact-root; real only
       --generation=<option>                Materials to prepare: mock imports shared identities only; real imports the
                                            full proving release
                                            <options: mock|real>
@@ -2031,34 +2261,33 @@ FLAGS
                                            for real
       --json                               Output structured JSON
       --materials-dir=<value>              [default: .data/proof-materials] Deployment-relative material destination
-      --mock-worker-image=<value>          Mock Worker tag or digest from the same approved release lineage
+      --mock-worker-image=<value>          Mock Worker tag or digest; plain mock only, where it supplies the compiler
+                                           identity
       --output=<value>                     [default: .data/proof-materials-v1.json] Deployment-relative receipt path
-      --preparation-receipt=<value>        Validated proof-release-preparation-v1.json; supplies all native
-                                           real-material flags
+      --preparation-receipt=<value>        Validated proof-release-preparation-v1.json; supplies every real-material
+                                           flag except the materializers
       --production-worker-image=<value>    Real Worker release tag or digest; real only
       --production-worker-receipt=<value>  Validated proof-worker-image-check-v1.json; excludes
                                            --production-worker-image
       --protocol-context=<value>           Deployment protocol_context.json required with --bridge-artifact-dir; real
                                            only
-      --scroll-identity-evidence=<value>   Native proof-scroll-identities-v1.json for mock real materialization without
-                                           a real Bridge bake; excludes identity-env
-      --software-manifest=<value>          real-proving-artifacts.json written by dogeos-core --check-only; real only
       --worker-identity-bundle=<value>     Canonical worker-identity-bundle.json from the matching dogeos-core bake;
                                            required for mock proving with real materialization
 
 DESCRIPTION
-  Prepare shared proof identities for mock, or identities plus real proving artifacts for production
+  Resume the saved proof-materials stage; --generation or --preparation-receipt explicitly selects standalone material
+  preparation
 
 EXAMPLES
   $ scrollsdk setup proof-materials --generation mock
 
   $ scrollsdk setup proof-materials --generation mock --identity-env /build/real-identity.env --worker-identity-bundle /build/worker-identity-bundle.json
 
-  $ scrollsdk setup proof-materials --generation real --software-manifest /build/real-proving-artifacts.json --identity-env /build/real-identity.env --chunk-materializer /build/materialize-chunk-oneshot --batch-materializer /build/scroll-runtime-materializer --mock-worker-image repo/mock@sha256:... --production-worker-image repo/worker@sha256:... --compiler-image repo/compiler@sha256:...
+  $ scrollsdk setup proof-materials --generation real --artifact-root /build/bake --expected-core-revision <40-hex-sha> --identity-env /build/bake/real-identity.env --chunk-materializer /build/materialize-chunk-oneshot --batch-materializer /build/scroll-runtime-materializer --production-worker-image repo/worker@sha256:... --compiler-image repo/compiler@sha256:...
 
-  $ scrollsdk setup proof-materials --generation real --bridge-artifact-dir /build/bridge --protocol-context .data/protocol_context.json
+  $ scrollsdk setup proof-materials --generation real --bridge-artifact-dir /build/bake/bridge --protocol-context .data/protocol_context.json
 
-  $ scrollsdk setup proof-materials --preparation-receipt .data/proof-release-preparation-v1.json --production-worker-receipt .data/proof-worker-image-check-v1.json --mock-worker-image repo/mock@sha256:... --compiler-image repo/compiler@sha256:...
+  $ scrollsdk setup proof-materials --preparation-receipt .data/proof-release-preparation-v1.json --production-worker-receipt .data/proof-worker-image-check-v1.json --chunk-materializer /build/materialize-chunk-oneshot --batch-materializer /build/scroll-runtime-materializer --compiler-image repo/compiler@sha256:...
 ```
 
 _See code: [src/commands/setup/proof-materials.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-materials.ts)_
@@ -2236,71 +2465,49 @@ _See code: [src/commands/setup/proof-worker-image-check.ts](https://github.com/d
 
 ## `scrollsdk setup push-secrets`
 
-```text
 Upload configured service secrets, including enabled dstack Secrets; does not deploy services or start GPU workers
 
+```
 USAGE
-  $ scrollsdk setup push-secrets [--aws-prefix <value>] [--aws-region <value>]
-    [--aws-service-account <value>] [-d] [--doge-config <value> | --spec
-    <value>] [--dry-run] [--dstack-only | -c | -f <value>] [--json]
-    [--kube-context <value>] [--namespace <value>] [-N] [--provider
-    aws|vault|kubernetes] [--skip-yaml-update] [--values-dir <value>]
-    [--values-file <value>] [--vault-path <value>] [--vault-server <value>]
-    [--vault-token-secret-key <value>] [--vault-token-secret-name <value>]
-    [--vault-version <value>]
+  $ scrollsdk setup push-secrets [--aws-prefix <value>] [--aws-region <value>] [--aws-service-account <value>] [-d]
+    [--doge-config <value> | --spec <value>] [--dry-run] [--dstack-only | -c | -f <value>] [--exclude-cubesigner |  | ]
+    [--json] [--kube-context <value>] [--namespace <value>] [-N] [--provider aws|vault|kubernetes] [--skip-yaml-update]
+    [--values-dir <value>] [--values-file <value>] [--vault-path <value>] [--vault-server <value>]
+    [--vault-token-secret-key <value>] [--vault-token-secret-name <value>] [--vault-version <value>]
 
 FLAGS
-  -N, --non-interactive                  Run without prompts. Auto-overrides
-                                         existing secrets.
-  -c, --cubesigner-only                  Only push CubeSigner related secrets
-                                         (cubesigner-signer-* files)
+  -N, --non-interactive                  Run without prompts. Auto-overrides existing secrets.
+  -c, --cubesigner-only                  Only push CubeSigner related secrets (cubesigner-signer-* files)
   -d, --debug                            Show debug output
-  -f, --secret-file=<value>              Local secret file to push (supports
-                                         .env and .json files)
-      --aws-prefix=<value>               AWS Secrets Manager path prefix; uses
-                                         generated deployment configuration
-                                         without a shared fallback
-      --aws-region=<value>               AWS region for secrets (e.g.,
-                                         us-east-1)
-      --aws-service-account=<value>      [default: external-secrets] AWS IAM
-                                         service account
-      --doge-config=<value>              Dstack public TOML configuration
-                                         (default .data/doge-config.toml)
-      --dry-run                          Plan selected Secret uploads and
-                                         validate dstack files locally; no
-                                         remote requests or changes
-      --dstack-only                      Upload only dstack Secrets to
-                                         Kubernetes; omit to include all
-                                         configured services
-      --json                             Output in JSON format (stdout for data,
-                                         stderr for logs)
-      --kube-context=<value>             Explicit Kubernetes context required
-                                         when uploading dstack Secrets
-      --namespace=<value>                Existing Kubernetes namespace required
-                                         when uploading dstack Secrets
-      --provider=<option>                [default: aws] Destination for
-                                         .env/.json secrets (aws or vault);
-                                         kubernetes accepts dstack bundles.
-                                         Dstack always uses Kubernetes.
+  -f, --secret-file=<value>              Local secret file to push (supports .env and .json files)
+      --aws-prefix=<value>               AWS Secrets Manager path prefix (defaults to generated deployment
+                                         configuration; no shared fallback)
+      --aws-region=<value>               AWS region for secrets (e.g., us-east-1)
+      --aws-service-account=<value>      [default: external-secrets] AWS IAM service account
+      --doge-config=<value>              Dstack public TOML configuration (default .data/doge-config.toml)
+      --dry-run                          Plan selected Secret uploads and validate dstack files locally; no remote
+                                         requests or changes
+      --dstack-only                      Upload only dstack Secrets to Kubernetes; omit to include all configured
+                                         services
+      --exclude-cubesigner               Defer CubeSigner runtime Secret upload; exclude even stale signer files
+      --json                             Output in JSON format (stdout for data, stderr for logs)
+      --kube-context=<value>             Explicit Kubernetes context required when uploading dstack Secrets
+      --namespace=<value>                Existing Kubernetes namespace required when uploading dstack Secrets
+      --provider=<option>                [default: aws] Destination for .env/.json secrets (aws or vault); kubernetes
+                                         accepts dstack bundles. Dstack always uses Kubernetes.
                                          <options: aws|vault|kubernetes>
-      --skip-yaml-update                 Skip updating production YAML files
-                                         with new secret provider
+      --skip-yaml-update                 Skip updating production YAML files with new secret provider
       --spec=<value>                     Dstack DeploymentSpec YAML
-      --values-dir=<value>               [default: values] Directory containing
-                                         the values files
-      --values-file=<value>              Specific Helm values YAML file to
-                                         update after pushing secrets
+      --values-dir=<value>               [default: values] Directory containing the values files
+      --values-file=<value>              Specific Helm values YAML file to update after pushing secrets
       --vault-path=<value>               [default: scroll] Vault path prefix
-      --vault-server=<value>             [default: http://vault.default.svc.clus
-                                         ter.local:8200] Vault server URL
+      --vault-server=<value>             [default: http://vault.default.svc.cluster.local:8200] Vault server URL
       --vault-token-secret-key=<value>   [default: token] Vault token secret key
-      --vault-token-secret-name=<value>  [default: vault-token] Vault token
-                                         secret name
+      --vault-token-secret-name=<value>  [default: vault-token] Vault token secret name
       --vault-version=<value>            [default: v2] Vault version
 
 DESCRIPTION
-  Upload configured service secrets, including enabled dstack Secrets; does not
-  deploy services or start GPU workers
+  Upload configured service secrets, including enabled dstack Secrets; does not deploy services or start GPU workers
 
 EXAMPLES
   $ scrollsdk setup push-secrets
@@ -2315,16 +2522,73 @@ EXAMPLES
 
   $ scrollsdk setup push-secrets -c --debug
 
-  $ scrollsdk setup push-secrets --provider kubernetes --dstack-only --kube-context isolated-e2e --namespace dstack-system --dry-run -N
+  $ scrollsdk setup push-secrets --provider kubernetes --dstack-only --kube-context isolated-e2e --namespace default --dry-run -N
 
-  $ scrollsdk setup push-secrets --provider aws --aws-region us-east-1 --kube-context isolated-e2e --namespace dstack-system -N
+  $ scrollsdk setup push-secrets --provider aws --aws-region us-east-1 --kube-context isolated-e2e --namespace default -N
 ```
 
-_See code: [src/commands/setup/push-secrets.ts](src/commands/setup/push-secrets.ts)_
+_See code: [src/commands/setup/push-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/push-secrets.ts)_
 
-Without a scope flag, uploads all configured services including enabled dstack. `--dstack-only` uploads only dstack Secrets; it does not deploy the controller or start GPU workers.
+## `scrollsdk setup render`
 
-See [dstack controller credential setup](docs/dstack-controller.md) for destinations and examples.
+Render configuration and private Secrets; validate/reuse or create signer credentials (provider mutation), optionally --defer-cubesigner
+
+```
+USAGE
+  $ scrollsdk setup render [--defer-cubesigner] [--dir <value>] [--json]
+
+FLAGS
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
+
+DESCRIPTION
+  Render configuration and private Secrets; validate/reuse or create signer credentials (provider mutation), optionally
+  --defer-cubesigner
+```
+
+_See code: [src/commands/setup/render.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/render.ts)_
+
+## `scrollsdk setup signer-kit`
+
+Resume the saved signer-kit stage; runs only its declared effects
+
+```
+USAGE
+  $ scrollsdk setup signer-kit [--defer-cubesigner] [--dir <value>] [--json]
+
+FLAGS
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
+
+DESCRIPTION
+  Resume the saved signer-kit stage; runs only its declared effects
+```
+
+_See code: [src/commands/setup/signer-kit.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/signer-kit.ts)_
+
+## `scrollsdk setup signer-kit-publish`
+
+Resume the saved signer-kit-publish stage; runs only its declared effects
+
+```
+USAGE
+  $ scrollsdk setup signer-kit-publish [--defer-cubesigner] [--dir <value>] [--json]
+
+FLAGS
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
+
+DESCRIPTION
+  Resume the saved signer-kit-publish stage; runs only its declared effects
+```
+
+_See code: [src/commands/setup/signer-kit-publish.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/signer-kit-publish.ts)_
 
 ## `scrollsdk setup tls`
 
@@ -2351,6 +2615,26 @@ Disabled ingresses remain disabled. Set individual certificates in values when
 a single certificate set does not cover every enabled host. Review and install
 these values through the normal Helm process; DNS/controller migration is an
 operator action.
+
+## `scrollsdk setup upload-secrets`
+
+Upload prepared runtime Secrets to the saved deployment destination
+
+```
+USAGE
+  $ scrollsdk setup upload-secrets [--defer-cubesigner] [--dir <value>] [--json]
+
+FLAGS
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
+
+DESCRIPTION
+  Upload prepared runtime Secrets to the saved deployment destination
+```
+
+_See code: [src/commands/setup/upload-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/upload-secrets.ts)_
 
 ## `scrollsdk setup verify-contracts`
 

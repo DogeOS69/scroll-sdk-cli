@@ -1,4 +1,4 @@
-import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {CubesignerExpectedPolicyInputs, CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
 import type {DeploymentKitPublication} from '../utils/deployment-kit-record.js'
 import type {EthereumDaRuntimeConfig} from '../utils/ethereum-da-runtime.js'
 import type {BootnodePublicP2p, DeploymentIdentityIntent, ProofCoordinatorConfig} from './deployment-spec.js'
@@ -102,6 +102,7 @@ export interface DogeConfig {
     }>
   }
   cubesigner?: {
+    expectedPolicy?: CubesignerExpectedPolicyInputs
     mode?: CubesignerPolicyMode
     policyReceipts?: CubesignerPolicyReceiptInputs
     productionPolicy?: CubesignerProductionPolicy
