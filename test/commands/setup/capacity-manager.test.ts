@@ -33,6 +33,36 @@ describe('setup capacity-manager prepare private inputs', () => {
 })
 
 describe('setup capacity-manager credentials', () => {
+  for (const source of ['plan', 'values', 'worker state', 'status response']) {
+    for (const json of [false, true]) it(`redacts malformed ${source} in ${json ? 'JSON' : 'text'} output`, () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'capacity-private-runtime-'))
+      try {
+        fs.mkdirSync(path.join(root, '.scrollsdk/capacity-manager'), {recursive: true})
+        fs.mkdirSync(path.join(root, 'values'))
+        const plan = path.join(root, '.scrollsdk/capacity-manager/plan.json')
+        const values = path.join(root, 'values/capacity-manager-production.yaml')
+        const invalidJson = '{"password": NONFUNCTIONAL_PRIVATE_MARKER}'
+        fs.writeFileSync(plan, JSON.stringify({dstack: {namespace: 'example'}, namespace: 'example', schema: 'scrollsdk/capacity-manager/v1', valuesFile: 'values/capacity-manager-production.yaml'}))
+        if (source === 'plan') fs.writeFileSync(plan, invalidJson)
+        if (source === 'values') fs.writeFileSync(values, 'manager: [\npassword: NONFUNCTIONAL_PRIVATE_MARKER\n')
+        if (source === 'worker state') {
+          fs.mkdirSync(path.join(root, '.scrollsdk/proof-workers'))
+          fs.writeFileSync(path.join(root, '.scrollsdk/proof-workers/plan.json'), '{}')
+          fs.writeFileSync(path.join(root, '.scrollsdk/proof-workers/state.json'), invalidJson)
+        }
+
+        const calls = path.join(root, 'calls')
+        fs.writeFileSync(path.join(root, 'kubectl'), `#!/usr/bin/env node\nrequire('node:fs').appendFileSync(process.env.CM_TEST_LOG, 'called\\n');\nprocess.stdout.write(${JSON.stringify(invalidJson)});\n`, {mode: 0o755})
+        const action = source === 'status response' ? 'status' : 'credentials'
+        const result = spawnSync(process.execPath, [cli, 'setup', 'capacity-manager', action, '--dir', root, ...(json ? ['--json'] : [])], {encoding: 'utf8', env: {...process.env, CM_TEST_LOG: calls, PATH: `${root}:${process.env.PATH}`}})
+        expect(result.status).not.to.equal(0)
+        expect(result.stdout + result.stderr).not.to.include('NONFUNCTIONAL_PRIVATE_MARKER')
+        expect(result.stdout + result.stderr).to.include('contents omitted')
+        expect(fs.existsSync(calls)).to.equal(source === 'status response')
+      } finally {fs.rmSync(root, {force: true, recursive: true})}
+    })
+  }
+
   it('explains absent plans and bounded-worker mode before any cluster call', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'capacity-no-plan-'))
     try {

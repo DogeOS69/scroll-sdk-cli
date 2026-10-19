@@ -33,12 +33,15 @@ interface CapacityPreparationOptions {
   specFile?: string
 }
 
-function readCapacitySpec(file: string, label: string, parse: (content: string) => unknown): DeploymentSpec {
-  const content = fs.readFileSync(file, 'utf8')
-  try {return parse(content) as DeploymentSpec} catch {
+export function parseCapacityInput<T>(content: string, label: string, parse: (content: string) => T): T {
+  try {return parse(content)} catch {
     // YAML and JSON parser errors can include credential-bearing source excerpts.
     throw new Error(`Invalid ${label}; correct its syntax and retry (private contents omitted)`)
   }
+}
+
+function readCapacitySpec(file: string, label: string, parse: (content: string) => unknown): DeploymentSpec {
+  return parseCapacityInput(fs.readFileSync(file, 'utf8'), label, parse) as DeploymentSpec
 }
 
 function capacitySpec(root: string, specFile?: string): DeploymentSpec {
@@ -133,7 +136,7 @@ export function capacityManagerFleets(spec: DeploymentSpec): {action: 'create' |
 export function assertSdkWorkersRetired(root: string): void {
   const state = localPath(root, '.scrollsdk/proof-workers/state.json')
   const plan = localPath(root, '.scrollsdk/proof-workers/plan.json')
-  if (fs.existsSync(plan) && (!fs.existsSync(state) || JSON.parse(fs.readFileSync(state, 'utf8')).status !== 'destroyed')) throw new Error('Retire the existing SDK proof-workers session with status/destroy before preparing capacity-manager')
+  if (fs.existsSync(plan) && (!fs.existsSync(state) || parseCapacityInput(fs.readFileSync(state, 'utf8'), 'proof-worker state JSON', JSON.parse).status !== 'destroyed')) throw new Error('Retire the existing SDK proof-workers session with status/destroy before preparing capacity-manager')
 }
 
 export function buildCapacityManagerValues(spec: DeploymentSpec, worker: ProverWorkerContractV1, publication: ProofProgramPublicationV1, imageCheck: ProofWorkerImageCheckV1): Record<string, any> {
@@ -164,7 +167,7 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   assertSdkWorkersRetired(root)
   const contract = readContract(root)
   if (contract.mode !== 'active' || contract.generation !== 'real' || !contract.worker.contractFile || !contract.inputs?.publication) throw new Error('capacity-manager requires compiled active/real topology and published Worker artifacts')
-  const read = (file: string) => JSON.parse(fs.readFileSync(resolveContractFile(root, file), 'utf8'))
+  const read = (file: string) => parseCapacityInput(fs.readFileSync(resolveContractFile(root, file), 'utf8'), file, JSON.parse)
   const projected = buildCapacityManagerValues(spec, read(contract.worker.contractFile), read(contract.inputs.publication.path), read('.data/proof-worker-image-check-v1.json'))
   const file = localPath(root, CAPACITY_MANAGER_VALUES)
   let template: string
@@ -177,12 +180,13 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
     if (!template) throw new Error('Pinned SDK revision lacks capacity-manager production values')
   }
 
-  const controller = yaml.load(fs.readFileSync(localPath(root, 'values/dstack-controller-production.yaml'), 'utf8')) as any
-  const coordinator = yaml.load(fs.readFileSync(localPath(root, contract.components.proofCoordinator.valuesFile), 'utf8')) as any
+  const readValues = (file: string) => parseCapacityInput(fs.readFileSync(localPath(root, file), 'utf8'), file, yaml.load) as any
+  const controller = readValues('values/dstack-controller-production.yaml')
+  const coordinator = readValues(contract.components.proofCoordinator.valuesFile)
   specDstackController(spec)
   const dstackNamespace = specKubernetesTarget(spec).namespace
   const dstackName = controller.fullnameOverride ?? 'dstack-controller'
-  const existing = yaml.load(template) as any
+  const existing = parseCapacityInput(template, 'capacity-manager values YAML', yaml.load) as any
   if (spec.dstackController?.internalTls) assertDstackInternalIngress(controller, spec.dstackController.internalTls)
   projected.manager.dstack.serverUrl = capacityManagerDstackUrl(spec.dstackController?.internalTls ? `https://${spec.dstackController.internalTls.hostname}` : options.dstackUrl ?? existing.manager?.dstack?.serverUrl)
   if (options.dstackUrl && options.dstackUrl !== projected.manager.dstack.serverUrl) throw new Error('--dstack-url must match the frozen internal TLS endpoint')
@@ -205,7 +209,7 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   const fingerprint = digest(JSON.stringify({fleetIntent, projected}))
   if (fs.existsSync(previousFile) && read(CAPACITY_MANAGER_PLAN).fingerprint !== fingerprint) throw new Error('Capacity configuration changed; drain the old manager and archive its local plan before preparing the replacement')
   const wpFile = localPath(root, contract.components.withdrawalProcessor.valuesFile)
-  const wp = yaml.load(fs.readFileSync(wpFile, 'utf8')) as any
+  const wp = readValues(contract.components.withdrawalProcessor.valuesFile)
   if (!wp.networkPolicy?.enabled) throw new Error('Enable WP NetworkPolicy before preparing capacity-manager')
   wp.networkPolicy.allowFrom ??= {}
   wp.networkPolicy.allowFrom.capacityManager = [{podSelector: {matchLabels: {'app.kubernetes.io/name': 'capacity-manager'}}}]

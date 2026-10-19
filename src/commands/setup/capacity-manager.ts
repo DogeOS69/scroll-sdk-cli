@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 
-import {CAPACITY_MANAGER_PLAN, assertSdkWorkersRetired, prepareCapacityManager} from '../../utils/capacity-manager.js'
+import {CAPACITY_MANAGER_PLAN, assertSdkWorkersRetired, parseCapacityInput, prepareCapacityManager} from '../../utils/capacity-manager.js'
 import {DEFAULT_DEPLOYMENT} from '../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
 import {digest, localPath} from '../../utils/preparation-io.js'
@@ -39,7 +39,7 @@ export default class CapacityManager extends Command {
 
       const planFile = localPath(root, CAPACITY_MANAGER_PLAN)
       if (!fs.existsSync(planFile)) throw new Error('Capacity Manager has no prepared plan. If this deployment selects bounded proofWorkers, use setup proof-workers plan/apply instead. For continuous capacity, explicitly enable capacityManager and run setup capacity-manager prepare after retiring bounded workers; do not copy another deployment\'s plan.')
-      const plan = JSON.parse(fs.readFileSync(planFile, 'utf8'))
+      const plan = parseCapacityInput(fs.readFileSync(planFile, 'utf8'), 'capacity-manager plan JSON', JSON.parse)
       if (plan.schema !== 'scrollsdk/capacity-manager/v1') throw new Error('Unsupported capacity-manager plan')
       if (flags.namespace && flags.namespace !== plan.namespace) throw new Error('Namespace differs from prepared capacity-manager values; regenerate for the intended namespace')
       if (plan.dstack.namespace !== plan.namespace) throw new Error('Dstack and capacity-manager must use the same namespace; rerun setup render')
@@ -53,20 +53,20 @@ export default class CapacityManager extends Command {
 
       if (args.action === 'status') {
         const result = run(plan.namespace, ['get', 'deployment', 'capacity-manager', '--ignore-not-found', '-o', 'json'])
-        const deployment = result.trim() ? JSON.parse(result) : undefined
+        const deployment = result.trim() ? parseCapacityInput(result, 'Kubernetes status JSON', JSON.parse) : undefined
         out.success({present: Boolean(deployment), readyReplicas: deployment?.status?.readyReplicas ?? 0, replicas: deployment?.spec?.replicas ?? 0})
         return
       }
 
       assertSdkWorkersRetired(root)
-      const values = yaml.load(fs.readFileSync(localPath(root, plan.valuesFile), 'utf8')) as any
+      const values = parseCapacityInput(fs.readFileSync(localPath(root, plan.valuesFile), 'utf8'), 'capacity-manager values YAML', yaml.load) as any
       if (!plan.workerCredentialMaster) throw new Error('This capacity-manager plan predates per-worker credentials; drain the old manager, archive its plan and rerun setup render')
       if (values.manager.dstack.project !== plan.project || values.workerCredentialMaster?.existingSecret !== plan.workerCredentialMaster.existingSecret || values.workerCredentialMaster?.key !== plan.workerCredentialMaster.key) throw new Error('Regenerate the capacity-manager plan after changing its credential bindings')
       if (!plan.fleets?.files?.length || !['create', 'reuse'].includes(plan.fleets.action)) throw new Error('Fleet preparation is missing; rerun setup render before installing capacity-manager')
       const fleets = plan.fleets.files.map((file: {path: string; sha256: string}) => {
         const content = fs.readFileSync(localPath(root, file.path), 'utf8')
         if (digest(content) !== file.sha256) throw new Error('Prepared fleet YAML changed; rerun setup render')
-        return yaml.load(content) as any
+        return parseCapacityInput(content, 'prepared fleet YAML', yaml.load) as any
       })
       if (JSON.stringify(fleets.map((fleet: any) => fleet.name)) !== JSON.stringify(values.manager.dstack.fleets)) throw new Error('Fleet bindings changed; rerun setup render')
       run(plan.namespace, ['rollout', 'status', `deployment/${plan.dstack.deployment}`, '--timeout=120s'])

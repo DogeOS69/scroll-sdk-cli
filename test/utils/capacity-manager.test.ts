@@ -213,6 +213,21 @@ describe('Core capacity manager', () => {
       fs.writeFileSync(managerPath, original)
       }
 
+      for (const service of ['dstack-controller', 'proof-coordinator', 'capacity-manager', 'withdrawal-processor']) {
+        const file = path.join(root, `values/${service}-production.yaml`)
+        const saved = fs.readFileSync(file, 'utf8')
+        const malformed = 'config: [\npassword: NONFUNCTIONAL_PRIVATE_MARKER\n'
+        fs.writeFileSync(file, malformed)
+        try {
+          let failure: unknown
+          try {prepareCapacityManager(root, () => contract)} catch (error) {failure = error}
+          expect(failure).to.be.instanceOf(Error)
+          expect((failure as Error).message).to.include('contents omitted').and.not.to.include('NONFUNCTIONAL_PRIVATE_MARKER')
+          expect(fs.readFileSync(file, 'utf8')).to.equal(malformed)
+          expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
+        } finally {fs.writeFileSync(file, saved)}
+      }
+
       const result = prepareCapacityManager(root, () => contract)
       const first = fs.readFileSync(result.valuesFile, 'utf8')
       const fleet = yaml.load(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/fleets/aws-l4.yaml'), 'utf8')) as any
