@@ -58,7 +58,7 @@ function mintPlanCredentials(plan: WorkerCapacityPlan, master: string): Record<s
   return Object.fromEntries(plan.workers.map(worker => [worker.secretName, mintWorkerCredential(master, worker.workerId)]))
 }
 
-function operateWorkerCapacityUnlocked(root: string, action: 'apply' | 'destroy' | 'status', run: CapacityExec = capacityExec, now = Date.now() / 1000, readMaster?: () => string): unknown {
+function operateWorkerCapacityUnlocked(root: string, action: 'apply' | 'destroy' | 'drain' | 'status', run: CapacityExec = capacityExec, now = Date.now() / 1000, readMaster?: () => string): unknown {
   const plan = readCapacityPlan(root)
   const stateFile = localPath(root, '.scrollsdk/proof-workers/state.json')
   let state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) as CapacityState : undefined
@@ -78,13 +78,13 @@ function operateWorkerCapacityUnlocked(root: string, action: 'apply' | 'destroy'
     if (fs.existsSync(intent) && JSON.parse(fs.readFileSync(intent, 'utf8')).capacityManager) throw new Error('capacityManager is selected; SDK worker apply is disabled')
   }
 
-  if (action === 'destroy') {
+  if (action === 'destroy' || action === 'drain') {
     state = {...state, planId: plan.id, startedAt: state?.startedAt ?? now, status: 'cleanup-requested'}
     writeJson(stateFile, state)
-    const result = remote(plan, 'destroy', run)
+    const result = remote(plan, action, run)
     const gone = result.workers.length === plan.workers.length && result.workers.every(w => ['aborted', 'absent', 'done', 'failed', 'stopped', 'terminated'].includes(w.run) && ['absent', 'terminated'].includes(w.fleet))
     if (gone) {state.status = 'destroyed'; writeJson(stateFile, state)}
-    return {...result, message: gone ? 'Controller confirms no active owned fleet; verify provider billing separately' : 'Deletion requested; rerun status/destroy until fleets are terminated. Watchdog remains active.', status: state.status}
+    return {...result, message: gone ? 'Controller confirms no active owned fleet; verify provider billing separately' : `${action === 'drain' ? 'Graceful stop' : 'Forced deletion'} requested; rerun status/${action} until fleets are terminated. The original watchdog deadline remains active.`, status: state.status}
   }
 
   if (state && ['cleanup-requested', 'destroyed'].includes(state.status)) throw new Error('This session is being retired; apply never restarts it')
@@ -116,7 +116,7 @@ export function retireCapacitySession(root: string, newSession?: string): void {
   fs.renameSync(directory, localPath(root, `.scrollsdk/proof-workers-${state.planId.slice(0, 16)}`))
 }
 
-export function operateWorkerCapacity(root: string, action: 'apply' | 'destroy' | 'status', run: CapacityExec = capacityExec, now = Date.now() / 1000, readMaster?: () => string): unknown {
+export function operateWorkerCapacity(root: string, action: 'apply' | 'destroy' | 'drain' | 'status', run: CapacityExec = capacityExec, now = Date.now() / 1000, readMaster?: () => string): unknown {
   if (action === 'status') return operateWorkerCapacityUnlocked(root, action, run, now)
   const lock = localPath(root, '.scrollsdk/proof-workers/operation.lock')
   const fd = fs.openSync(lock, 'wx', 0o600)

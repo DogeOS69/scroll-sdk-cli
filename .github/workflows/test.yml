@@ -55,4 +55,5 @@ jobs:
           python -m pip install 'dstack==0.21.5'
           python scripts/test-proof-workers-controller.py
           python scripts/test-capacity-manager-fleets.py
+          python scripts/test-capacity-manager-preflight.py
       - run: yarn test

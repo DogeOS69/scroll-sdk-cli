@@ -197,9 +197,22 @@ describe('bounded proof-worker capacity', () => {
     retireCapacitySession(root)
     expect(fs.existsSync(path.join(root, '.scrollsdk/proof-workers'))).to.equal(false)
   })
+  it('drains without reapplying or changing the existing watchdog deadline', () => {
+    const plan = save()
+    writeJson(path.join(root, '.scrollsdk/proof-workers/state.json'), {planId: plan.id, startedAt: 1000, status: 'submitted'})
+    const result = operateWorkerCapacity(root, 'drain', (_args, input) => {
+      expect(JSON.parse(input!).action).to.equal('drain')
+      return '{"workers":[{"run":"running","fleet":"active"}]}'
+    }, 2000) as {status: string}
+    expect(result.status).to.equal('cleanup-requested')
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/proof-workers/state.json'), 'utf8')).startedAt).to.equal(1000)
+    expect(() => operateWorkerCapacity(root, 'apply', () => '')).to.throw('retired')
+    operateWorkerCapacity(root, 'drain', () => '{"workers":[{"run":"done","fleet":"terminated"}]}')
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/proof-workers/state.json'), 'utf8')).status).to.equal('destroyed')
+  })
   it('refuses tampered reviewed plans before all operations', () => {
     save()
     fs.appendFileSync(path.join(root, '.scrollsdk/proof-workers/plan.json'), ' ')
-    for (const action of ['apply', 'status', 'destroy'] as const) expect(() => operateWorkerCapacity(root, action, () => {throw new Error('should not run')})).to.throw('checksum')
+    for (const action of ['apply', 'status', 'destroy', 'drain'] as const) expect(() => operateWorkerCapacity(root, action, () => {throw new Error('should not run')})).to.throw('checksum')
   })
 })
