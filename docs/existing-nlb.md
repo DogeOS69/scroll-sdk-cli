@@ -33,6 +33,22 @@ Persist each node key in its external Secret. Reusing an EIP without the same
 node key changes the enode identity. Do not rely on a discarded data PVC to retain
 a `pvcAutoGenerate` key.
 
+## Recurring partner changes
+
+Add/revoke TCP 30303 CIDRs on each authorized NLB frontend SG through the AWS
+infrastructure configuration. No spec/values edit, regeneration, Helm upgrade or
+Reth restart is needed. Use the SDK [from-cluster runbook](https://github.com/DogeOS69/scroll-sdk/blob/develop/examples/existing-nlb.md)
+for resource creation, partner commands and handoff fields. If Terraform owns
+these resources, edit/apply that configuration instead of making console drift.
+`setup nlb` checks all attached SGs for TCP 30303 IPv4 rules without public `/0`,
+combined full-IPv4 coverage, IPv6, SG references or prefix lists. It accepts
+empty ingress and cannot decide whether a particular company was approved.
+Actual partner approval, CIDR changes and change history belong to infrastructure.
+After revocation, verify that fresh connections from the removed source are
+denied while the target remains healthy. AWS API success alone does not prove
+data-plane propagation; tracked connections may also persist and require explicit
+peer disconnection when immediate offboarding is needed.
+
 ## Spec and generation
 
 Keep the existing indexed `bootnodePublicP2p` entries. Add `mode: existing` and the
@@ -43,12 +59,7 @@ bootnodePublicP2p:
   - index: 0
     enabled: true
     mode: existing
-    sourceRanges: [203.0.113.10/32] # Replace with approved partner public egress.
-    subnets: [REPLACE_WITH_PUBLIC_SUBNET_ID]
-    eipAllocations: [REPLACE_WITH_EIP_ALLOCATION_ID]
     existingNlb:
-      loadBalancerArn: REPLACE_WITH_NLB_ARN
-      listenerArn: REPLACE_WITH_TCP_30303_LISTENER_ARN
       targetGroupArn: REPLACE_WITH_TCP_IP_TARGET_GROUP_ARN
       securityGroupIds: [REPLACE_WITH_NLB_FRONTEND_SECURITY_GROUP_ID]
   - index: 1
@@ -56,21 +67,24 @@ bootnodePublicP2p:
 ```
 
 For two public bootnodes, give the second entry its own NLB, listener, group and
-EIPs. A subnet can be reused, an EIP/NLB/target group cannot. Subnet and EIP lists
-must have matching order. ARNs must belong to the configured AWS account/region.
-Select the paired SDK revision with `p2p-targetgroupbinding.yaml` (l2-reth 0.1.9
+EIPs. A subnet can be reused, an EIP/NLB/target group cannot. The CLI discovers
+NLB, listener, subnet and EIP metadata from the supplied TG ARN. ARNs must belong to the configured AWS account/region.
+Select the paired SDK revision with `p2p-targetgroupbinding.yaml` (l2-reth 0.1.11
 or later with this feature), then run the normal spec preparation commands.
-Plan/generation perform local validation; provider verification is the explicit
+The focused [bootnode command](bootnode-public-p2p.md) updates existing indexed
+values and prints enodes without rerunning the full preparation flow.
+Plan/full generation perform local validation; provider verification is the explicit
 read-only command below. Do not claim that generating values proves AWS access.
 
 The generated bootnode values retain node identity and unrelated tuning. Existing
 mode sets the dedicated P2P Service to ClusterIP and adds a TargetGroupBinding.
-Its `sourceRanges` is intent for the infrastructure verifier, **not** a Kubernetes
-Service firewall; external frontend SG rules must match. The binding manages
+Omit `sourceRanges`: partner allowlists live only in AWS infrastructure, never
+in spec or generated production values. Nonempty legacy lists are rejected with
+an instruction to remove them. Empty frontend ingress is a valid closed endpoint. The binding manages
 backend ingress from the selected NLB SGs, not partner IPs directly.
 
-`mode: service` (the default if omitted) retains the older Service-owned NLB path.
-An `existingNlb` block without existing mode is rejected rather than ignored.
+`mode: service` retains the older Service-owned NLB path. Omitted mode selects
+existing mode when `existingNlb` is present, otherwise service mode.
 Changing an existing binding to Service mode requires explicit migration; there
 is no automatic fallback or provider resource adoption.
 
@@ -79,11 +93,13 @@ is no automatic fallback or provider resource adoption.
 From the generated deployment directory, before installing bootnodes:
 
 ```bash
-scrollsdk setup nlb
+scrollsdk setup bootnode-public-p2p --spec ../deployment-spec.yaml --dry-run
+scrollsdk setup bootnode-public-p2p --spec ../deployment-spec.yaml
+scrollsdk setup nlb --spec ../deployment-spec.yaml
 ```
 
 This verifies identity/account, EKS VPC, external ownership tags, active NLB,
-exact frontend SG restrictions, subnet/EIP/AZ mapping, the sole TCP 30303 listener,
+TCP-only restricted frontend SG rules (not partner approval), subnet/EIP/AZ mapping, the sole TCP 30303 listener,
 its sole IP target group, health checks and Proxy Protocol/cross-zone attributes.
 An empty target group is expected before installation. Provider errors are fatal;
 there are no automatic repair, create, register or delete calls.
@@ -92,7 +108,7 @@ Install with the generated Makefile:
 
 ```bash
 make install-l2-reth-bootnode
-scrollsdk setup nlb --require-targets
+scrollsdk setup nlb --spec ../deployment-spec.yaml --require-targets
 ```
 
 The second check additionally requires the correct Kubernetes context, one live

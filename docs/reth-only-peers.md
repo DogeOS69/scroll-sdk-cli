@@ -13,9 +13,9 @@ There is no longer an empty-array switch or a Geth peer fallback.
 ## Setup flow
 
 For external nodes, also follow [Reth bootnode public P2P access](bootnode-public-p2p.md):
-the `setup bootnode-public-p2p` command is deprecated. Configure
-`reth.p2pExternal` for selected bootnodes after `prep-charts`, deploy those
-releases, then export public peers with `setup gen-rpc-package` once LB endpoints exist.
+after base values exist, run `setup bootnode-public-p2p --spec <spec-path>` to
+configure selected independent NLB bindings and print public enodes. Deploy those
+releases, then export public peers with `setup gen-rpc-package --spec <spec-path>`.
 
 This is the node-configuration subset of [CLI setup order](setup-order.md),
 not a complete deployment sequence.
@@ -103,10 +103,10 @@ signer rotation does not require resetting chain data.
   so old values cannot be picked up as active deployment files. The backup
   directory may contain private keys; retain the same access restrictions as
   the source configuration.
-- `bootnode-public-p2p --doge-config ...` uses actual Reth bootnode indices and
-  modifies native Reth P2P values. Missing topology fails instead of defaulting
-  to two bootnodes. AWS provisioning itself still requires the normal cloud
-  prerequisites; GCP remains unimplemented.
+- `bootnode-public-p2p --spec <spec-path> --doge-config ...` updates only listed
+  indexed Reth values using existing identities and AWS-verified NLB references.
+  Missing values or identities fail without publication. AWS infrastructure
+  provisions NLBs separately and owns partner allowlists.
 
 `gen-rpc-package` reads the L1 endpoint and network ID from
 `l2-reth-rpc-production.yaml`. External peers come from Reth bootnodes, or from

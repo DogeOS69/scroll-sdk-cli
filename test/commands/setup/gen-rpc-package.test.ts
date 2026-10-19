@@ -6,6 +6,7 @@ import * as path from 'node:path'
 
 import SetupGenRpcPackage, {
   convertPeersToExternalDomains,
+  discoverExistingNlbDomains,
   normalizeConfigMapEnvData,
   normalizeGenesisForReth,
   syncRpcPackageInitContainersToCompose,
@@ -43,6 +44,29 @@ function createCommandHarness(): CommandHarness {
     warn() {},
   }) as CommandHarness
 }
+
+import {fixture} from '../../fixtures/existing-nlb.js'
+
+describe('independent NLB RPC peer discovery', () => {
+  it('resolves ClusterIP bootnodes through AWS and preserves all EIP endpoints', () => {
+    const f = fixture()
+    delete f.entry.mode; delete f.entry.subnets; delete f.entry.eipAllocations
+    delete f.entry.existingNlb.loadBalancerArn; delete f.entry.existingNlb.listenerArn
+    const domains = discoverExistingNlbDomains(f.files, f.spec, f.aws)
+    expect(domains).to.deep.equal({'l2-reth-bootnode-0-p2p': ['198.51.100.10']})
+    expect(convertPeersToExternalDomains(['enode://abc@l2-reth-bootnode-0:30303'], {'l2-reth-bootnode-0-p2p': ['198.51.100.10', '198.51.100.11']})).to.deep.equal(['enode://abc@198.51.100.10:30303', 'enode://abc@198.51.100.11:30303'])
+    expect(f.calls.every((args: string[]) => /^(describe-|get-caller-identity)/.test(args[1]))).to.equal(true)
+  })
+
+  it('does not silently drop independent NLB peers when spec or AWS validation is missing', () => {
+    const f = fixture()
+    expect(() => discoverExistingNlbDomains(f.files, undefined, f.aws)).to.throw('--spec')
+    expect(f.calls).to.have.length(0)
+    f.responses['elbv2 describe-load-balancers'].LoadBalancers[0].SecurityGroups = []
+    expect(() => discoverExistingNlbDomains(f.files, f.spec, f.aws)).to.throw('exactly match')
+    expect(discoverExistingNlbDomains({}, undefined, f.aws)).to.deep.equal({})
+  })
+})
 
 describe('setup gen-rpc-package env generation', () => {
   let tmpDir: string
@@ -363,7 +387,7 @@ describe('setup gen-rpc-package env generation', () => {
             s3: {
               enabled: true,
               keyPrefix: '/rehearsal/batches/',
-              publicBaseUrl: 'https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/',
+          publicBaseUrl: 'https://archive.example.invalid/',
             },
           },
         },
@@ -390,7 +414,7 @@ describe('setup gen-rpc-package env generation', () => {
     expect(l2rethEnv).to.include('L2GETH_PEER_LIST=["enode://reth0@reth-bootnode-0.example.com:30303","enode://reth1@reth-bootnode-1.example.com:30303"]')
     expect(l2rethEnv).to.include('L2RETH_L1_ENDPOINT=http://reth-l1:8545')
     expect(l2rethEnv).to.include('L2RETH_NETWORK_ID=4444444')
-    expect(l2rethEnv).to.include('L2RETH_BLOB_S3_URL=https://dogeos-eth-da-archive-testnet.s3.us-west-2.amazonaws.com/rehearsal/batches')
+    expect(l2rethEnv).to.include('L2RETH_BLOB_S3_URL=https://archive.example.invalid/rehearsal/batches')
     expect(l2rethEnv).to.include('L2RETH_VALID_SIGNER=0x2234567890123456789012345678901234567890')
     expect(l2rethEnv).not.to.include('CHAIN_ID=1')
     expect(l2rethEnv).not.to.include('L2GETH_L1_ENDPOINT=http://old-l1')

@@ -90,7 +90,7 @@ bin/run.js --help
 - [Existing ALBs](docs/existing-alb.md) — select ALB/listener/target-group references in spec, verify them, and retain AWS edges when uninstalling Helm releases.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
 - [Pure Reth configuration](docs/reth-only-peers.md) — Reth node identities and peer configuration.
-- [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — selected bootnode exposure and external RPC peer export; `setup bootnode-public-p2p` is deprecated.
+- [Reth bootnode public P2P access](docs/bootnode-public-p2p.md) — spec-driven independent NLB bindings, read-only AWS discovery and public enode export.
 - [Deployment signing identities](docs/keystore.md) — unified Reth and service
   key preparation, KMS reuse, and archive configuration.
 
@@ -819,77 +819,39 @@ _See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos6
 
 ## `scrollsdk setup bootnode-public-p2p`
 
-**Deprecated.** Not invoked by `setup apply`. Configure `reth.p2pExternal` for selected bootnodes instead. See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md).
+Update selected bootnode bindings from an explicit spec and discover public enodes.
+See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md).
 
 ```text
-Deprecated: prepare legacy Reth bootnode public P2P values and the AWS controller
+Generate selected bootnode P2P bindings from spec and discover public enodes using read-only AWS queries
 
 USAGE
-  $ scrollsdk setup bootnode-public-p2p [--cluster-name <value>]
-    [--controller-chart-version <value>] [--doge-config <value>] [--json]
-    [--namespace <value>] [-N] [--provider aws|gcp] [--region <value>]
-    [--skip-controller-setup] [--values-dir <value>]
+  $ scrollsdk setup bootnode-public-p2p --spec <value> [--aws-profile <value>] [--dir
+    <value>] [--doge-config <value>] [--dry-run] [--json] [-N] [--values-dir
+    <value>]
 
 FLAGS
-  -N, --non-interactive                   Run without prompts. Requires
-                                          --provider, --cluster-name and
-                                          --region.
-      --cluster-name=<value>              Kubernetes cluster name for resource
-                                          tagging and identification
-      --controller-chart-version=<value>  AWS controller Helm chart version; IAM
-                                          policy uses its matching appVersion
-      --doge-config=<value>               Path to Reth node configuration
-                                          (defaults to .data/doge-config.toml)
-      --json                              Output in JSON format (stdout for
-                                          data, stderr for logs)
-      --namespace=<value>                 [default: default] Namespace for the
-                                          subsequent bootnode Helm rollout
-      --provider=<option>                 Public P2P provider (AWS implemented;
-                                          GCP is not implemented)
-                                          <options: aws|gcp>
-      --region=<value>                    Cloud provider region where resources
-                                          will be created
-      --skip-controller-setup             Use an existing AWS controller; verify
-                                          readiness and prepare local values
-                                          only
-      --values-dir=<value>                [default: ./values] Directory
-                                          containing Helm values files for
-                                          configuration
+  -N, --non-interactive      Compatibility flag; this command never prompts
+  --aws-profile=<value>
+      --dir=<value>          [default: .] Deployment directory; relative paths
+                             resolve here
+      --doge-config=<value>  [default: .data/doge-config.toml] Existing saved
+                             public bootnode identities; never creates keys
+      --dry-run              Validate and show endpoints without writing values
+  --json
+      --spec=<value>         (required) Editable deployment spec (no implicit
+                             saved-intent fallback)
+      --values-dir=<value>   [default: values] Directory containing existing
+                             indexed bootnode production values
 
 DESCRIPTION
-  Prepare Reth bootnode public P2P LoadBalancer values and the AWS controller;
-  deploy the bootnode Helm releases afterwards
+  Generate selected bootnode P2P bindings from spec and discover public enodes
+  using read-only AWS queries
 
 EXAMPLES
-  # Prepare public P2P values with interactive provider selection
+  $ scrollsdk setup bootnode-public-p2p --spec ../deployment-spec.yaml --dry-run
 
-  $ scrollsdk setup bootnode-public-p2p
-
-
-
-  # Configure AWS controller and public P2P values for a specific cluster
-
-  $ scrollsdk setup bootnode-public-p2p --provider=aws --cluster-name=my-cluster --region=us-west-2
-
-
-
-  # Setup with custom values directory
-
-  $ scrollsdk setup bootnode-public-p2p --values-dir=./custom-values
-
-
-
-  # Non-interactive mode (requires provider, cluster name and region)
-
-  $ scrollsdk setup bootnode-public-p2p --non-interactive --provider=aws --cluster-name=my-cluster --region=us-west-2
-
-
-
-  # JSON output mode
-
-  $ scrollsdk setup bootnode-public-p2p --non-interactive --json --provider=aws --cluster-name=my-cluster --region=us-west-2
-
-  $ scrollsdk setup bootnode-public-p2p -N --json --provider aws --cluster-name my-cluster --region us-west-2 --skip-controller-setup
+  $ scrollsdk setup bootnode-public-p2p --spec ../deployment-spec.yaml
 ```
 
 ## `scrollsdk setup bridge-init`

@@ -6,6 +6,10 @@ import type {BootnodePublicP2p, DeploymentSpec} from '../types/deployment-spec.j
 
 import {mergeBootstrapValues} from './spec-bootstrap.js'
 
+export function bootnodeP2pMode(entry: BootnodePublicP2p): 'existing' | 'service' {
+  return entry.mode ?? (entry.existingNlb ? 'existing' : 'service')
+}
+
 /** Validate intent locally. Never allocate EIPs, discover subnets or open a listener. */
 export function validateBootnodePublicP2p(entries: BootnodePublicP2p[] | undefined, indices: number[], provider = 'aws'): void {
   if (entries === undefined) return
@@ -19,28 +23,38 @@ export function validateBootnodePublicP2p(entries: BootnodePublicP2p[] | undefin
     selected.add(entry.index)
     if (typeof entry.enabled !== 'boolean') throw new Error('bootnodePublicP2p.enabled must be a boolean')
     if (entry.mode !== undefined && !['existing', 'service'].includes(entry.mode)) throw new Error('bootnodePublicP2p.mode must be existing or service')
-    if (entry.mode !== 'existing' && entry.existingNlb !== undefined) throw new Error('existingNlb requires mode existing; refusing automatic NLB creation fallback')
+    if (bootnodeP2pMode(entry) !== 'existing' && entry.existingNlb !== undefined) throw new Error('existingNlb requires mode existing; refusing automatic NLB creation fallback')
     if (!entry.enabled) continue
-    if (entry.mode === 'existing') {
+    if (bootnodeP2pMode(entry) === 'existing') {
       const nlb = entry.existingNlb
-      const lb = nlb?.loadBalancerArn?.match(/^arn:aws:elasticloadbalancing:([\da-z-]+):(\d{12}):loadbalancer\/net\/([\w-]+\/[\da-f]{16})$/)
-      if (!nlb || !lb) throw new Error('existingNlb requires a network load balancer ARN')
-      const prefix = `arn:aws:elasticloadbalancing:${lb[1]}:${lb[2]}:`
-      if (!nlb.listenerArn?.startsWith(`${prefix}listener/net/${lb[3]}/`) || !/^[\da-f]{16}$/.test(nlb.listenerArn.slice(`${prefix}listener/net/${lb[3]}/`.length))) throw new Error('existingNlb.listenerArn must belong to the selected NLB')
-      if (!nlb.targetGroupArn?.startsWith(prefix) || !/^targetgroup\/[\w-]+\/[\da-f]{16}$/.test(nlb.targetGroupArn.slice(prefix.length))) throw new Error('existingNlb.targetGroupArn must use the NLB account and region')
-      if (loadBalancers.has(nlb.loadBalancerArn) || targetGroups.has(nlb.targetGroupArn)) throw new Error('Each bootnode requires its own independent NLB and target group')
-      loadBalancers.add(nlb.loadBalancerArn); targetGroups.add(nlb.targetGroupArn)
+      const tg = nlb?.targetGroupArn?.match(/^arn:aws:elasticloadbalancing:([\da-z-]+):(\d{12}):targetgroup\/[\w-]+\/[\da-f]{16}$/)
+      if (!nlb || !tg) throw new Error('existingNlb requires a valid targetGroupArn')
+      const prefix = `arn:aws:elasticloadbalancing:${tg[1]}:${tg[2]}:`
+      if (nlb.loadBalancerArn !== undefined) {
+        const lb = nlb.loadBalancerArn.match(/^arn:aws:elasticloadbalancing:([\da-z-]+):(\d{12}):loadbalancer\/net\/([\w-]+\/[\da-f]{16})$/)
+        if (!lb || !nlb.loadBalancerArn.startsWith(prefix)) throw new Error('existingNlb ARNs must use the same account and region')
+        if (loadBalancers.has(nlb.loadBalancerArn)) throw new Error('Each bootnode requires its own independent NLB and target group')
+        loadBalancers.add(nlb.loadBalancerArn)
+        if (nlb.listenerArn !== undefined && !nlb.listenerArn.startsWith(`${prefix}listener/net/${lb[3]}/`)) throw new Error('existingNlb.listenerArn must belong to the selected NLB')
+      }
+
+      if (nlb.listenerArn !== undefined && (!nlb.listenerArn.startsWith(prefix) || !/^listener\/net\/[\w-]+(?:\/[\da-f]{16}){2}$/.test(nlb.listenerArn.slice(prefix.length)))) throw new Error('existingNlb.listenerArn must use the same account and region and identify a network listener')
+      if (targetGroups.has(nlb.targetGroupArn)) throw new Error('Each bootnode requires its own independent NLB and target group')
+      targetGroups.add(nlb.targetGroupArn)
       if (!Array.isArray(nlb.securityGroupIds) || nlb.securityGroupIds.length === 0 || nlb.securityGroupIds.some(id => !/^sg-(?:[\da-f]{8}|[\da-f]{17})$/.test(id)) || new Set(nlb.securityGroupIds).size !== nlb.securityGroupIds.length) throw new Error('existingNlb.securityGroupIds requires distinct NLB frontend security groups')
     }
 
     if (provider !== 'aws') throw new Error('bootnodePublicP2p requires AWS NLB infrastructure')
-    if (!Array.isArray(entry.sourceRanges) || entry.sourceRanges.length === 0) throw new Error('bootnodePublicP2p.sourceRanges requires approved partner IPv4 CIDRs')
-    for (const cidr of entry.sourceRanges) {
+    if (bootnodeP2pMode(entry) === 'existing') {
+      if (entry.sourceRanges !== undefined && (!Array.isArray(entry.sourceRanges) || entry.sourceRanges.length > 0)) throw new Error('existing NLB sourceRanges must be omitted; manage partner allowlists in AWS infrastructure')
+    } else if (!Array.isArray(entry.sourceRanges) || entry.sourceRanges.length === 0) throw new Error('bootnodePublicP2p.sourceRanges requires approved partner IPv4 CIDRs')
+    for (const cidr of entry.sourceRanges ?? []) {
       if (typeof cidr !== 'string') throw new Error('bootnodePublicP2p.sourceRanges must contain IPv4 CIDRs')
       const [address, mask, extra] = cidr.split('/')
       if (isIP(address) !== 4 || !/^(?:[1-9]|[12]\d|3[0-2])$/.test(mask ?? '') || extra !== undefined) throw new Error('bootnodePublicP2p.sourceRanges requires IPv4 CIDRs with prefixes /1 through /32; unrestricted /0 and hostnames are not allowed')
     }
 
+    if (bootnodeP2pMode(entry) === 'existing' && entry.subnets === undefined && entry.eipAllocations === undefined) continue
     if (!Array.isArray(entry.subnets) || entry.subnets.length === 0 || entry.subnets.some(value => typeof value !== 'string' || !/^subnet-(?:[\da-f]{8}|[\da-f]{17})$/.test(value)) || new Set(entry.subnets).size !== entry.subnets.length) throw new Error('bootnodePublicP2p.subnets requires distinct AWS subnet IDs')
     if (!Array.isArray(entry.eipAllocations) || entry.eipAllocations.length !== entry.subnets.length) throw new Error('bootnodePublicP2p requires one EIP allocation per subnet, in the same order')
     for (const allocation of entry.eipAllocations) {
@@ -54,19 +68,24 @@ export function validateBootnodePublicP2p(entries: BootnodePublicP2p[] | undefin
 export function applyBootnodePublicP2p(values: any, index: number, entries?: BootnodePublicP2p[]): void {
   if (entries === undefined) return // Preserve the independent manual-values workflow.
   const entry = entries.find(value => value.index === index && value.enabled)
-  if (values.reth?.p2pExternal?.enabled && values.reth.p2pExternal.mode === 'existing' && entry && entry.mode !== 'existing') throw new Error('Cannot change an existing NLB binding to Service-owned mode implicitly; review migration and remove the old binding first')
+  if (values.reth?.p2pExternal?.enabled && values.reth.p2pExternal.mode === 'existing' && entry && bootnodeP2pMode(entry) !== 'existing') throw new Error('Cannot change an existing NLB binding to Service-owned mode implicitly; review migration and remove the old binding first')
   values.reth ??= {}
+  if (entry && bootnodeP2pMode(entry) === 'existing') {
+    values.reth.p2pExternal = {
+      enabled: true,
+      existingNlb: {securityGroupIds: entry.existingNlb!.securityGroupIds, targetGroupARN: entry.existingNlb!.targetGroupArn},
+      mode: 'existing',
+      ordinal: 0,
+    }
+    return
+  }
+
   values.reth.p2pExternal = {
     ...values.reth.p2pExternal,
     allowOpenPeering: false,
     eipAllocations: entry?.eipAllocations ?? [],
     enabled: Boolean(entry),
-    existingNlb: entry?.mode === 'existing' ? {
-      listenerARN: entry.existingNlb!.listenerArn,
-      loadBalancerARN: entry.existingNlb!.loadBalancerArn,
-      securityGroupIds: entry.existingNlb!.securityGroupIds,
-      targetGroupARN: entry.existingNlb!.targetGroupArn,
-    } : {},
+    existingNlb: {},
     mode: entry?.mode ?? 'service',
     ordinal: 0,
     sourceRanges: entry?.sourceRanges ?? [],

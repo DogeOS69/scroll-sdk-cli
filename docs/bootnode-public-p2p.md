@@ -1,125 +1,92 @@
-# Reth bootnode public P2P access
+# Update bootnode bindings and public enodes
 
-> **Deprecated command:** `scrollsdk setup bootnode-public-p2p` is retained
-> with a warning and is not invoked by `setup apply`. It generates legacy
-> `reth.service.extra.p2p` values that the current l2-reth chart rejects.
-> For spec deployments, use [bootnodePublicP2p](spec-bootnode-public-p2p.md);
-> plan/apply generates the selected indexed values and enforces a source allowlist.
-> For manual deployments, keep public P2P disabled by default. Enable
-> `reth.p2pExternal` only in the selected bootnodes' indexed values, with
-> approved partner egress CIDRs in `sourceRanges`, subnets, EIP allocations
-> and `allowOpenPeering: false`. Follow the SDK l2-reth chart's activation
-> checklist before the Helm rollout and verify source restrictions afterwards.
-> The command behavior and examples below are retained as legacy reference.
+`scrollsdk setup bootnode-public-p2p` prepares selected Reth bootnodes to use
+independently managed AWS NLBs. AWS infrastructure must already provide one NLB
+per node, a TCP 30303 listener, an IP target group and frontend security groups.
+Partner allowlists are maintained only in AWS. This command neither provisions
+resources nor deploys Helm or generates private node keys.
 
-## Legacy workflow (deprecated)
+## Inputs
 
-`setup l2-bootnode-reth` prepares node identities. The legacy workflow used
-`setup bootnode-public-p2p` after `setup prep-charts` produced the indexed
-bootnode values. Do not use this workflow with the current l2-reth chart.
+The deployment spec needs only these resource references per enabled node:
 
-```text
-setup l2-bootnode-reth
-  → setup prep-charts
-  → setup bootnode-public-p2p
-  → upload required Secrets and deploy the bootnode Helm releases
-  → wait for public LoadBalancer endpoints
-  → setup gen-rpc-package
-  → start and verify the external RPC node
+```yaml
+bootnodePublicP2p:
+  - index: 0
+    enabled: true
+    existingNlb:
+      targetGroupArn: REPLACE_WITH_TCP_IP_TARGET_GROUP_ARN
+      securityGroupIds: [REPLACE_WITH_NLB_FRONTEND_SG_ID]
 ```
 
-The supported provider is AWS. GCP is listed for compatibility but fails with
-an explicit not-implemented error. P2P uses Kubernetes LoadBalancer Services;
-it is separate from HTTP ingress and `setup tls`.
+The spec must also identify the AWS account, region, EKS cluster and bootnode
+count under `infrastructure`. `mode: existing` is inferred when `existingNlb` is
+present. Optional legacy NLB/listener/subnet/EIP references are checked against
+AWS if supplied. They are no longer required or copied into generated values.
 
-## Prepare the values
+Start with the existing `values/l2-reth-bootnode-production-<index>.yaml` files
+and saved `bootnodeReth.instances[].enodeUrl` entries in `.data/doge-config.toml`.
+Missing or malformed input fails before publication; keys are never regenerated.
 
-From the deployment directory, with AWS credentials for the intended cluster:
+## Run from the deployment directory
 
 ```bash
-scrollsdk setup bootnode-public-p2p \
-  --provider aws \
-  --cluster-name YOUR_EKS_CLUSTER \
-  --region YOUR_AWS_REGION \
-  --namespace YOUR_NAMESPACE \
-  --doge-config .data/doge-config.toml \
-  --values-dir ./values \
-  -N --json
+scrollsdk setup bootnode-public-p2p --spec ../deployment-spec.yaml --dry-run
+scrollsdk setup bootnode-public-p2p --spec ../deployment-spec.yaml
 ```
 
-The command reads `bootnodeReth.instances` and updates only
-`values/l2-reth-bootnode-production-<index>.yaml` for those indices, including
-non-contiguous indices. Missing or invalid values fail before provider calls.
-Nodekeys, internal enodes and unrelated services are preserved.
+`--spec` is required so an edited spec cannot be silently replaced by saved
+preparation intent. Paths resolve relative to `--dir` (default current directory).
+`--values-dir`, `--doge-config`, `--aws-profile`, `--json`, and `--dry-run` are
+supported. The command is noninteractive; `-N` is accepted for compatibility.
+Old provider/controller-install flags are no longer supported.
 
-By default it configures the EKS OIDC association, controller IAM service
-account and AWS Load Balancer Controller. `--controller-chart-version` selects
-a particular Helm release; otherwise it resolves the available chart once and
-uses that exact version for installation. The IAM policy comes from the
-matching controller `appVersion` and uses a versioned policy name. Existing
-controllers with operator-managed IAM can be reused with
-`--skip-controller-setup`; the command still checks readiness in the selected
-cluster. The controller must support the TCP/UDP listener annotation below.
+The command queries AWS read-only: TG → NLB → listener, SGs, subnets and EIPs.
+It validates account/VPC ownership, independent infrastructure, TCP 30303-only
+routing and source restrictions, fixed EIPs, health-check/Proxy Protocol settings,
+and multi-AZ cross-zone requirements. Empty SG ingress is a valid closed endpoint.
+No Kubernetes access is needed for this preparation step.
 
-All Helm/kubectl operations inside this command use a temporary kubeconfig
-generated for `--cluster-name` and `--region`, with its server checked against
-the EKS endpoint. The operator's existing kubeconfig is not changed. Logs go to
-stderr in JSON mode; stdout contains one result with `deployed: false` and the
-updated file list.
+After every selected node passes validation, a transaction publishes only the
+listed nodes' `reth.p2pExternal` changes. Image, genesis, internal peers, resources,
+node-key references and other values are preserved. YAML formatting/comments may
+be normalized. Repeating an unchanged command produces no file changes.
+Unlisted files remain untouched; explicitly disabled listed entries are disabled.
+At least one enabled existing NLB entry is required. Concurrent values edits abort
+publication instead of overwriting another writer.
 
-The generated extra Service has two P2P ports (TCP and UDP, normally 30303),
-`type: LoadBalancer`, internet-facing AWS controller ownership and IP targets.
-It sets `aws-load-balancer-type: external` and
-`aws-load-balancer-enable-tcp-udp-listener: "true"` as specified by the
-[AWS controller Service annotation reference](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/service/annotations/).
-The public Service does not expose the RPC or metrics ports.
+Generated production values use the chart's uppercase `ARN` spelling:
 
-Existing legacy `aws-load-balancer-type: nlb` or internal-LB annotations require
-an explicit Service migration before this command proceeds. Inspect whether the
-Service has already been deployed and plan its replacement; changing controller
-ownership on a live Service is not an in-place migration. If the values have
-never been deployed, remove the obsolete annotation and rerun. Custom annotations
-and existing valid LB names are preserved. Generated names respect AWS's
-32-character limit.
+```yaml
+reth:
+  p2pExternal:
+    enabled: true
+    mode: existing
+    ordinal: 0
+    existingNlb:
+      targetGroupARN: REPLACE_WITH_TCP_IP_TARGET_GROUP_ARN
+      securityGroupIds: [REPLACE_WITH_NLB_FRONTEND_SG_ID]
+```
 
-## Deploy and export public peers
+Each release uses ordinal zero; the spec index identifies the release. Use the
+paired l2-reth chart **0.1.11 or later**. The command does not update chart pins,
+Makefiles, saved preparation intent or frozen plans. Keep the editable spec for
+future full generation; do not rerun older saved intent that omits this change.
 
-Upload the Reth Secrets and apply the reviewed indexed values through the
-deployment's bootnode Helm releases in the selected namespace. This command
-does not install those releases, allocate Elastic IPs, or wait for their NLBs.
-Running `prep-charts` again preserves the public P2P configuration.
-
-After rollout, select the same cluster for the following commands and inspect
-each configured bootnode's Service, for example index 0:
+The result prints `enode://<saved-public-key>@<discovered-EIP>:30303`, one per EIP.
+This confirms configuration and AWS topology, not an installed or reachable node.
+After reviewing the Helm chart version, context and namespace, deploy through
+the normal release workflow, then run:
 
 ```bash
-kubectl --context YOUR_CONTEXT -n YOUR_NAMESPACE \
-  get service l2-reth-bootnode-0-p2p -o yaml
+scrollsdk setup nlb --spec ../deployment-spec.yaml --require-targets
 ```
 
-Once `.status.loadBalancer.ingress` contains usable endpoints, select that
-cluster in the kubeconfig used by `gen-rpc-package` and run:
+Verify partner RLPx identity and block synchronization separately. For external
+RPC packages, pass the same `--spec` to `setup gen-rpc-package`; it discovers EIPs
+from AWS for existing NLB bindings instead of relying on ClusterIP Service status.
 
-```bash
-scrollsdk setup gen-rpc-package \
-  --dogeos-rpc-package-dir /path/to/dogeos-rpc-package \
-  --namespace YOUR_NAMESPACE
-```
-
-Use an actual RPC-package checkout containing `docker-compose.yml` and its
-scripts. The command reads Service endpoints and generates the external peer
-list from the same bootnode identities. Current Reth chart arguments disable
-automatic discovery; external nodes use these explicitly configured peers.
-Configuration generation and Helm rendering do not establish public network
-reachability: verify the deployed NLB targets and actual Reth peer connections
-from the external node.
-
-## Local validation
-
-The supplemental rehearsal is recorded at
-`/tmp/scrollsdk-bootnode-public-j4ndnFKy`. CLI subprocess tests use explicit
-AWS/eksctl/Helm/kubectl/curl doubles, including injected IAM/OIDC/readiness and
-cluster-mismatch failures. A separate real Helm render verifies the public
-Service. A full `gen-rpc-package` invocation with repository Compose templates
-verifies public peer projection from simulated LB status. No cloud resources
-or live public connections were created by this rehearsal.
+See [the NLB runbook](existing-nlb.md) for AWS prerequisites and recurring
+partner changes, and [spec modes](spec-bootnode-public-p2p.md) for the separate
+Service-owned NLB workflow. Existing Service-owned public endpoints require an
+explicit migration; this command refuses to adopt their resources.

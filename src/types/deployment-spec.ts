@@ -929,13 +929,14 @@ export interface BootnodePublicP2p {
   enabled: boolean
   /** Existing infrastructure stays outside the application Helm lifecycle. */
   existingNlb?: {
-    listenerArn: string
-    loadBalancerArn: string
+    listenerArn?: string
+    loadBalancerArn?: string
     securityGroupIds: string[]
     targetGroupArn: string
   }
   index: number
   mode?: 'existing' | 'service'
+  /** Service mode only. Existing NLB partner allowlists are owned by AWS infrastructure. */
   sourceRanges?: string[]
   subnets?: string[]
 }
