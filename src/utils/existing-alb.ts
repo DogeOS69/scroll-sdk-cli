@@ -393,7 +393,10 @@ export function projectSharedAlbValues(values: any, file: string, spec?: Deploym
     if (entry.file !== file) continue
     const ingress = entry.ingress.reduce((value, key) => value?.[key], values)
     if (!object(ingress)) fail(`${name}: missing ingress configuration for sharedAlb`)
-    if (ingress.existingAlbBinding || Object.keys(values.targetGroupBindings ?? {}).length > 0) fail(`${name}: remove external targetGroupBindings before selecting sharedAlb`)
+    // HTTP and WebSocket can use different ALB owners in the same values file.
+    const conflictingBindings = Object.keys(values.targetGroupBindings ?? {}).some(binding => binding === name
+      || !Object.hasOwn(spec.infrastructure.aws?.alb?.bindings ?? {}, binding) || ALB_SERVICES[binding]?.file !== file)
+    if (ingress.existingAlbBinding || conflictingBindings) fail(`${name}: remove external targetGroupBindings before selecting sharedAlb`)
     // Validate hosts/paths without replacing chart-owned Blockscout routes.
     routes(ingress)
     ingress.enabled = true

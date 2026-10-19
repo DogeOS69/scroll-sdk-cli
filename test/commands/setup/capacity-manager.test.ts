@@ -7,6 +7,31 @@ import path from 'node:path'
 
 const cli = path.resolve('bin/run.js')
 
+describe('setup capacity-manager prepare private inputs', () => {
+  for (const input of ['explicit spec', 'saved config', 'frozen intent']) {
+    for (const json of [false, true]) it(`omits malformed ${input} contents from ${json ? 'JSON' : 'text'} diagnostics`, () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'capacity-private-input-'))
+      try {
+        const state = path.join(root, '.scrollsdk')
+        fs.mkdirSync(path.join(state, 'capacity-manager'), {recursive: true})
+        const intent = path.join(state, 'intent.json')
+        fs.writeFileSync(intent, '{}')
+        const file = input === 'explicit spec' ? path.join(root, 'spec.yaml') : input === 'saved config' ? path.join(state, 'capacity-manager/config.json') : intent
+        const content = input === 'explicit spec' ? 'capacityManager: [\npassword: NONFUNCTIONAL_PRIVATE_MARKER\n' : '{"password": NONFUNCTIONAL_PRIVATE_MARKER}'
+        fs.writeFileSync(file, content)
+        const args = [cli, 'setup', 'capacity-manager', 'prepare', '--dir', root, ...(input === 'explicit spec' ? ['--spec', file] : []), ...(json ? ['--json'] : [])]
+        const result = spawnSync(process.execPath, args, {encoding: 'utf8'})
+        const output = result.stdout + result.stderr
+        expect(result.status).not.to.equal(0)
+        expect(output).not.to.include('NONFUNCTIONAL_PRIVATE_MARKER')
+        expect(output).to.include('Invalid').and.to.include(input)
+        expect(fs.readFileSync(file, 'utf8')).to.equal(content)
+        expect(fs.existsSync(path.join(state, 'capacity-manager/plan.json'))).to.equal(false)
+      } finally {fs.rmSync(root, {force: true, recursive: true})}
+    })
+  }
+})
+
 describe('setup capacity-manager credentials', () => {
   it('explains absent plans and bounded-worker mode before any cluster call', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'capacity-no-plan-'))

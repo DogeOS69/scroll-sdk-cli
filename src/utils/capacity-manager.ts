@@ -33,11 +33,19 @@ interface CapacityPreparationOptions {
   specFile?: string
 }
 
+function readCapacitySpec(file: string, label: string, parse: (content: string) => unknown): DeploymentSpec {
+  const content = fs.readFileSync(file, 'utf8')
+  try {return parse(content) as DeploymentSpec} catch {
+    // YAML and JSON parser errors can include credential-bearing source excerpts.
+    throw new Error(`Invalid ${label}; correct its syntax and retry (private contents omitted)`)
+  }
+}
+
 function capacitySpec(root: string, specFile?: string): DeploymentSpec {
-  const spec = JSON.parse(fs.readFileSync(localPath(root, '.scrollsdk/intent.json'), 'utf8')) as DeploymentSpec
+  const spec = readCapacitySpec(localPath(root, '.scrollsdk/intent.json'), 'frozen intent (.scrollsdk/intent.json)', JSON.parse)
   const saved = localPath(root, CAPACITY_MANAGER_CONFIG)
-  const selection = specFile ? yaml.load(fs.readFileSync(specFile, 'utf8')) as DeploymentSpec
-    : fs.existsSync(saved) ? JSON.parse(fs.readFileSync(saved, 'utf8')) : undefined
+  const selection = specFile ? readCapacitySpec(specFile, 'explicit spec (--spec YAML)', yaml.load)
+    : fs.existsSync(saved) ? readCapacitySpec(saved, `saved config (${CAPACITY_MANAGER_CONFIG})`, JSON.parse) : undefined
   if (specFile || fs.existsSync(saved)) {
     if (!selection || typeof selection !== 'object' || Array.isArray(selection) || !selection.capacityManager || selection.proofWorkers) throw new Error('Select capacityManager without proofWorkers in the explicit or saved capacity spec')
     assertDeploymentSpecFields({capacityManager: selection.capacityManager})

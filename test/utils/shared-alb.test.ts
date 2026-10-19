@@ -26,6 +26,37 @@ const files = (): Record<string, string> => ({
 })
 
 describe('shared public ALB projection', () => {
+  for (const shared of ['l2-reth-rpc-public', 'l2-reth-rpc-public-ws'] as const) it(`preserves disjoint external RPC bindings when rerunning ${shared} shared ingress preparation`, () => {
+    const intent = spec()
+    intent.infrastructure.aws!.sharedAlb!.services = [shared]
+    const external = shared === 'l2-reth-rpc-public' ? 'l2-reth-rpc-public-ws' : 'l2-reth-rpc-public'
+    const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
+    const binding = {endpoint: 'rpc', serviceRef: {name: 'l2-reth-rpc-public', port: external.endsWith('-ws') ? 8546 : 8545}, targetGroupArn: `${prefix}targetgroup/rpc/2222222222222222`}
+    intent.infrastructure.aws!.alb = {bindings: {[external]: binding}, endpoints: {rpc: {listenerArn: `${prefix}listener/app/rpc/0000000000000000/1111111111111111`, loadBalancerArn: `${prefix}loadbalancer/app/rpc/0000000000000000`}}, mode: 'existing'}
+    const file = 'l2-reth-rpc-public-production.yaml'
+    const values = {[file]: yaml.dump({ingress: {main: {hosts: [{host: 'rpc.example.invalid'}]}, websocket: {hosts: [{host: 'ws.example.invalid'}]}}})}
+    projectExistingAlb(values, intent)
+    const parsed = yaml.load(values[file]) as {
+      ingress: Record<string, {enabled: boolean; existingAlbBinding?: string}>
+      targetGroupBindings: Record<string, unknown>
+    }
+    const before = structuredClone(parsed)
+    // prep-charts also applies the shared projection directly after merging.
+    projectSharedAlbValues(parsed, file, intent)
+    expect(parsed).to.deep.equal(before)
+    projectExistingAlb(values, intent)
+    expect(yaml.load(values[file])).to.deep.equal(before)
+    expect(parsed.targetGroupBindings).to.deep.equal({[external]: {serviceRef: binding.serviceRef, targetGroupARN: binding.targetGroupArn, targetType: 'ip'}})
+    expect(parsed.ingress[shared.endsWith('-ws') ? 'websocket' : 'main'].enabled).to.equal(true)
+    expect(parsed.ingress[external.endsWith('-ws') ? 'websocket' : 'main'].enabled).to.equal(false)
+
+    parsed.targetGroupBindings[shared] = parsed.targetGroupBindings[external]
+    expect(() => projectSharedAlbValues(parsed, file, intent)).to.throw('remove external targetGroupBindings')
+    delete parsed.targetGroupBindings[shared]
+    parsed.ingress[shared.endsWith('-ws') ? 'websocket' : 'main'].existingAlbBinding = external
+    expect(() => projectSharedAlbValues(parsed, file, intent)).to.throw('remove external targetGroupBindings')
+  })
+
   it('enables selected edges, preserves routes, emits TLS/health/order and survives preparation', () => {
     const values = files()
     projectExistingAlb(values, spec())
