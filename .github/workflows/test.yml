@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: e0769d80331a524f3eab72d83c03a5e3580e8178
+          ref: 6ee43c0abdffa966d68f09d791bb5ce84b198964
           path: .test-sdk-nlb
       - uses: azure/setup-helm@v4.3.0
         with:
@@ -48,6 +48,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Validate pinned SDK installation recipes
+        run: python .test-sdk-nlb/examples/tests/test_makefile_context.py
       - name: Validate native dstack worker models and lifecycle offline
         run: |
           python -m pip install 'dstack==0.21.5'
