@@ -10,7 +10,7 @@ jobs:
     env:
       SDK_ALB_CHARTS: ${{ github.workspace }}/.test-sdk/charts
       SCROLLSDK_TEST_DEPLOYMENT_SPECS: ${{ github.workspace }}/.test-sdk-specs/examples
-      SCROLLSDK_TEST_SDK_CHART: ${{ github.workspace }}/.test-sdk/charts/l2-reth
+      SCROLLSDK_TEST_SDK_CHART: ${{ github.workspace }}/.test-sdk-nlb/charts/l2-reth
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -23,11 +23,19 @@ jobs:
           repository: DogeOS69/scroll-sdk
           ref: 7a047ea87721a0c666aa3f312103392554f30260
           path: .test-sdk-specs
+      # Minimal NLB bindings require l2-reth >= 0.1.11. Keep the starter
+      # fixtures above paired with their own immutable chart revision.
+      - uses: actions/checkout@v4
+        with:
+          repository: DogeOS69/scroll-sdk
+          ref: e0769d80331a524f3eab72d83c03a5e3580e8178
+          path: .test-sdk-nlb
       - uses: azure/setup-helm@v4.3.0
         with:
           version: v3.17.3
       - run: helm dependency build .test-sdk/charts/tso-service --skip-refresh
       - run: helm dependency build .test-sdk/charts/l2-reth --skip-refresh
+      - run: helm dependency build .test-sdk-nlb/charts/l2-reth --skip-refresh
       - run: helm dependency build .test-sdk/charts/blockscout
       - run: helm dependency build .test-sdk/charts/frontends --skip-refresh
       - run: helm dependency build .test-sdk/charts/proof-coordinator --skip-refresh
