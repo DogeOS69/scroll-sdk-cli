@@ -16,19 +16,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: c2eb8bab629f16bb8ea982223351aaa08d52ed81
+          ref: 41334952f2185b2dc1d324f68d3838be3e8cfaf6
           path: .test-sdk
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: 7a047ea87721a0c666aa3f312103392554f30260
+          ref: 3af814de7b21ed63c7ab022a9f71ca28f4f593b6
           path: .test-sdk-specs
-      # Minimal NLB bindings require l2-reth >= 0.1.11. Keep the starter
-      # fixtures above paired with their own immutable chart revision.
+      # Test the merged SDK's minimal NLB bindings and installation recipes.
+      # Keep .test-sdk at the sdkRevision selected by .test-sdk-specs starters.
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: 6ee43c0abdffa966d68f09d791bb5ce84b198964
+          ref: 3af814de7b21ed63c7ab022a9f71ca28f4f593b6
           path: .test-sdk-nlb
       - uses: azure/setup-helm@v4.3.0
         with:
