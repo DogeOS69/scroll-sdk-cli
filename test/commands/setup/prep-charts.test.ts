@@ -50,14 +50,14 @@ import PrepCharts, {
   snapshotRethExtraArgs,
   validateDogeConfigEthereumDaForPrep,
 } from '../../../src/commands/setup/prep-charts.js'
+import {canonicalDogecoinNetwork} from '../../../src/utils/dogecoin-network.js'
 import {validateRotationExport} from '../../../src/utils/rotation-export.js'
 import {mergeRotationSigners} from '../../../src/utils/rotation-operations.js'
-import {tsoSignerNetwork} from '../../../src/utils/tso-signer-network.js'
 import { ensureWithdrawalProofActivationSwitch } from '../../../src/utils/withdrawal-config.js'
 
 // The governance portal's mainnet rotation export golden: 3 current signers rotating to 4 targets.
 const ROTATION = validateRotationExport(JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../../fixtures/rotation-export/mainnet-example.json'), 'utf8')))
-const rotationEntry = (signer: {public_key: string; transport_pubkey: string}) => ({delivery: 'pull', network: 'dogecoin', publicKeyOverride: signer.public_key, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transport_pubkey})
+const rotationEntry = (signer: {public_key: string; transport_pubkey: string}) => ({delivery: 'pull', network: 'mainnet', publicKeyOverride: signer.public_key, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transport_pubkey})
 const importedOriginals = ROTATION.current.signers.map((signer, index) => ({id: `old-${index}`, publicKey: signer.public_key, transportPubkey: signer.transport_pubkey}))
 const importedConfig = {attestationSigner: {activeSignerIds: importedOriginals.map(signer => signer.id), external: importedOriginals, mode: 'external' as const, threshold: 2}, network: 'mainnet' as const}
 
@@ -353,7 +353,7 @@ describe('setup prep-charts external attestation signer routing', () => {
     ])
   })
 
-  it('writes the WP network name for mainnet signers (dogecoin, not mainnet)', () => {
+  it('writes the WP network name for mainnet signers (canonical mainnet)', () => {
     const signers = buildTsoSigners({
       attestationSigner: {
         activeSignerIds: ['partner-a'],
@@ -375,23 +375,23 @@ describe('setup prep-charts external attestation signer routing', () => {
       }]},
       network: 'mainnet',
     })
-    expect(signers.map(signer => signer.network)).to.deep.equal(['dogecoin', 'dogecoin'])
+    expect(signers.map(signer => signer.network)).to.deep.equal(['mainnet', 'mainnet'])
   })
 
   it('passes testnet and regtest through unchanged', () => {
-    expect(tsoSignerNetwork('testnet')).to.equal('testnet')
-    expect(tsoSignerNetwork('regtest')).to.equal('regtest')
-    expect(tsoSignerNetwork('mainnet')).to.equal('dogecoin')
+    expect(canonicalDogecoinNetwork('testnet')).to.equal('testnet')
+    expect(canonicalDogecoinNetwork('regtest')).to.equal('regtest')
+    expect(canonicalDogecoinNetwork('mainnet')).to.equal('mainnet')
   })
 
   it('keeps registered attestation signers instead of rebuilding them from imported descriptors', () => {
-    const tee = {delivery: 'push' as const, network: 'dogecoin', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
-    const pull = (pub: string, transport: string, network = 'dogecoin') => ({delivery: 'pull' as const, network, publicKeyOverride: pub, roles: ['Attestation' as const], signatureMode: 'ecdsa' as const, transportPubkey: transport})
+    const tee = {delivery: 'push' as const, network: 'mainnet', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
+    const pull = (pub: string, transport: string, network = 'mainnet') => ({delivery: 'pull' as const, network, publicKeyOverride: pub, roles: ['Attestation' as const], signatureMode: 'ecdsa' as const, transportPubkey: transport})
     const registeredByRotation = pull(`02${'66'.repeat(32)}`, `03${'77'.repeat(32)}`)
     const imported = pull(`02${'22'.repeat(32)}`, `03${'33'.repeat(32)}`)
     const staleTee = {...tee, publicKeyOverride: `02${'99'.repeat(32)}`}
-    // A stale CubeSigner entry is rebuilt; a rotation-registered key and a pre-fix mainnet spelling survive.
-    expect(mergeTsoSigners([staleTee, pull(imported.publicKeyOverride, imported.transportPubkey, 'mainnet'), registeredByRotation], [tee, imported]))
+    // Rebuild a stale CubeSigner entry and preserve rotation keys while normalizing legacy aliases.
+    expect(mergeTsoSigners([staleTee, pull(imported.publicKeyOverride, imported.transportPubkey, 'dogecoin'), {...registeredByRotation, network: 'dogecoin'}], [tee, imported]))
       .to.deep.equal([tee, imported, registeredByRotation])
     expect(mergeTsoSigners([], [tee, imported])).to.deep.equal([tee, imported])
     // Once WP values hold attestation entries they are the registry: imported descriptors are not consulted.
@@ -400,7 +400,7 @@ describe('setup prep-charts external attestation signer routing', () => {
   })
 
   it('seeds attestation entries from the imported signers on initial onboarding only', () => {
-    const tee = {delivery: 'push' as const, network: 'dogecoin', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
+    const tee = {delivery: 'push' as const, network: 'mainnet', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
     const built = buildTsoSigners(importedConfig)
     // No WP array yet, or one holding only a stale Correctness entry: seed every imported signer.
     expect(mergeTsoSigners([], [tee, ...built])).to.deep.equal([tee, ...ROTATION.current.signers.map(signer => rotationEntry(signer))])
@@ -408,7 +408,7 @@ describe('setup prep-charts external attestation signer routing', () => {
   })
 
   it('does not re-add retired signers after rotate and retire', () => {
-    const tee = {delivery: 'push' as const, network: 'dogecoin', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
+    const tee = {delivery: 'push' as const, network: 'mainnet', publicKeyOverride: `02${'11'.repeat(32)}`, roles: ['Correctness' as const], signatureMode: 'ecdsa' as const, uri: 'http://cubesigner-signer:3000'}
     // dogeConfig keeps the 3 originally imported signers; the rotation commands never update it.
     const prep = (wp: unknown[]) => mergeTsoSigners(wp, [tee, ...buildTsoSigners(importedConfig)])
     const onboarded = prep([])

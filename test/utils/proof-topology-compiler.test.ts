@@ -79,13 +79,23 @@ process.stderr.write('captured compiler input'); process.exit(17);
     expect(context.worker_token_file).to.equal('/app/secrets/prover-worker-token')
     expect(context.prover_worker.worker_credential_file).to.equal('/app/secrets/prover-worker-credential')
     expect(context.network).to.equal('mainnet')
-    expect(context.proof_coordinator.bridge.dogecoin_network).to.equal('bitcoin')
+    expect(context.proof_coordinator.bridge.dogecoin_network).to.equal('mainnet')
     for (network of ['testnet', 'regtest']) {
       expect(compile).to.throw('captured compiler input')
       expect(JSON.parse(fs.readFileSync(capture, 'utf8')).proof_coordinator.bridge.dogecoin_network).to.equal(network)
     }
 
     fs.unlinkSync(capture)
+    network = 'dogecoin'
+    expect(compile).to.throw('captured compiler input')
+    expect(JSON.parse(fs.readFileSync(capture, 'utf8')).proof_coordinator.bridge.dogecoin_network).to.equal('mainnet')
+    fs.unlinkSync(capture)
+    for (network of ['bitcoin', 'signet', 'unknown']) {
+      expect(compile).to.throw('Unsupported Dogecoin network')
+      expect(fs.existsSync(capture)).to.equal(false)
+    }
+
+    network = 'mainnet'
     topology.deployment.workerTokenFile = '/app/secrets/../secrets/prover-worker-credential'
     expect(compile).to.throw('must differ')
     expect(fs.existsSync(capture)).to.equal(false)

@@ -25,11 +25,11 @@ const key = () => {const ec = createECDH('secp256k1'); ec.generateKeys(); return
 function status(rotation: RotationExport, change: Partial<RotateKeyStatus> = {}): RotateKeyStatus {
   return {
     active_intent: null, current_attestation: {pubkeys: rotation.current.signers.map(s => s.public_key), threshold: rotation.current.threshold}, current_key_hash: rotation.current.key_hash,
-    deprecating: null, min_grace_wf_txs: 10, network: 'dogecoin', next_wf_tx_number: 40, protocol_instance_id: rotation.protocol_instance_id, registered_signer_pubkeys: [], ...change,
+    deprecating: null, min_grace_wf_txs: 10, network: 'mainnet', next_wf_tx_number: 40, protocol_instance_id: rotation.protocol_instance_id, registered_signer_pubkeys: [], ...change,
   }
 }
 
-const entry = (signer: {public_key: string; transport_pubkey: string}) => ({delivery: 'pull', network: 'dogecoin', publicKeyOverride: signer.public_key, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transport_pubkey})
+const entry = (signer: {public_key: string; transport_pubkey: string}) => ({delivery: 'pull', network: 'mainnet', publicKeyOverride: signer.public_key, roles: ['Attestation'], signatureMode: 'ecdsa', transportPubkey: signer.transport_pubkey})
 const metrics = (entries: [string, number][]) => ['# HELP tso_core_signer_last_poll_timestamp_seconds x', '# TYPE tso_core_signer_last_poll_timestamp_seconds gauge',
   ...entries.map(([pubkey, at]) => `tso_core_signer_last_poll_timestamp_seconds{signer_pubkey="${pubkey}"} ${at}`), 'tso_core_other_metric 1'].join('\n')
 
@@ -115,7 +115,10 @@ describe('bridge rotation export: null grace, regtest and kept signers', () => {
     value.target.p2sh_address = address.toBase58Check(Buffer.from(value.target.key_hash.slice(2), 'hex'), 196)
     const rotation = validateRotationExport(value)
     assertDeploymentIdentity(rotation, status(rotation, {network: 'regtest'}))
-    expect(() => assertDeploymentIdentity(rotation, status(rotation, {network: 'dogecoin'}))).to.throw('network')
+    for (const network of ['mainnet', 'dogecoin', 'testnet', 'bitcoin']) {
+      expect(() => assertDeploymentIdentity(rotation, status(rotation, {network}))).to.throw('network')
+    }
+
     expect(() => validateRotationExport({...value, target: {...value.target, p2sh_address: GOLDEN.target.p2sh_address}})).to.throw('p2sh_address')
   })
 
@@ -176,9 +179,13 @@ describe('bridge rotation export role separation', () => {
 
 describe('bridge rotation deployment identity and predecessor checks', () => {
   const rotation = validateRotationExport(golden())
-  it('maps a mainnet export to the WP dogecoin network', () => {
+  it('accepts canonical mainnet and the legacy dogecoin alias, but rejects mismatches', () => {
     assertDeploymentIdentity(rotation, status(rotation))
-    expect(() => assertDeploymentIdentity(rotation, status(rotation, {network: 'mainnet'}))).to.throw('network')
+    assertDeploymentIdentity(rotation, status(rotation, {network: 'dogecoin'}))
+    for (const network of ['regtest', 'bitcoin', 'signet', 'unknown', '']) {
+      expect(() => assertDeploymentIdentity(rotation, status(rotation, {network}))).to.throw('network')
+    }
+
     expect(() => assertDeploymentIdentity(rotation, status(rotation, {network: 'testnet'}))).to.throw('network')
     expect(() => assertDeploymentIdentity(rotation, status(rotation, {protocol_instance_id: `0x${'3b'.repeat(32)}`}))).to.throw('another deployment')
   })
@@ -193,7 +200,7 @@ describe('bridge rotation deployment identity and predecessor checks', () => {
 
 describe('bridge rotation register', () => {
   let root: string
-  const correctness = {delivery: 'push', network: 'dogecoin', publicKeyOverride: key(), roles: ['Correctness'], signatureMode: 'ecdsa', uri: 'http://cubesigner-signer:3000'}
+  const correctness = {delivery: 'push', network: 'mainnet', publicKeyOverride: key(), roles: ['Correctness'], signatureMode: 'ecdsa', uri: 'http://cubesigner-signer:3000'}
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'rotation-register-'))
     fs.mkdirSync(path.join(root, 'values'))
@@ -239,6 +246,33 @@ describe('bridge rotation register', () => {
     expect(calls).to.deep.equal([])
     expect(fs.readFileSync(path.join(root, WP_VALUES_FILE), 'utf8')).to.equal(before)
   })
+
+  it('normalizes legacy entries and persists them even when every key is already registered', async () => {
+    const rotation = validateRotationExport(golden())
+    const canonical = [correctness, ...rotation.current.signers.map(signer => entry(signer)), ...rotation.target.signers.map(signer => entry(signer))]
+    const legacy = canonical.map(signer => ({...signer, network: 'dogecoin'}))
+    const {calls, cluster, run} = setup(rotation, legacy)
+    cluster.wpStatus = async () => status(rotation, {registered_signer_pubkeys: canonical.map(signer => signer.publicKeyOverride)})
+    expect(await registerRotation({cluster, rotation, run})).to.deep.equal({added: [], installed: true, registered: true})
+    expect((yaml.load(fs.readFileSync(path.join(root, WP_VALUES_FILE), 'utf8')) as any).tsoSigners).to.deep.equal(canonical)
+    expect(legacy.every(signer => signer.network === 'dogecoin')).to.equal(true)
+    calls.length = 0
+    expect(await registerRotation({cluster, rotation, run})).to.deep.equal({added: [], installed: false, registered: true})
+    expect(calls).to.deep.equal([])
+  })
+
+  for (const network of ['testnet', 'regtest', 'bitcoin']) {
+    it(`rejects ${network} signer entries without writing or installing`, async () => {
+      const rotation = validateRotationExport(golden())
+      const {calls, cluster, run} = setup(rotation, [{...entry(rotation.current.signers[0]), network}])
+      const before = fs.readFileSync(path.join(root, WP_VALUES_FILE), 'utf8')
+      let error: unknown
+      try {await registerRotation({cluster, rotation, run})} catch (error_) {error = error_}
+      expect((error as Error).message).to.contain('network')
+      expect(calls).to.deep.equal([])
+      expect(fs.readFileSync(path.join(root, WP_VALUES_FILE), 'utf8')).to.equal(before)
+    })
+  }
 
   it('refuses a transport-key conflict, and a helm template failure, without writing anything', async () => {
     const rotation = validateRotationExport(golden())

@@ -46,13 +46,13 @@ describe('spec attestation signer public identities', () => {
     }
   })
 
-  it('writes the WP network name (dogecoin) into tsoSigners for a mainnet spec, matching prep-charts', () => {
+  it('writes canonical mainnet into tsoSigners, matching prep-charts', () => {
     const spec = fixture()
     spec.dogecoin.network = 'mainnet'
     const doge = toml.parse(generateDogeConfigToml(spec)) as any
     // Only the WP values: the full set refuses the example's devnet CubeSigner mode on mainnet.
     const values = yaml.load(generateWithdrawalProcessorValues(spec)) as any
-    expect(values.tsoSigners.map((signer: any) => signer.network)).to.deep.equal(values.tsoSigners.map(() => 'dogecoin'))
+    expect(values.tsoSigners.map((signer: any) => signer.network)).to.deep.equal(values.tsoSigners.map(() => 'mainnet'))
     expect(values.tsoSigners).to.deep.equal(buildTsoSigners({attestationSigner: doge.attestationSigner, network: doge.network}))
   })
 

@@ -35,6 +35,16 @@ scripts. `register` and a new `send` also require the live bridge to still be
 the export's current bridge. Signer operators use
 the standalone Docker kit; they do not need this CLI.
 
+Generated WP signer entries and proof bridge configuration use `mainnet`,
+`testnet` or `regtest` and require Core with
+[DogeOS69/dogeos-core#1627](https://github.com/DogeOS69/dogeos-core/pull/1627).
+Coordinate the CLI and Core upgrade before regenerating or registering signers.
+Rotation identity checks also accept older WP status responses using `dogecoin`
+as the mainnet alias; this does not make new generated configuration compatible
+with older Core binaries. Retained signer entries are normalized to `mainnet`.
+Bridge-genesis helper inputs retain the `dogecoin` alias for pinned older tools;
+Core #1627 still accepts that input alias. `bitcoin` is not a Dogecoin network.
+
 Current configuration and migration procedure: [Pure Reth configuration and retired services](docs/config-cleanup.md).
 
 [![Twitter Follow](https://img.shields.io/twitter/follow/Scroll_ZKP?style=social)](https://twitter.com/Scroll_ZKP)

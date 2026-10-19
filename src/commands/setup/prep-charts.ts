@@ -28,6 +28,7 @@ import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import {canonicalDogecoinNetwork} from '../../utils/dogecoin-network.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {verifyDstackAcmCertificate} from '../../utils/dstack-internal-tls.js'
@@ -72,7 +73,6 @@ import {
 import {specDstackController} from '../../utils/spec-kubernetes-target.js'
 import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {TSO_ALB_EDGE_RECEIPT, reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
-import {tsoSignerNetwork} from '../../utils/tso-signer-network.js'
 import {
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
   buildWithdrawalDeploymentFacts,
@@ -178,11 +178,11 @@ export function buildFrontendExternalUrlUpdates(
  * `attestationSigner.external` keeps the original imported set. So the
  * imported signers seed the attestation entries only while WP values have none
  * (initial onboarding); after that every existing attestation entry is kept
- * as is (with the WP network name) and nothing is re-added, so a retired key
+ * with a canonical network name and nothing is re-added, so a retired key
  * stays retired. The Correctness (CubeSigner) entry is always rebuilt.
  */
 export function mergeTsoSigners(existing: unknown[], built: TsoSignerEntry[]): TsoSignerEntry[] {
-  const kept = (existing as TsoSignerEntry[]).filter(entry => entry?.roles?.includes('Attestation')).map(entry => ({...entry, network: tsoSignerNetwork(entry.network)}))
+  const kept = (existing as TsoSignerEntry[]).filter(entry => entry?.roles?.includes('Attestation')).map(entry => ({...entry, network: canonicalDogecoinNetwork(entry.network)}))
   const attestation = kept.length > 0 ? kept : built.filter(item => item.roles.includes('Attestation'))
   return [...built.filter(item => !item.roles.includes('Attestation')), ...attestation]
 }
@@ -200,7 +200,7 @@ export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): stri
  * delivery, no URI, with both descriptor keys pinned.
  */
 export function buildTsoSigners(config: Pick<DogeConfig, 'attestationSigner' | 'cubesigner' | 'network'>): TsoSignerEntry[] {
-  const network = tsoSignerNetwork(config.network)
+  const network = canonicalDogecoinNetwork(config.network)
   const cubesignerRoles = config.cubesigner?.roles || []
   if (cubesignerRoles.length > 1) {
     throw new Error('CubeSigner supports exactly one TEE role and one in-cluster deployment')

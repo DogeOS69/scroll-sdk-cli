@@ -9,6 +9,7 @@ import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import sinon from 'sinon'
 
+import RotationOnline from '../../../src/commands/bridge/rotation/online.js'
 import RotationSend from '../../../src/commands/bridge/rotation/send.js'
 import {ROTATE_KEY} from '../../../src/utils/rotation-cluster.js'
 import {WP_VALUES_FILE} from '../../../src/utils/tso-signer-polls.js'
@@ -35,7 +36,7 @@ describe('bridge rotation send command', () => {
   const signers = [...GOLDEN.current.signers, ...GOLDEN.target.signers] as {public_key: string}[]
   const status = {
     active_intent: null, current_attestation: {pubkeys: GOLDEN.current.signers.map((s: {public_key: string}) => s.public_key), threshold: GOLDEN.current.threshold}, current_key_hash: GOLDEN.current.key_hash,
-    deprecating: null, min_grace_wf_txs: 10, network: 'dogecoin', next_wf_tx_number: 40, protocol_instance_id: GOLDEN.protocol_instance_id, registered_signer_pubkeys: [],
+    deprecating: null, min_grace_wf_txs: 10, network: 'mainnet', next_wf_tx_number: 40, protocol_instance_id: GOLDEN.protocol_instance_id, registered_signer_pubkeys: [],
   }
 
   function handle(request: http.IncomingMessage, response: http.ServerResponse): void {
@@ -63,6 +64,8 @@ describe('bridge rotation send command', () => {
     fs.writeFileSync(path.join(directory, WP_VALUES_FILE), 'tsoSigners: []\n')
     exportFile = path.join(directory, 'rotation-export.json')
     fs.writeFileSync(exportFile, JSON.stringify(GOLDEN))
+    status.network = 'mainnet'
+    status.protocol_instance_id = GOLDEN.protocol_instance_id
     posts = []
     intent = null
     logs = []
@@ -80,6 +83,32 @@ describe('bridge rotation send command', () => {
   })
 
   const run = (...extra: string[]) => RotationSend.run([exportFile, '--dir', directory, '--context', 'test', '--wp-url', url, '--tso-url', url, ...extra], CLI_ROOT)
+
+  for (const network of ['mainnet', 'dogecoin']) {
+    it(`checks online against ${network} WP status without posting`, async () => {
+      status.network = network
+      await RotationOnline.run([exportFile, '--dir', directory, '--context', 'test', '--wp-url', url, '--tso-url', url], CLI_ROOT)
+      expect(JSON.parse(logs[0]).passed).to.equal(true)
+      expect(posts).to.deep.equal([])
+    })
+  }
+
+  for (const network of ['testnet', 'regtest', 'bitcoin']) {
+    it(`rejects ${network} status in online, send and preview without posting`, async () => {
+      status.network = network
+      for (const command of [
+        () => RotationOnline.run([exportFile, '--dir', directory, '--context', 'test', '--wp-url', url, '--tso-url', url], CLI_ROOT),
+        () => run('--liveness-outpoint', `${TXID}:0`),
+        () => run('--liveness-outpoint', `${TXID}:0`, '--preview'),
+      ]) {
+        let error: unknown
+        try {await command()} catch (error_) {error = error_}
+        expect((error as Error).message).to.contain('network')
+      }
+
+      expect(posts).to.deep.equal([])
+    })
+  }
 
   it('previews with the outpoint in display order and prints the echoed outpoint and value', async () => {
     await run('--liveness-outpoint', `${TXID}:0`, '--preview')
