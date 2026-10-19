@@ -827,6 +827,9 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
 
   if (externalSecrets) {
     values.externalSecrets = externalSecrets
+    // The chart reads the external Secret. Clear obsolete inline values too
+    // when merging an existing deployment, rather than retaining a credential.
+    values.rpcPassword.value = ''
   }
 
   return yaml.dump(values)
