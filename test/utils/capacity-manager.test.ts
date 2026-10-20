@@ -173,6 +173,19 @@ describe('Core capacity manager', () => {
     expect(() => buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)).to.throw('GPU/image')
   })
 
+  it('binds AWS A10G fleets to sm86 workers without weakening the image check', () => {
+    const input = fixture()
+    Object.assign(input.spec.capacityManager!, {gpu: 'A10G', instanceTypes: ['g5.4xlarge']})
+    input.imageCheck.cudaArchitectures = ['86']
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    expect((toml.parse(values.manager.policy) as any).pool).to.include({gpu_class: 'A10G', vram_gib: 22})
+    const {configurations} = capacityManagerFleets(input.spec)
+    expect(configurations[0].resources.gpu.name).to.deep.equal(['A10G'])
+    expect(configurations[0].instance_types).to.deep.equal(['g5.4xlarge'])
+    input.imageCheck.cudaArchitectures = ['89']
+    expect(() => buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)).to.throw('GPU/image')
+  })
+
 
   for (const managedTls of [false, true]) it(`prepares reproducible values and a WP-only peer without allocating (managed TLS: ${managedTls})`, () => {
     const input = fixture()

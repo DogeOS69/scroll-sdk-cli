@@ -24,7 +24,7 @@ export interface CapacityManagerConfig {
     memoryGiB?: number
   }
   fleets: string[]
-  gpu: 'A100' | 'A6000' | 'L4' | 'L40S' | 'RTX3090' | 'RTX4090'
+  gpu: 'A10G' | 'A100' | 'A6000' | 'L4' | 'L40S' | 'RTX3090' | 'RTX4090'
   image: {digest: string; repository: string}
   instanceTypes?: string[]
   maxHourlyCostUsd?: number

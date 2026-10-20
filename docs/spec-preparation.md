@@ -1021,6 +1021,10 @@ These prices are example ceilings, not provider quotations. `L40S` is also
 supported with a compatible checked Worker image (CUDA architecture 89); select
 its fleet, instance type and price ceilings explicitly using the SDK's qualified
 AWS profile guidance. SDK DevNet profiles are not copied into a new deployment.
+For a checked Worker image built for CUDA architecture 86, AWS `A10G` is
+supported (for example, `g5.4xlarge`). Select `gpu: A10G` and the instance type
+explicitly; fleet selectors retain the AWS/dstack name `A10G`, and the planner
+uses 22 GiB of usable VRAM. Verify the regional price and capacity before rental.
 The manager image must be a compatible, separately published immutable image;
 this workflow neither builds nor publishes it.
 

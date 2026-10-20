@@ -189,7 +189,10 @@ export default class ContractsVerification extends Command {
           try {
             // Pull alpine if not available
             try {
-              await docker.pull('alpine:latest')
+              const ownershipPull = await docker.pull('alpine:latest')
+              await new Promise<void>((resolve, reject) => {
+                docker.modem.followProgress(ownershipPull, error => error ? reject(error) : resolve())
+              })
             } catch {
               // Ignore pull errors - image might already exist
             }

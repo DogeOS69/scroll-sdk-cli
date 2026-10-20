@@ -48,6 +48,36 @@ describe('setup verify-contracts preinstalls source verification', () => {
     expect(pull.called).to.equal(false)
   })
 
+  it('finishes consuming the ownership image pull before creating its container', async () => {
+    legacy.restore()
+    sinon.stub(process, 'getuid').returns(1000)
+    sinon.stub(process, 'getgid').returns(1000)
+    container.logs.resolves({pipe: sinon.stub()})
+    container.wait.callsFake((callback: any) => {
+      callback?.(null, {StatusCode: 0})
+      return Promise.resolve({StatusCode: 0})
+    })
+    const ownershipStream = {}
+    let pulled!: () => void
+    const ownershipStarted = new Promise<void>(resolve => { pulled = resolve })
+    pull.onSecondCall().callsFake(async () => { pulled(); return ownershipStream })
+    let finishOwnershipPull: ((error: Error | null) => void) | undefined
+    const progress = new Docker().modem.followProgress as sinon.SinonStub
+    progress.callsFake((stream: any, done: any) => {
+      if (stream === ownershipStream) finishOwnershipPull = done
+      else done(null, [])
+    })
+    const completion = ContractsVerification.run(['--config-dir', directory])
+    await ownershipStarted
+    await new Promise(resolve => setImmediate(resolve))
+    expect(finishOwnershipPull).to.be.a('function')
+    expect(create.callCount).to.equal(1)
+    finishOwnershipPull!(null)
+    await completion
+    expect(create.callCount).to.equal(2)
+    expect(create.secondCall.args[0].Image).to.equal('alpine:latest')
+  })
+
   for (const [url, expected] of [
     ['https://explorer.example', 'https://explorer.example/api'],
     ['https://explorer.example/', 'https://explorer.example/api'],
