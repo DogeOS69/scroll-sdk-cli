@@ -3,6 +3,11 @@ interface OrganizationClient {
   orgId: string
 }
 
+/** Accept an alias only after provider readback binds it to the selected organization. */
+export function matchesCubesignerOrganization(value: unknown, identity: {organization: string; organizationName?: string}): boolean {
+  return typeof value === 'string' && value.length > 0 && (value === identity.organization || value === identity.organizationName)
+}
+
 /** Resolve session aliases through the provider without rewriting session credentials. */
 export async function readCubesignerOrganization(client: OrganizationClient): Promise<{organization: string; organizationName?: string}> {
   const org = await client.org().fetch()

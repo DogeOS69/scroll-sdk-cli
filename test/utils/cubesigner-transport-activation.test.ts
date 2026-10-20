@@ -45,6 +45,20 @@ describe('mode-aware CubeSigner installation check', () => {
   it('permits explicit regtest transport with fresh remote identity and delivered Secret checks', async () => {
     expect(await run()).include({activation: 'verified', installed: 'not-verified', mode: 'transport_only'})
   })
+  it('accepts a runtime session alias only when provider readback verifies the same organization', async () => {
+    client.organizationName = 'fixture_org'
+    seed = JSON.stringify({...JSON.parse(seed), org_id: 'fixture_org'})
+    delivered = seed
+    fs.writeFileSync(path.join(root, 'secrets/cubesigner-signer-session.json'), seed)
+    expect((await run()).activation).equal('verified')
+    client.organizationName = 'another_org'
+    try {
+      await run()
+      expect.fail('Expected organization mismatch')
+    } catch (error) {
+      expect((error as Error).message).include('Runtime session environment/org/role mismatch')
+    }
+  })
   for (const failure of ['mainnet', 'attached-policy', 'secret-drift', 'revoked', 'replicas', 'env-drift', 'production-without-receipts']) it(`blocks ${failure}`, async () => {
     if (failure === 'mainnet') {config.network = 'mainnet'; writeConfig()}
     if (failure === 'production-without-receipts') {config.cubesigner.mode = 'production_verifier_key_policy'; writeConfig()}

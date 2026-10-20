@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Synthetic provider/evidence fixtures. */
+import {CubeSignerClient} from '@cubist-labs/cubesigner-sdk'
 import * as toml from '@iarna/toml'
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
@@ -6,6 +7,7 @@ import {generateKeyPairSync, sign} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import sinon from 'sinon'
 
 import {bridgeHash, parseBridgeScript} from '../../src/utils/bridge-rotation.js'
 import {importLiveAcceptance} from '../../src/utils/cubesigner-acceptance.js'
@@ -217,6 +219,29 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     expect((await prepareRuntimeSession({client, create, directory: root})).status).equal('session-prepared')
     expect((await prepareRuntimeSession({client, create, directory: root})).status).equal('existing-session-reused')
     expect(creates).equal(1)
+  })
+  it('accepts the alias retained by the real SDK when creating and reusing a role session', async () => {
+    const file = path.join(root, 'secrets/cubesigner-signer-session.json')
+    const seed = JSON.parse(fs.readFileSync(file, 'utf8'))
+    fs.rmSync(file)
+    client.organizationName = 'fixture_org'
+    const management = await CubeSignerClient.create({...seed, org_id: 'fixture_org'})
+    const provider = sinon.stub(management.apiClient as any, 'exec').resolves({
+      expiration: seed.session_exp, session_info: seed.session_info, token: 'NONFUNCTIONAL_TEST',
+    })
+    try {
+      const create = (role: string, purpose: string, lifetimes: any) =>
+        management.apiClient.sessionCreateForRole(role, purpose, ['sign:btc:psbt:doge'], lifetimes)
+      expect((await prepareRuntimeSession({client, create, directory: root})).status).equal('session-prepared')
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).org_id).equal('fixture_org')
+      expect(management.orgId).equal('fixture_org')
+      expect((await prepareRuntimeSession({client, create, directory: root})).status).equal('existing-session-reused')
+      expect(provider.callCount).equal(1)
+      expect((await activate()).activation).equal('verified')
+      client.organizationName = 'another_org'
+      await rejects(() => prepareRuntimeSession({client, create, directory: root}), 'Runtime session environment/org/role mismatch')
+      expect(provider.callCount).equal(1)
+    } finally {provider.restore()}
   })
   it('blocks duplicate session creation after uncertain remote success', async () => {
     fs.rmSync(path.join(root, 'secrets/cubesigner-signer-session.json'))

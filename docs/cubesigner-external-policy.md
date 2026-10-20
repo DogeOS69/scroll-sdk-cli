@@ -49,7 +49,8 @@ The preparation input accepts an organization ID or alias. `prepare` and
 `reconcile` verify the organization against the management session's provider
 readback and save its canonical `Org#...` ID in generated evidence. They do not
 rewrite the management session file. Retries must still match the previously
-prepared organization.
+prepared organization. Runtime sessions may retain the SDK's organization alias;
+activation accepts it only when provider readback binds it to that same organization.
 
 Prefer Core's governance tool with the Council-reviewed `gov.json`. It supports
 `publish`, `attach`, `mfa`, and `verify`; mutations are dry runs until `--apply`.
