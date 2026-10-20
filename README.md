@@ -95,7 +95,7 @@ bin/run.js --help
 - [核心服务配置（中文）](docs/service-config-runbook.zh.md) — 当前 signer、Bridge、proof 与服务部署流程。
 - [Branch integration decisions](docs/branch-integration.md) — resolutions for the v0.3.0 branch consolidation.
 
-- [Staged spec preparation](docs/spec-preparation.md) — plan plus six resumable stages, local genesis, funding handoffs and explicit Secret upload.
+- [Staged spec preparation](docs/spec-preparation.md) — plan plus eight resumable stages, local genesis, funding handoffs, explicit signer-session creation and Secret upload.
 - [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
 - [Existing ALBs](docs/existing-alb.md) — select ALB/listener/target-group references in spec, verify them, and retain AWS edges when uninstalling Helm releases.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.
@@ -106,7 +106,7 @@ bin/run.js --help
 
 - [Deployment preparation and checks](docs/deployment-preflight.md) —
   current configuration validation, optional `cubesigner checkpoint` backup/recovery, current-prefix S3/IAM
-  grants, signer Docker network checks and Kubernetes dstack availability.
+  grants, signer Docker network checks, optional cluster/RPC/Reth probes, CubeSigner activation and final contract verification.
 
 - [dstack controller operator guide](docs/dstack-controller.md) — Vast.ai/GCP
   credential import, PostgreSQL/SQLite configuration, generated production values,
@@ -203,8 +203,10 @@ USAGE
 * [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
 * [`scrollsdk setup cubesigner-policy import`](#scrollsdk-setup-cubesigner-policy-import)
 * [`scrollsdk setup cubesigner-policy reconcile`](#scrollsdk-setup-cubesigner-policy-reconcile)
+* [`scrollsdk setup cubesigner-policy verify-activation`](#scrollsdk-setup-cubesigner-policy-verify-activation)
 * [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
 * [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
+* [`scrollsdk setup deployment-preflight`](#scrollsdk-setup-deployment-preflight)
 * [`scrollsdk setup dstack-config`](#scrollsdk-setup-dstack-config)
 * [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
 * [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
@@ -229,6 +231,7 @@ USAGE
 * [`scrollsdk setup proof-worker-check`](#scrollsdk-setup-proof-worker-check)
 * [`scrollsdk setup proof-worker-image-check`](#scrollsdk-setup-proof-worker-image-check)
 * [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
+* [`scrollsdk setup signer-session`](#scrollsdk-setup-signer-session)
 * [`scrollsdk setup tls`](#scrollsdk-setup-tls)
 * [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
 * [`scrollsdk signer init`](#scrollsdk-signer-init)
@@ -1001,6 +1004,31 @@ See the [external policy runbook](docs/cubesigner-external-policy.md) for build
 provenance, Council approval, receipt boundaries, and signer-side acceptance.
 The import checks local evidence; it does not assert governance or live tests passed.
 
+## `scrollsdk setup cubesigner-policy verify-activation`
+
+Read-only check of signer mode, rendered workload, remote policy/key/session and delivered Secrets before installation
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy verify-activation --kube-context <value> [--chart <value>] [--chart-version <value>] [--dir <value>]
+    [--json] [--namespace <value>] [--session-file <value>] [--values <value>]
+
+FLAGS
+  --chart=<value>          [default: oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer]
+  --chart-version=<value>  [default: 0.1.9]
+  --dir=<value>            [default: .]
+  --json
+  --kube-context=<value>   (required)
+  --namespace=<value>      [default: default]
+  --session-file=<value>   Management session file; credentials are never printed
+  --values=<value>         [default: values/cubesigner-signer-production.yaml]
+
+DESCRIPTION
+  Read-only check of signer mode, rendered workload, remote policy/key/session and delivered Secrets before installation
+```
+
+_See code: [src/commands/setup/cubesigner-policy/verify-activation.ts](src/commands/setup/cubesigner-policy/verify-activation.ts)_
+
 ## `scrollsdk setup cubesigner-refresh`
 
 Refresh cubesigner session secrets
@@ -1084,6 +1112,44 @@ EXAMPLES
 ```
 
 _See code: [src/commands/setup/db-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/db-init.ts)_
+
+## `scrollsdk setup deployment-preflight`
+
+Check deployment inputs, with explicit optional cluster/RPC probes and isolated local Reth startup
+
+```
+USAGE
+  $ scrollsdk setup deployment-preflight [--deployment-dir <value>] [--doge-config <value>] [--dogecoin-rpc-env <value>
+    --signer-container <value>] [--dstack-deployment <value>] [--ethereum-chain-id <value>] [--ethereum-rpc-env
+    <value>...] [--ethereum-rpc-quorum <value>] [--json] [--namespace <value>] [--rendered-manifest <value>...
+    --kube-context <value>] [--require-dstack] [--reth-image <value>]
+
+FLAGS
+  --deployment-dir=<value>        [default: .]
+  --doge-config=<value>           [default: .data/doge-config.toml]
+  --dogecoin-rpc-env=<value>      Environment variable containing the authenticated Dogecoin RPC URL
+  --dstack-deployment=<value>     [default: dstack-controller]
+  --ethereum-chain-id=<value>     [default: 11155111]
+  --ethereum-rpc-env=<value>...   Environment variable containing an Ethereum RPC URL; checks a four-call batch and
+                                  finalized-block quorum
+  --ethereum-rpc-quorum=<value>   [default: 1]
+  --json
+  --kube-context=<value>          Explicit context for optional read-only dstack runtime check; omitted means no
+                                  Kubernetes calls
+  --namespace=<value>             [default: default]
+  --rendered-manifest=<value>...  Rendered Helm manifest to check against cluster resources and ALB prerequisites;
+                                  repeat for each release
+  --require-dstack                Treat missing controller configuration/values as an error
+  --reth-image=<value>            Run an isolated local startup canary for this exact Reth image with the deployment
+                                  genesis; no network or persistent data
+  --signer-container=<value>      Probe Dogecoin RPC from this running container network namespace using a disposable
+                                  curl container
+
+DESCRIPTION
+  Check deployment inputs, with explicit optional cluster/RPC probes and isolated local Reth startup
+```
+
+_See code: [src/commands/setup/deployment-preflight.ts](src/commands/setup/deployment-preflight.ts)_
 
 ## `scrollsdk setup doge-config`
 
@@ -2326,6 +2392,25 @@ Without a scope flag, uploads all configured services including enabled dstack. 
 
 See [dstack controller credential setup](docs/dstack-controller.md) for destinations and examples.
 
+## `scrollsdk setup signer-session`
+
+Create the remote CubeSigner role session and private runtime seed; completed sessions are not recreated on stage retry
+
+```
+USAGE
+  $ scrollsdk setup signer-session [--dir <value>] [--json]
+
+FLAGS
+  --dir=<value>  [default: deployment] Saved deployment directory created by setup plan
+  --json         Output structured stage status and the next command
+
+DESCRIPTION
+  Create the remote CubeSigner role session and private runtime seed; completed sessions are not recreated on stage
+  retry
+```
+
+_See code: [src/commands/setup/signer-session.ts](src/commands/setup/signer-session.ts)_
+
 ## `scrollsdk setup tls`
 
 Configure ACM TLS on enabled AWS ALB ingresses in local deployment values.
@@ -2358,15 +2443,19 @@ Set up contracts verification
 
 ```
 USAGE
-  $ scrollsdk setup verify-contracts [--image-tag <value>] [--config-dir <value>]
-    [--preinstalls | --preinstalls-only] [--preinstalls-image <value>]
+  $ scrollsdk setup verify-contracts [--config-dir <value>] [--image-tag <value>] [--preinstalls | --preinstalls-only]
+    [--preinstalls-image <value>] [--require-verified] [--status-only] [--wait-seconds <value>]
 
 FLAGS
-  --image-tag=<value>  Specify the Docker image tag to use
-  --config-dir=<value> Directory containing config.toml and verification artifacts (default: .)
-  --preinstalls       Also submit preinstalls sources to Blockscout
-  --preinstalls-only  Only submit preinstalls sources
-  --preinstalls-image=<value>  Preinstalls image matching the deployed release
+  --config-dir=<value>         [default: .] Directory containing config.toml and contract verification artifacts
+  --image-tag=<value>          Specify the Docker image tag to use
+  --preinstalls                Also submit preinstalls sources to the configured L2 Blockscout v2 API
+  --preinstalls-image=<value>  Preinstalls image matching the deployed release (default: dogeos69/preinstalls:v0.2.2)
+  --preinstalls-only           Only submit preinstalls sources; skip the DogeOS contracts verifier
+  --require-verified           Fail unless every selected target has full Blockscout verification; submission success is
+                               insufficient
+  --status-only                Read final Blockscout source-verification status without submitting or running Docker
+  --wait-seconds=<value>       Bounded polling window for --status-only or --require-verified
 
 DESCRIPTION
   Set up contracts verification
@@ -2381,9 +2470,15 @@ EXAMPLES
   $ scrollsdk setup verify-contracts --preinstalls-only --preinstalls-image dogeos69/preinstalls:v0.2.1
 ```
 
-_See code: [src/commands/setup/verify-contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/verify-contracts.ts)_
+_See code: [src/commands/setup/verify-contracts.ts](src/commands/setup/verify-contracts.ts)_
 
-Without a preinstalls flag, this command retains the existing DogeOS contracts
+Use `--require-verified --wait-seconds 120` to require full Blockscout verification
+following submission, or `--status-only` to read final results without Docker or
+resubmission. Both status modes fail for partial, pending or unavailable targets.
+Without a status flag, final verification is reported as `not-checked`. See the
+[operator examples](docs/deployment-preflight.md#8-check-final-contract-verification).
+
+Without a status or preinstalls flag, this command retains the existing DogeOS contracts
 verification behavior. `--preinstalls` runs that verifier first, then submits the
 standard preinstalls sources; `--preinstalls-only` retries only the latter. A
 failure in either selected verifier makes the command fail. Preinstalls settings
@@ -2413,6 +2508,7 @@ exit means Blockscout accepted submissions or reported them already verified;
 check the explorer for final asynchronous verification results. Preinstalls
 must already be deployed and indexed. `scrollsdk test contracts` remains the
 separate codehash/runtime check.
+
 
 ## `scrollsdk signer init`
 

@@ -146,6 +146,7 @@ describe('resumable preparation plan', () => {
     fs.writeFileSync(path.join(deployment, POLICY_RECEIPTS_INPUT), JSON.stringify(refs))
     expect((await stage('proof-materials')).status).eq('stage-complete')
     expect((await stage('render')).status).eq('stage-complete')
+    await stage('signer-session')
     expect(commands.filter(args => args[0] === 'prep-charts')).length(2)
     expect(calls.filter(id => id === 'bootstrap')).length(1)
     expect(calls.filter(id => id === 'helper-setup')).length(1)
@@ -345,7 +346,8 @@ describe('resumable preparation plan', () => {
     expect((await stage('proof-materials')).nextStage).to.equal('render')
     expect(calls).not.to.include('secrets')
     expect(calls).not.to.include('secret-upload')
-    expect((await stage('render')).nextStage).to.equal('upload-secrets')
+    expect((await stage('render')).nextStage).to.equal('signer-session')
+    expect((await stage('signer-session')).nextStage).to.equal('upload-secrets')
     expect((await stage('upload-secrets')).status).to.equal('prepared')
     expect(calls.filter(id => id === 'secret-upload')).to.have.length(1)
     expect(plan.steps.filter(step => step.stage === 'genesis').every(step => step.effect === 'local')).to.equal(true)
@@ -523,7 +525,7 @@ describe('resumable preparation plan', () => {
     const statePath = path.join(deployment, '.scrollsdk/state.json')
     const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
     for (const file of ['values/service-production.yaml', 'Makefile']) {
-      expect(state.files).not.to.have.property(file)
+      expect(state.files).to.have.property(file)
       state.files[file] = createHash('sha256').update(fs.readFileSync(path.join(deployment, file))).digest('hex')
       fs.appendFileSync(path.join(deployment, file), '# operator edit\n')
     }
@@ -532,8 +534,8 @@ describe('resumable preparation plan', () => {
     ready = true
     expect((await applyPreparation(deployment, runner)).status).to.equal('prepared')
     const updated = JSON.parse(fs.readFileSync(statePath, 'utf8'))
-    expect(updated.files).not.to.have.property('values/service-production.yaml')
-    expect(updated.files).not.to.have.property('Makefile')
+    expect(updated.files).to.have.property('values/service-production.yaml')
+    expect(updated.files).to.have.property('Makefile')
   })
 
   it('locks SDK HEAD when omitted and keeps using it after checkout HEAD changes', async () => {
@@ -914,21 +916,25 @@ describe('resumable preparation plan', () => {
     plan.deploymentName = 'renamed-by-operator'
     fs.writeFileSync(planFile, JSON.stringify(plan))
     const resumed = await applyPreparation(deployment, runner)
-    expect(resumed.status).eq('prepared')
-    expect(resumed.warnings).length(3)
-    expect(resumed.warnings?.join('\n')).include('plan.json').and.include('intent.json').and.include('missing: config.toml')
+    expect(resumed.status).eq('recovery-required')
+    expect(resumed.warnings).length(2)
+    expect(resumed.waiting?.message).include('config.toml')
+    expect(resumed.files).to.have.property('config.toml')
+    expect((await applyPreparation(deployment, runner)).status).eq('recovery-required')
+    fs.writeFileSync(path.join(deployment, 'config.toml'), 'network = "mainnet"')
+    expect((await applyPreparation(deployment, runner)).status).eq('prepared')
   })
 
-  it('refreshes the configured CubeSigner session during render even when old files exist', async () => {
+  it('creates the configured CubeSigner session only in its explicit stage', async () => {
     const spec = fixture()
     spec.signing = {...spec.signing, cubesigner: {}}
     fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
     for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) fs.writeFileSync(path.join(deployment, 'secrets', name), 'NONFUNCTIONAL_OLD_INPUT')
     const steps = preparationSteps(spec, true)
     const session = steps.find(step => step.id === 'cubesigner-session')!
-    expect(session).to.include({effect: 'cloud', retry: 'safe', stage: 'render'})
+    expect(session).to.include({effect: 'cloud', retry: 'safe', stage: 'signer-session'})
     expect(steps.indexOf(session)).to.be.greaterThan(steps.findIndex(step => step.id === 'secrets'))
-    expect(steps.indexOf(session)).to.be.lessThan(steps.findIndex(step => step.id === 'proof-check'))
+    expect(steps.indexOf(session)).to.be.greaterThan(steps.findIndex(step => step.id === 'proof-check'))
     const calls: {args: string[]; root: string}[] = []
     await new CommandPreparationRunner(async (root, _step, args) => {calls.push({args, root})}).run(session, spec, deployment, {} as PreparationPlan)
     expect(calls).to.deep.equal([{args: ['cubesigner-refresh', '-N', '--doge-config', '.data/doge-config.toml'], root: deployment}])
@@ -936,7 +942,7 @@ describe('resumable preparation plan', () => {
     expect(preparationSteps(spec, true).map(step => step.id)).not.to.include('cubesigner-session')
   })
 
-  it('stops render on session refresh failure and retries without replaying completed preparation', async () => {
+  it('stops session creation on failure and retries without replaying completed preparation', async () => {
     const spec = fixture()
     spec.signing = {...spec.signing, cubesigner: {}}
     fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
@@ -947,17 +953,17 @@ describe('resumable preparation plan', () => {
       calls.push(step.id)
       if (step.id === 'cubesigner-session' && failRefresh) throw new Error('CubeSigner login required')
     }}
-    for (const stage of PREPARATION_STAGES.slice(0, PREPARATION_STAGES.indexOf('render'))) await applyPreparation(deployment, runner, undefined, {stage})
+    for (const stage of PREPARATION_STAGES.slice(0, PREPARATION_STAGES.indexOf('signer-session'))) await applyPreparation(deployment, runner, undefined, {stage})
     calls.length = 0
-    expect((await applyPreparation(deployment, runner, undefined, {stage: 'render'})).status).to.equal('failed')
-    expect(calls).to.deep.equal(['render-final', 'secrets', 'cubesigner-session'])
-    await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'}), 'Prerequisite render')
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'signer-session'})).status).to.equal('failed')
+    expect(calls).to.deep.equal(['cubesigner-session'])
+    await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'}), 'Prerequisite signer-session')
     calls.length = 0
     failRefresh = false
-    expect((await applyPreparation(deployment, runner, undefined, {stage: 'render'})).nextStage).to.equal('upload-secrets')
-    expect(calls).to.deep.equal(['cubesigner-session', 'proof-check'])
+    expect((await applyPreparation(deployment, runner, undefined, {stage: 'signer-session'})).nextStage).to.equal('upload-secrets')
+    expect(calls).to.deep.equal(['cubesigner-session'])
     calls.length = 0
-    await applyPreparation(deployment, runner, undefined, {stage: 'render'})
+    await applyPreparation(deployment, runner, undefined, {stage: 'signer-session'})
     expect(calls).to.deep.equal([])
     expect((await applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'})).status).to.equal('prepared')
     expect(calls).to.deep.equal(['secret-upload'])
@@ -978,8 +984,8 @@ describe('resumable preparation plan', () => {
     fs.writeFileSync(statePath, JSON.stringify({...state, planId: old.id, status: 'prepared', steps: Object.fromEntries(old.steps.map(step => [step.id, 'completed']))}))
     const calls: string[] = []
     const runner = {async run(step: {id: string}) {calls.push(step.id)}}
-    await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'}), 'Prerequisite render')
-    const rendered = await applyPreparation(deployment, runner, undefined, {stage: 'render'})
+    await rejected(() => applyPreparation(deployment, runner, undefined, {stage: 'upload-secrets'}), 'Prerequisite signer-session')
+    const rendered = await applyPreparation(deployment, runner, undefined, {stage: 'signer-session'})
     expect(calls).to.deep.equal(['cubesigner-session'])
     expect(rendered.nextStage).to.equal('upload-secrets')
     expect(rendered.steps['secret-upload']).to.equal(undefined)
@@ -1251,7 +1257,10 @@ describe('resumable preparation plan', () => {
     expect(fs.existsSync(path.join(deployment, '.scrollsdk/apply.lock'))).to.equal(false)
   })
 
-  it('runs actual bootstrap and identity commands with signer public keys from the frozen spec', async () => {
+  it('runs actual bootstrap and identity commands with signer public keys and Helm tuning from the frozen spec', async () => {
+    const input = yaml.load(fs.readFileSync(path.join(root, 'intent.yaml'), 'utf8')) as DeploymentSpec
+    input.helmValues = {'l2-reth-rpc-production.yaml': 'resources: {requests: {cpu: 500m, memory: 2Gi}}'}
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(input))
     await makePlan()
     const actual = new CommandPreparationRunner()
     const runner = {async run(step: any, spec: DeploymentSpec, output: string, plan: any) {
@@ -1271,6 +1280,9 @@ describe('resumable preparation plan', () => {
     const second = await applyPreparation(deployment, runner)
     expect(second.status).to.equal('waiting')
     expect(fs.readFileSync(path.join(deployment, '.data/doge-config.toml'), 'utf8')).to.equal(doge)
+    const values = yaml.load(fs.readFileSync(path.join(deployment, 'values/l2-reth-rpc-production.yaml'), 'utf8')) as any
+    expect(values.resources.requests).deep.eq({cpu: '500m', memory: '2Gi'})
+    expect(frozen.helmValues).deep.eq(input.helmValues)
   })
 
   it('refuses helper broadcast stages in the production command', async () => {

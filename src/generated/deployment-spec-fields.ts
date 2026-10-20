@@ -1,6 +1,6 @@
 // Generated from DeploymentSpec and its referenced types. Run npm run spec:fields.
 export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kind: 'array' | 'object' | 'record'}> = {
-  "$": {"keys":["accounts","attestationSigners","bootnodePublicP2p","bridge","capacityManager","celestia","contracts","database","dogecoin","dstackController","ethereumDa","feeOracle","frontend","genesis","identities","images","infrastructure","metadata","monitoring","network","preparation","proofArtifacts","proofCoordinator","proofTopology","proofWorkers","rollup","signing","snapshots","templates","test","version"],"kind":"object"},
+  "$": {"keys":["accounts","attestationSigners","bootnodePublicP2p","bridge","capacityManager","celestia","contracts","database","dogecoin","dstackController","ethereumDa","feeOracle","frontend","genesis","helmValues","identities","images","infrastructure","metadata","monitoring","network","preparation","proofArtifacts","proofCoordinator","proofTopology","proofWorkers","rollup","signing","snapshots","templates","test","version"],"kind":"object"},
   "$.accounts": {"keys":["deployer","l1CommitSender","l2GasOracleSender","owner"],"kind":"object"},
   "$.accounts.deployer": {"keys":["address","privateKey"],"kind":"object"},
   "$.accounts.l1CommitSender": {"keys":["address","privateKey"],"kind":"object"},
@@ -93,6 +93,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.frontend.hosts": {"keys":["blockscout","celestia","dogecoin","frontend","grafana","l1Devnet","proofCoordinator","rpcGateway","rpcGatewayWs","tso"],"kind":"object"},
   "$.frontend.subdomains": {"keys":["blockscout","celestia","dogecoin","frontend","grafana","l1Devnet","proofCoordinator","rpcGateway","rpcGatewayWs","tso"],"kind":"object"},
   "$.genesis": {"keys":["baseFeePerGas","baseFeePerGasWei","deployerInitialBalance","deployerInitialBalanceWei","gasLimit","maxEthSupply","maxEthSupplyWei"],"kind":"object"},
+  "$.helmValues": {"kind":"record"},
   "$.identities": {"keys":["bootnodes","ethDaSubmitter","feeOracle","sequencers"],"kind":"object"},
   "$.identities.bootnodes": {"kind":"array"},
   "$.identities.bootnodes[]": {"keys":["index","nodekey"],"kind":"object"},

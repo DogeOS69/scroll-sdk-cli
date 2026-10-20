@@ -100,7 +100,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   }
 
   add('secrets', 'Generate private runtime Secrets')
-  if (staged && spec.signing?.cubesigner) add('cubesigner-session', 'Refresh the CubeSigner runtime session for the configured role', 'cloud')
+  if (staged && spec.signing?.cubesigner) add('cubesigner-session', 'Create the CubeSigner runtime role session (remote credential creation)', 'cloud')
   if (spec.proofTopology?.enforcement === 'enforce') {
     add('deployment-kit', 'Export the signer deployment kit')
     if (p.deploymentKitPublication?.mode === 's3') add('deployment-kit-published', 'Publish and verify the signer deployment kit in the selected S3 bucket', 'cloud')
@@ -233,7 +233,7 @@ function fingerprint(root: string): Record<string, string> {
   const files: Record<string, string> = {}
   const visit = (relative: string): void => {
     const file = localPath(root, relative)
-    if (!fs.existsSync(file) || relative === '.data/contracts-build' || operatorEditableArtifact(relative)) return
+    if (!fs.existsSync(file) || relative === '.data/contracts-build') return
     const stat = fs.lstatSync(file)
     if (stat.isDirectory()) for (const name of fs.readdirSync(file).sort()) visit(`${relative}/${name}`)
     else if (stat.isFile()) files[relative] = digest(fs.readFileSync(file))
@@ -339,7 +339,7 @@ export function migratePolicyBuildStep(plan: PreparationPlan, spec: DeploymentSp
 function migrateCubesignerSessionStep(plan: PreparationPlan, spec: DeploymentSpec): PreparationPlan {
   if (plan.schema !== 'scrollsdk/preparation/v2' || !spec.signing?.cubesigner || plan.steps.some(step => step.id === 'cubesigner-session')) return plan
   const session = preparationSteps(spec, true).find(step => step.id === 'cubesigner-session')!
-  const steps = plan.steps.flatMap(step => step.id === 'secrets' ? [step, session] : [step])
+  const steps = plan.steps.flatMap(step => step.id === 'secret-upload' ? [session, step] : [step])
   const next: {id?: string} & Omit<PreparationPlan, 'id'> = {...plan, steps}
   delete next.id
   return {...next, id: digest(JSON.stringify(next))}
@@ -384,7 +384,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   // A migration interrupted after writing state.json leaves state on the migrated id.
   if (state.planId !== id && state.planId !== migrated.id) throw new Error('Workflow state does not match plan')
   if (options.stage && !staged) throw new Error('Stage commands require a new staged plan; resume this legacy plan with setup apply')
-  if (staged && !options.stage && (state.status !== 'prepared' || migrated.id !== id)) throw new Error(`Select a preparation stage: ${stageCommand(migrated.steps.find(step => state.steps[step.id] !== 'completed')?.stage ?? 'genesis', root)}`)
+  if (staged && !options.stage && (migrated.steps.some(step => state.steps[step.id] !== 'completed') || migrated.id !== id)) throw new Error(`Select a preparation stage: ${stageCommand(migrated.steps.find(step => state.steps[step.id] !== 'completed')?.stage ?? 'genesis', root)}`)
   if (staged && options.refreshRuntime) throw new Error('Runtime refresh is a legacy apply operation; it is not a staged deployment operation')
   if (options.stage) {
     const index = PREPARATION_STAGES.indexOf(options.stage)
@@ -413,12 +413,20 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
       plan = migrated
     }
 
+    const missingArtifacts: string[] = []
     for (const [file, hash] of Object.entries(state.files)) {
-      // Also release hashes recorded by older CLI versions.
-      if (operatorEditableArtifact(file)) {delete state.files[file]; continue}
       const current = localPath(root, file)
-      if (!fs.existsSync(current)) warn(`Prepared artifact is missing: ${file}. Continuing; steps that require it will report their missing input.`)
-      else if (digest(fs.readFileSync(current)) !== hash) warn(`Prepared artifact changed: ${file}. Continuing with the current file; completed steps will not be regenerated.`)
+      if (!fs.existsSync(current)) missingArtifacts.push(file)
+      else if (!operatorEditableArtifact(file) && digest(fs.readFileSync(current)) !== hash) warn(`Prepared artifact changed: ${file}. Continuing with the current file; completed steps will not be regenerated.`)
+    }
+
+    if (missingArtifacts.length > 0) {
+      state.status = 'recovery-required'
+      state.waiting = {message: `Prepared artifacts are missing: ${missingArtifacts.join(', ')}. Restore these files from the deployment backup, then retry. Completed steps, credentials and transactions will not be replayed automatically.`}
+      delete state.completedStage
+      // Keep the missing entries so a second attempt cannot silently accept the loss.
+      writeJson(statePath, state)
+      return state
     }
 
     if (options.refreshRuntime) {

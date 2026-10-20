@@ -1,6 +1,6 @@
 import type {PreparationStep} from './preparation-plan.js'
 
-export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'protocol-context', 'proof-materials', 'render', 'upload-secrets'] as const
+export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'protocol-context', 'proof-materials', 'render', 'signer-session', 'upload-secrets'] as const
 export type PreparationStage = typeof PREPARATION_STAGES[number]
 
 /** Stage boundaries are explicit; prerequisites are checked, never executed implicitly. */
@@ -11,7 +11,8 @@ export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationSt
     genesis: ['bootstrap', 'genesis-local'],
     'proof-materials': ['cubesigner-policy-build', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials', 'charts', 'proof-publish', 'charts-published', 'deployment-kit', 'deployment-kit-published'],
     'protocol-context': ['protocol-context'],
-    render: ['render-final', 'secrets', 'cubesigner-session', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
+    render: ['render-final', 'secrets', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
+    'signer-session': ['cubesigner-session'],
     'upload-secrets': ['secret-upload'],
   }
   const steps = new Map(legacy.map(step => [step.id, step]))

@@ -10,7 +10,14 @@ storage required by your chosen deployment separately.
 For configuration generated from a deployment spec, see the
 [spec projection reference](spec-projection.md) for defaults, preserved inputs
 and the remaining setup steps. The [staged preparation workflow](spec-preparation.md)
-orchestrates those steps and resumes after external funding and partner handoffs.
+orchestrates those steps and resumes after external funding and partner handoffs. For a
+saved plan, run `setup render`, then `setup signer-session` when CubeSigner is
+configured, then `setup upload-secrets` (each accepts `--dir` for the saved
+deployment directory). Rendering does not create the remote session; the explicit
+session stage wraps `cubesigner-refresh` and skips completed creation on retry.
+The manual commands below remain available independently. Before installation,
+follow the [runtime and activation checks](deployment-preflight.md#6-opt-into-cluster-rpc-and-reth-startup-checks);
+after source submission, [check final contract verification](deployment-preflight.md#8-check-final-contract-verification).
 
 Use core images and the topology compiler containing
 [dogeos-core #1483](https://github.com/DogeOS69/dogeos-core/pull/1483) and

@@ -40,6 +40,24 @@ describe('setup verify-contracts preinstalls source verification', () => {
     fs.rmSync(directory, {force: true, recursive: true})
   })
 
+  it('checks final preinstalls status without running either Docker verifier', async () => {
+    const request = sinon.stub(globalThis, 'fetch').resolves(new Response(JSON.stringify({is_fully_verified: true, is_partially_verified: false, is_verified: true})))
+    // Each HTTP response owns a body stream.
+    request.callsFake(async () => new Response(JSON.stringify({is_fully_verified: true, is_partially_verified: false, is_verified: true})))
+    await ContractsVerification.run(['--config-dir', directory, '--preinstalls-only', '--status-only'])
+    expect(request.called).true
+    expect(legacy.called).false
+    expect(pull.called).false
+  })
+
+  it('fails final verification when Blockscout only reports a partial match', async () => {
+    sinon.stub(globalThis, 'fetch').callsFake(async () => new Response(JSON.stringify({is_fully_verified: false, is_partially_verified: true, is_verified: true})))
+    let error: unknown
+    try {await ContractsVerification.run(['--config-dir', directory, '--preinstalls-only', '--status-only'])} catch (error_) {error = error_}
+    expect(String(error)).include('Source verification is incomplete')
+    expect(pull.called).false
+  })
+
   it('preserves the no-flag legacy path without requiring preinstalls config', async () => {
     fs.rmSync(path.join(directory, 'config.toml'))
     await ContractsVerification.run(['--config-dir', directory])

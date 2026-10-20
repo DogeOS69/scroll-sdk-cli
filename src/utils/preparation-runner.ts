@@ -30,6 +30,7 @@ import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
 import {buildProofTopology} from './proof-topology-init.js'
+import {writeHelmValues} from './spec-helm-values.js'
 import {specKubernetesTarget} from './spec-kubernetes-target.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
@@ -279,6 +280,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         if (p.proofPublication && step.id !== 'charts') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
         await command(args)
         if (step.id === 'render-final') writeContractsHelmValues(root)
+        writeHelmValues(root, spec)
         break
       }
 

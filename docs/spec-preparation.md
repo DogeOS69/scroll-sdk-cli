@@ -159,7 +159,7 @@ the L2 RPC; its fee sampling RPC is independent of that balance check and of DA.
 The complete bridge-operator sequence (inputs, funding, external Secrets,
 installation order, partner handoff, GPU startup and runtime acceptance) is in
 [`scroll-sdk/examples/bridge-operator-deployment.md`](https://github.com/DogeOS69/scroll-sdk/blob/feat/spec-preparation-examples/examples/bridge-operator-deployment.md).
-`plan` and the seven stage commands are preparation entrypoints; they do not replace Helm installation
+`plan` and the eight stage commands are preparation entrypoints; they do not replace Helm installation
 or automatically rent a GPU.
 
 
@@ -178,6 +178,7 @@ scrollsdk setup proof-materials
 # For enforce mode: publish the kit via Governance and save published.json, then rerun.
 scrollsdk setup proof-materials
 scrollsdk setup render
+scrollsdk setup signer-session  # only when CubeSigner is configured
 scrollsdk setup upload-secrets
 # Review deployment/Makefile and install releases manually.
 ```
@@ -221,17 +222,19 @@ generation so a retry uses the same identity.
 | `setup bridge-funding` | Bind genesis/DA anchor; verify helper funding; invoke Core setup and marked funding; verify all resulting outpoints. | One operator wallet handoff. Setup and Bridge funding broadcast transactions and require manual reconciliation after ambiguous failures. |
 | `setup protocol-context` | Generate canonical `.data/protocol_context.json` and its runtime YAML from completed Bridge funding. | Stops before CubeSigner policy builds, proof baking, publication and governance. No funding is replayed. |
 | `setup proof-materials` | Export the selected policy compiler output; import declared inputs; bake/import proof materials; compile/publish proof configuration; export the deployment kit and record its publication. | Preliminary chart compilation is needed to bind the kit. Wait for its immutable URL and manifest digest within this stage. |
-| `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets and refresh the configured CubeSigner session; prepare optional capacity-manager values and WP access; run proof checks. | CubeSigner session creation contacts the provider. Helm releases remain uninstalled. |
+| `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets; prepare optional capacity-manager values and WP access; run proof checks. | Helm releases remain uninstalled; rendering does not create a remote CubeSigner session. |
+| `setup signer-session` | Create the configured CubeSigner role session and save the private runtime seed. Completed steps are skipped on retry. | Contacts CubeSigner; explicit credential creation, separate from render. |
 | `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
 
-When CubeSigner is configured, `setup render` runs `setup cubesigner-refresh -N
---doge-config .data/doge-config.toml` from the deployment directory after generating
-the other Secrets. It creates a fresh session for the saved role even when old
-session files exist. An authenticated `cs` CLI is required; login or refresh
-failure stops render and blocks upload. Resume render after correcting the failure.
-The successful refresh is checkpointed, so resuming later render steps does not
-issue another session. Older staged plans automatically gain this step without
-replaying funding; their upload receipt is cleared so the new seed is uploaded.
+When CubeSigner is configured, `setup signer-session` runs `setup cubesigner-refresh -N
+--doge-config .data/doge-config.toml` from the deployment directory after render.
+It creates a fresh session for the saved role even when old session files exist.
+An authenticated `cs` CLI is required; failure stops this stage and blocks upload.
+A completed session step is checkpointed, so retrying the completed stage does not
+issue another session. An interrupted remote request may have created a session;
+inspect provider state before retrying after an ambiguous transport failure.
+Saved plans with the previous render/session layout require their original CLI;
+this change does not silently move completed credentials or replay funding.
 The upload stage also checks that both session inputs remain present and nonempty.
 Kubernetes Secret readiness is still checked separately after upload.
 
@@ -661,7 +664,7 @@ and optional `waiting` instructions; the response's `warnings` lists detected
 local file changes. Exit codes: `0` for `stage-complete` or
 `prepared`, `2` for `waiting`, and `1` for failure or `recovery-required`.
 `stage-complete` means only the selected stage is complete. `prepared` means all
-seven stages are complete; running-service acceptance remains separate. A wait or
+all applicable stages are complete; running-service acceptance remains separate. A wait or
 failure reports the same stage as the next command. A successfully printed JSON result with
 `status: waiting` is not a completed deployment.
 
@@ -1275,3 +1278,88 @@ are preserved, including an operator CIDR overlapping an ALB subnet. Values and
 the receipt participate in the same generation transaction. Discovery uses only
 AWS describe calls and Kubernetes reads. Applying the rendered NetworkPolicy and
 verifying CNI enforcement remain deployment acceptance steps.
+
+## Reproducible Helm tuning and runtime checks
+
+Optional `helmValues` maps a generated values filename to a YAML overlay. The
+plan freezes the overlay text. Bootstrap and each chart-preparation pass merge
+it into the standard `values/*.yaml` files consumed by the normal Make targets;
+no private helper script or extra Helm arguments are needed. Existing operator
+Makefiles are preserved. Use externally managed Secret references in overlays;
+never place passwords, tokens or keys in this field. Arrays replace except
+named `env` entries, which merge by name. Unknown filenames and invalid mappings
+fail rather than silently producing unused files. Removing an override does not
+undo existing operator edits; review/reset those fields explicitly.
+
+```yaml
+helmValues:
+  l2-reth-rpc-production.yaml: |
+    resources:
+      requests: {cpu: 500m, memory: 2Gi}
+      limits: {cpu: "2", memory: 4Gi}
+  scroll-monitor-production.yaml: |
+    loki:
+      persistence: {size: 20Gi}
+```
+
+Missing recorded artifacts, including values and the Makefile, now stop preparation
+with `recovery-required`. Restore the files from the deployment backup and retry;
+completed funding or identity steps are never replayed to repair a missing file.
+Edits to values/Makefile remain operator-owned. Other changed files remain advisory.
+The sequencer KMS fingerprint binds AWS account, EKS cluster, region, namespace,
+deployment name, service account and explicit KMS intent, not ALB/Secret routing.
+Old KMS fingerprints or changed stage layouts are not automatically reinterpreted:
+use the original CLI for those saved plans or perform a separately reviewed migration.
+
+The generated SDK `install-cubesigner-signer` target invokes
+`setup cubesigner-policy verify-activation` before Helm. This branch supports
+explicit non-mainnet `transport_only` and receipt-backed production selection.
+The check renders the selected chart, verifies singleton session mounts, reads
+current remote key/role/policy/session state and compares delivered Kubernetes
+Secrets and protocol context. Unknown attached policies fail closed even in
+transport mode. The result does not claim real-proof acceptance, inspection of
+an existing Pod's refresh cache, or completion of installation. Production
+release/attachment receipts remain mandatory; no governance action is performed.
+
+`setup deployment-preflight` keeps network/container probes explicit:
+
+```bash
+scrollsdk setup deployment-preflight --deployment-dir deployment --json \
+  --kube-context example-context --rendered-manifest rendered/reth.yaml \
+  --rendered-manifest rendered/ingress.yaml \
+  --ethereum-rpc-env SEPOLIA_RPC_A --ethereum-rpc-env SEPOLIA_RPC_B \
+  --ethereum-rpc-quorum 2 --ethereum-chain-id 11155111 \
+  --signer-container local-attestation-signer --dogecoin-rpc-env DOGECOIN_RPC_URL \
+  --reth-image example.invalid/approved-rollup-node:reviewed-tag
+```
+
+Prepare the manifest files with `helm template` using the same chart/version,
+namespace and values as installation. The cluster check reads ready nodes and,
+when ALB resources are present, the Load Balancer Controller and TargetGroupBinding
+CRD. Per-Pod CPU/memory fit is a necessary condition only; it excludes existing
+utilization, affinity, taints, storage topology and aggregate capacity.
+The Ethereum probe sends `eth_chainId` and `latest`/`safe`/`finalized` block lookups
+in one four-call batch, then checks quorum at a shared finalized height. It does
+not establish Beacon availability or long-term provider reliability.
+The signer probe runs disposable curl in the existing container's network
+namespace and calls `getblockchaininfo`; credentials travel on stdin, not argv.
+The Reth probe uses two disposable containers sharing a network-disabled namespace, with a readable temporary copy of public
+genesis mounted read-only, a disposable public consensus signer address, a local deterministic L1 fixture
+(`node:22-alpine`), mock blob input, bounded resources and ephemeral storage. It confirms
+startup through the HTTP-server startup event and a three-second stability window; it does not establish sync or
+full application acceptance. Both probes create only local disposable containers.
+Omitted checks are explicitly `not-checked`, never implied to have passed.
+
+Contract source submission and final verification are separate:
+
+```bash
+scrollsdk setup verify-contracts --config-dir deployment --preinstalls --require-verified --wait-seconds 120
+scrollsdk setup verify-contracts --config-dir deployment --preinstalls --status-only
+```
+
+Without a status flag, the runner reports final status as `not-checked`.
+`--status-only` performs no Docker invocation or submission. Blockscout results
+are reported per target as `verified`, `partial`, `pending`, or `unavailable`;
+only full verification of every selected target exits successfully. Block-hash
+history has no Solidity source and remains a bytecode check. Optional preinstalls
+are outside the required source-verification set.

@@ -26,6 +26,7 @@ import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {loadSdkTemplateFiles, mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
 import {resolveCubesignerIdentity} from '../../utils/spec-cubesigner.js'
+import {applyHelmValues} from '../../utils/spec-helm-values.js'
 import {getSecretProviderConfig} from '../../utils/values-generator.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
@@ -340,6 +341,7 @@ export default class GenerateFromSpec extends Command {
         if (file && !allValues[file] && templateFiles[`values/${file}`]) allValues[file] = mergeBootstrapValues(templateFiles[`values/${file}`], '{}', existingValues(file))
       }
 
+      applyHelmValues(allValues, spec)
       preserveSharedAlbPaths(allValues, spec, existingValues)
       projectExistingAlb(allValues, spec)
       Object.assign(valuesFiles, allValues)
