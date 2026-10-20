@@ -36,6 +36,9 @@ without the template fail with an explicit compatibility error. Without
 `bridgeHistory.enabled: true`, bootstrap does not copy this service's values,
 and no history Secret is generated. Disabling it does not uninstall a running
 release or delete existing volumes or Secret files.
+The SDK's default history API URL is also omitted when the service is disabled,
+so automatic monitoring does not select an API that was never deployed. An
+explicit API URL in existing operator frontend values is preserved.
 
 The service reuses `dogecoin.network` and `dogecoin.indexerStartHeight`. Keep the
 indexer boundary consistent with L1 Interface. `setup prep-charts` refreshes those

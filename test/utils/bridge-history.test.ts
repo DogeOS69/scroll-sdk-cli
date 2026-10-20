@@ -137,6 +137,36 @@ describe('DogeOS bridge history integration', () => {
   })
 
   const charts = process.env.SDK_HISTORY_CHARTS
+  ;(charts ? it : it.skip)('does not inherit a history monitor endpoint when the service is disabled', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'history-disabled-'))
+    try {
+      const spec = fixture()
+      spec.bridgeHistory = {enabled: false}
+      spec.infrastructure.aws!.sharedAlb!.services = ['frontends']
+      const sdk = path.resolve(charts!, '..')
+      spec.templates = {sdkRevision: execFileSync('git', ['-C', sdk, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim()}
+      const input = path.join(directory, 'intent.yaml')
+      fs.writeFileSync(input, yaml.dump(spec))
+      const run = () => {
+        const result = spawnSync(process.execPath, [path.join(root, 'bin/run.js'), 'setup', 'generate-from-spec',
+          '--spec', input, '--values-only', '--sdk-dir', sdk, '--output', directory, '--force', '--json'], {cwd: directory, encoding: 'utf8'})
+        expect(result.status, result.stderr + result.stdout).to.equal(0)
+      }
+
+      run()
+      expect(fs.existsSync(path.join(directory, 'values', HISTORY_VALUES))).to.equal(false)
+      const frontendFile = path.join(directory, 'values/frontends-config.yaml')
+      const frontend: any = yaml.load(fs.readFileSync(frontendFile, 'utf8'))
+      expect(toml.parse(frontend.scrollConfig)).not.to.have.property('REACT_APP_HISTORY_API_URI')
+      // An external history API explicitly selected by the operator is independent
+      // of whether this CLI manages the in-cluster history service.
+      frontend.scrollConfig += '\nREACT_APP_HISTORY_API_URI = "https://history.example.invalid/api/history/v1"\n'
+      fs.writeFileSync(frontendFile, yaml.dump(frontend))
+      run()
+      const saved: any = yaml.load(fs.readFileSync(frontendFile, 'utf8'))
+      expect(toml.parse(saved.scrollConfig).REACT_APP_HISTORY_API_URI).to.equal('https://history.example.invalid/api/history/v1')
+    } finally {fs.rmSync(directory, {force: true, recursive: true})}
+  })
   ;(charts ? it : it.skip)('generates complete values from the pinned SDK through the CLI and preserves edits on rerun', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'history-generate-'))
     try {
