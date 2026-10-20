@@ -1,4 +1,5 @@
 import {validateBootnodePublicP2p} from './bootnode-public-p2p.js'
+import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {validateExistingAlb} from './existing-alb.js'
 import {existingNlbEntries} from './existing-nlb.js'
 import {validateMonitoring} from './monitoring-slack.js'
@@ -826,10 +827,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     }
 
     if (cubesignerPolicy.policyIdentifier &&
-      !/^[\da-z][\d._a-z-]{2,63}\/v[1-9]\d{0,8}$/.test(cubesignerPolicy.policyIdentifier)) {
+      !isCubesignerPolicyIdentifier(cubesignerPolicy.policyIdentifier, 1)) {
       errors.push({
         code: 'E601_INVALID_VALUE',
-        message: `${policyPath}.policyIdentifier must be an immutable name/vN identifier and must not use latest`,
+        message: `${policyPath}.policyIdentifier must be an immutable name/vN identifier (v1 or later) with a 3-30 character alphanumeric/underscore name and must not use latest`,
         path: `${policyPath}.policyIdentifier`,
       })
     }

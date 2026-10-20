@@ -5,6 +5,7 @@ import {isDeepStrictEqual} from 'node:util'
 
 import {POLICY_BUILD_RECEIPT_SCHEMA} from './cubesigner-policy-build.js'
 import {EXTERNAL_POLICY_SCHEMA} from './cubesigner-policy-import.js'
+import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {type CubesignerExpectedPolicyInputs, type CubesignerPolicyReceiptInputs, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {localPath, writeJson} from './preparation-io.js'
 import {POLICY_RECEIPTS_INPUT} from './preparation-policy-receipts.js'
@@ -63,7 +64,7 @@ export async function reconcileCubesignerPolicy(options: {
   requireValue(isDeepStrictEqual(declaredKeys, [{keyId: key.keyId, materialId: key.materialId, roleId: key.roleId}]), 'Reconciliation key/role differs from saved deployment configuration')
   requireValue(['beta', 'gamma', 'prod'].includes(input.environment) && typeof input.organization === 'string' && input.organization.trim().length > 0, 'Explicit CubeSigner environment and organization are required')
   requireValue(typeof releaseInput.requiresLiveEvidence === 'boolean', 'release.requiresLiveEvidence must explicitly describe the reviewed release requirement')
-  requireValue(typeof releaseInput.policyIdentifier === 'string' && /^[\da-z][\d._a-z-]{2,63}\/v(?:0|[1-9]\d{0,8})$/.test(releaseInput.policyIdentifier), 'Explicit immutable name/vN policy identifier is required')
+  requireValue(isCubesignerPolicyIdentifier(releaseInput.policyIdentifier), 'Explicit immutable name/vN policy identifier is required; name must use 3-30 ASCII letters, digits or underscores')
   requireValue(typeof releaseInput.proofResolverAuthority === 'string', 'Missing HTTPS proof resolver authority')
   const resolver = new URL(releaseInput.proofResolverAuthority)
   requireValue(resolver.protocol === 'https:' && resolver.origin === releaseInput.proofResolverAuthority, 'Proof resolver must be an HTTPS origin without a path')

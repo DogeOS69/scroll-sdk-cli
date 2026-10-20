@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {POLICY_BUILD_RECEIPT_SCHEMA, type PolicyToolRunner, runPolicyTool} from './cubesigner-policy-build.js'
+import {isCubesignerPolicyName} from './cubesigner-policy-name.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
 type Json = Record<string, unknown>
@@ -23,7 +24,7 @@ export function deployCubesignerPolicy(options: {
   buildReceipt: string; buildReceiptSha256: string; keyId: string; name: string; organization: string; output: string
   run?: PolicyToolRunner
 }): {attachmentReceipt: string; policyIdentifier: string; wasmSha256: string} {
-  if (!/^[\da-z][\d._a-z-]{2,63}$/.test(options.name)) throw new Error('Invalid policy name')
+  if (!isCubesignerPolicyName(options.name)) throw new Error('Invalid policy name: use 3-30 ASCII letters, digits or underscores')
   if (!options.keyId.startsWith('Key#') || !options.organization.startsWith('Org#')) throw new Error('Explicit CubeSigner key and organization IDs are required')
   const run = options.run ?? runPolicyTool
   const cs = (args: string[]): Json => {

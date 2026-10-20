@@ -4,6 +4,7 @@ import path from 'node:path'
 import type {CubesignerProductionPolicy} from '../types/doge-config.js'
 
 import {bridgeHash, parseBridgeScript} from './bridge-rotation.js'
+import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {normalizeSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
@@ -132,7 +133,8 @@ export function resolveCubesignerPolicy(input: {
   const attachment = 'attachment' in refs ? receipt(root, refs.attachment, 'dogeos/cubesigner-policy-attachment/v1').value : undefined
   const r = release.value
   string(r.coreRevision, 'policy core revision', /^[\da-f]{40}$/)
-  const identifier = string(r.policyIdentifier, 'immutable policy identifier', /^[\da-z][\d._a-z-]{2,63}\/v(?:0|[1-9]\d{0,8})$/)
+  const identifier = string(r.policyIdentifier, 'immutable policy identifier')
+  if (!isCubesignerPolicyIdentifier(identifier)) throw new Error('Invalid immutable policy identifier: use a 3-30 character alphanumeric/underscore name and concrete version')
   if (r.sdkVersion !== SDK_VERSION || r.requestContract !== REQUEST_CONTRACT) throw new Error('Policy SDK/request contract mismatch')
   const authority = string(r.proofResolverAuthority, 'proof resolver authority')
   const url = new URL(authority)

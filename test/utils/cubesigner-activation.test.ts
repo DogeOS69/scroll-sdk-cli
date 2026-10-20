@@ -92,7 +92,7 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     const full = {mfa: council}
     remote = {
       key: {acl: null, edit_policy: full, enabled: true, key_id: key.keyId, key_type: 'SecpDogeAddr', material_id: key.materialId, owner: 'User#owner', policy: request.body.policy, public_key: parsed.tee},
-      policy: {acl: [{actions: ['read:*', 'attach'], subjects: ['User#owner']}, {actions: ['sign'], subjects: [key.roleId]}], attached_to: [{key_id: key.keyId}], edit_policy: {applies_to_scopes: {AllOf: POLICY_EDIT_SCOPES}, mfa: council}, name: 'dogeos-bridge', owner: 'User#owner', policy_id: policyId, policy_type: 'Wasm',
+      policy: {acl: [{actions: ['read:*', 'attach'], subjects: ['User#owner']}, {actions: ['sign'], subjects: [key.roleId]}], attached_to: [{key_id: key.keyId}], edit_policy: {applies_to_scopes: {AllOf: POLICY_EDIT_SCOPES}, mfa: council}, name: 'dogeos_bridge', owner: 'User#owner', policy_id: policyId, policy_type: 'Wasm',
         rules: [{hash: release.wasm.sha256.replace('sha256:', '0x')}], version: 2},
       role: {edit_policy: full, enabled: true, name: 'fixture-role', role_id: key.roleId},
     }
@@ -111,7 +111,7 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     const at = new Date(Date.now() - 1000).toISOString()
     executed = {body: request.body, object_ids: {key_id: key.keyId, org_id: 'Org#fixture', policy_id: policyId, role_id: key.roleId}, operation: 'keyUpdate', outcome: {status: 'applied'}, target: key.keyId, timestamp: at}
     approval = {expires_at: Date.now() / 1000 + 300, id: 'mfa-fixture', request, status: {...council, approved_by: {'User#council': {Fido: {timestamp: Date.parse(at) / 1000}}}}}
-    handoff = {approvals: [write('approval.json', approval)], config: write('gov.json', {approval: {allowed_mfa_types: ['Fido'], approvers: ['User#council'], count: 1, lifetime_seconds: 300, num_auth_factors: 1}, key: {type: 'SecpDogeAddr'}, key_owner: 'User#owner', key_proposers: [], operators: ['User#operator'], org_id: 'Org#fixture', policy: {name: 'dogeos-bridge'}, policy_publishers: [],
+    handoff = {approvals: [write('approval.json', approval)], config: write('gov.json', {approval: {allowed_mfa_types: ['Fido'], approvers: ['User#council'], count: 1, lifetime_seconds: 300, num_auth_factors: 1}, key: {type: 'SecpDogeAddr'}, key_owner: 'User#owner', key_proposers: [], operators: ['User#operator'], org_id: 'Org#fixture', policy: {name: 'dogeos_bridge'}, policy_publishers: [],
         role: {name: 'fixture-role'}}), coreRevision: GOVERNANCE_CORE_REVISION, environment: 'gamma', kind: 'sealed-upgrade', operations: write('operations.json', [{...executed, outcome: {ids: ['mfa-fixture'], status: 'needs-approval'}}, executed]),
       request,
       runtimeSession: {session: 3600},

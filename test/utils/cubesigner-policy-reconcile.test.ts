@@ -43,7 +43,7 @@ describe('reconcile an externally governed policy into preparation receipts', ()
     remote = {
       authorities: ['proofs.example.com'],
       key: {enabled: true, key_id: key.keyId, material_id: key.materialId, policy: [{RequireRoleSession: [key.roleId]}, `${id}/v2`]},
-      policy: {attached_to: [{key_id: key.keyId}], name: 'dogeos-bridge', policy_id: id, policy_type: 'Wasm',
+      policy: {attached_to: [{key_id: key.keyId}], name: 'dogeos_bridge', policy_id: id, policy_type: 'Wasm',
         rules: [{hash: `0x${hash('policy.wasm').slice(7)}`}], version: 2}, role: {enabled: true, role_id: key.roleId},
     }
   })
@@ -52,7 +52,7 @@ describe('reconcile an externally governed policy into preparation receipts', ()
     async authorities() {calls.push('authorities'); return remote.authorities}, environment: 'gamma',
     async key(role, id) {calls.push('key'); expect([role, id]).to.deep.equal([key.roleId, key.keyId]); return remote.key},
     organization: 'Org#fixture',
-    async policy(name, version) {calls.push('policy'); expect([name, version]).to.deep.equal(['dogeos-bridge', 'v2']); return remote.policy},
+    async policy(name, version) {calls.push('policy'); expect([name, version]).to.deep.equal(['dogeos_bridge', 'v2']); return remote.policy},
     async role() {calls.push('role'); return remote.role},
   })
   const run = async (provider = client()) => {
@@ -76,7 +76,7 @@ describe('reconcile an externally governed policy into preparation receipts', ()
     expect(calls).to.deep.equal(['policy', 'key', 'role', 'authorities'])
     expect(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8')).to.equal(original)
     const refs = JSON.parse(fs.readFileSync(path.join(root, selection), 'utf8'))
-    expect(resolveCubesignerPolicy({deploymentDir: root, keys: [key], network: 'mainnet', selection: {mode: 'production_verifier_key_policy', policyReceipts: refs}}).policy?.policyIdentifier).to.equal('dogeos-bridge/v2')
+    expect(resolveCubesignerPolicy({deploymentDir: root, keys: [key], network: 'mainnet', selection: {mode: 'production_verifier_key_policy', policyReceipts: refs}}).policy?.policyIdentifier).to.equal('dogeos_bridge/v2')
     importPreparationPolicyReceipts(root)
     expect(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8')).to.include('[cubesigner.policyReceipts]')
     expect(fs.statSync(path.join(root, '.data/reconciled/readback.json')).mode % 512).to.equal(0o600)
@@ -115,6 +115,20 @@ describe('reconcile an externally governed policy into preparation receipts', ()
     input.organization = 'another_org'
     await fails('environment/organization mismatch', {...client(), organizationName: 'fixture_org'})
     expect(calls).deep.equal([])
+  })
+  for (const name of ['test-policy', 'test.policy', 'ab', 'a'.repeat(31)]) it(`rejects invalid policy name ${name} before connecting`, async () => {
+    input.release.policyIdentifier = `${name}/v2`
+    write('input.json', input)
+    let connected = false
+    try {
+      await reconcileCubesignerPolicy({async connect() {connected = true; return client()}, directory: root, input: 'input.json', output: '.data/reconciled'})
+      expect.fail('Expected invalid policy name')
+    } catch (error) {
+      expect((error as Error).message).include('3-30 ASCII letters')
+    }
+
+    expect(connected).equal(false)
+    expect(fs.existsSync(path.join(root, '.data/reconciled'))).equal(false)
   })
   it('rejects passing tests for another context before connecting', async () => {
     write('test-report.json', {result: 'passed'})
