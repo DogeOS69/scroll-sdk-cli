@@ -14,7 +14,7 @@ import {promisify} from 'node:util'
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from '../../src/utils/preparation-fee-wallet.js'
-import {assertHelperFundingImage, bindManagedHelperWallets, helperFundingAmount, prepareManagedHelper, prepareManagedHelperFunding, verifyManagedHelperFunding} from '../../src/utils/preparation-helper.js'
+import {assertHelperFundingImage, bindManagedHelperWallets, checkHelperRecoveryTimelock, helperFundingAmount, prepareManagedHelper, prepareManagedHelperFunding, verifyManagedHelperFunding} from '../../src/utils/preparation-helper.js'
 import {helperFeeWalletWif, helperSeed} from '../../src/utils/preparation-helper-identity.js'
 import {AwaitingInput, digest, privateWrite, writeJson} from '../../src/utils/preparation-io.js'
 import {preparationSteps} from '../../src/utils/preparation-plan.js'
@@ -24,7 +24,7 @@ const image = 'dogeos69/bridge-genesis-tools@sha256:27e646fd5d9c340926df82f47f7d
 const publicKey = () => new bitcore.PrivateKey().toPublicKey().toString()
 function fixture(root: string): DeploymentSpec {
   const spec = {
-    attestationSigners: [{attestationPubkey: publicKey(), name: 'a', transportPubkey: publicKey()}], bridge: {confirmationsRequired: 2, teePubkey: publicKey(), thresholds: {attestation: 1, recovery: 1}, timelock: 100_000},
+    attestationSigners: [{attestationPubkey: publicKey(), name: 'a', transportPubkey: publicKey()}], bridge: {confirmationsRequired: 2, teePubkey: publicKey(), thresholds: {attestation: 1, recovery: 1}, timelock: 500_000},
     dogecoin: {network: 'regtest'}, infrastructure: {aws: {eksClusterName: 'test', region: 'us-east-1'}, namespace: 'test', provider: 'aws'},
     metadata: {name: 'helper-test'},
     preparation: {bridge: {image, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, funding: 'helper', recoveryPublicKeys: [publicKey()], sequencerKms: {action: 'reuse', keyId: 'nonfunctional-test-key', roleArn: 'arn:aws:iam::111111111111:role/test'}}}, proofMaterials: {mode: 'existing'}},
@@ -52,8 +52,38 @@ describe('managed helper funding', () => {
     fs.rmSync(root, {force: true, recursive: true})
   })
 
+  for (const network of ['mainnet', 'testnet', 'regtest'] as const) it(`serializes ${network} for the Core helper`, () => {
+    spec.dogecoin.network = network
+    prepareManagedHelper(root, spec)
+    const config = toml.parse(fs.readFileSync(path.join(root, '.data/setup_defaults.toml'), 'utf8'))
+    expect(config.network).to.equal(network === 'mainnet' ? 'dogecoin' : network)
+  })
+
   it('blocks the known incompatible image before helper funding or broadcast', () => {
     expect(() => assertHelperFundingImage(image)).to.throw('invalid 71-byte')
+  })
+
+  it('rejects a future timelock below the Core recovery delay before requesting helper funding', async () => {
+    prepareManagedHelper(root, spec)
+    spec.bridge.timelock = 300_000
+    let failure: unknown
+    try {await prepareManagedHelperFunding(root, spec, async method => {
+      if (method === 'getblockchaininfo') return {chain: 'regtest'}
+      if (method === 'getblockcount') return 207_496
+      throw new Error('Funding must not be inspected before timelock validation')
+    })} catch (error) {failure = error}
+
+    expect(failure).to.be.instanceOf(AwaitingInput)
+    expect((failure as Error).message).to.include('466697')
+  })
+
+  it('rechecks the earliest possible anchor at the exact recovery-delay boundary', async () => {
+    spec.bridge.timelock = 466_697
+    await checkHelperRecoveryTimelock(spec, async () => 207_496)
+    let failure: unknown
+    try {await checkHelperRecoveryTimelock(spec, async () => 207_497)} catch (error) {failure = error}
+    expect(failure).to.be.instanceOf(AwaitingInput)
+    expect((failure as Error).message).to.include('466698')
   })
 
   it('prepares external KMS identity and a deterministic fee wallet without deriving bridge roles', () => {

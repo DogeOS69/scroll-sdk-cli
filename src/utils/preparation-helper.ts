@@ -7,7 +7,7 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {Rpc} from './preparation-funding.js'
 
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
-import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {GENESIS_SEQUENCER_AMOUNT_SATS, coreHelperNetwork} from './bridge-constants.js'
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, fundingInput, inspectFunding, publicKeyAddress, verifyDogecoinNetwork, verifyProductionBridge} from './preparation-funding.js'
 import {helperSeed, usesManagedHelper} from './preparation-helper-identity.js'
@@ -22,6 +22,17 @@ export function assertHelperFundingImage(image: string): void {
 
 const readToml = (root: string, file: string): any => toml.parse(fs.readFileSync(path.join(root, '.data', file), 'utf8'))
 const readJson = (root: string, file: string): any => JSON.parse(fs.readFileSync(path.join(root, '.data', file), 'utf8'))
+
+// Core bridge_script_utils::MIN_RECOVERY_DELAY_BLOCKS.
+const MIN_RECOVERY_DELAY_BLOCKS = 259_200
+
+export async function checkHelperRecoveryTimelock(spec: DeploymentSpec, rpc: Rpc): Promise<void> {
+  const height = await rpc('getblockcount', [])
+  if (!Number.isSafeInteger(height) || height < 0) throw new Error('Invalid Dogecoin block height')
+  // The setup transaction cannot be anchored before the next block.
+  const minimum = height + 1 + MIN_RECOVERY_DELAY_BLOCKS
+  if (spec.bridge.timelock < minimum) throw new AwaitingInput({message: `Recovery timelock must be at least ${minimum} (next possible genesis anchor plus ${MIN_RECOVERY_DELAY_BLOCKS} blocks); allow additional margin for funding delays`})
+}
 
 export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
   const policy = spec.preparation!.bridge.production!
@@ -38,7 +49,7 @@ export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
     bridge_funding_target_amount: config.bridge_target_amount,
     bridge_funding_tx_count: 1,
     confirmations_required: spec.bridge.confirmationsRequired,
-    enable_deposit_seed_txs: false, network: spec.dogecoin.network,
+    enable_deposit_seed_txs: false, network: coreHelperNetwork(spec.dogecoin.network),
     recovery_key_count: policy.recoveryPublicKeys.length, recovery_pubkeys: policy.recoveryPublicKeys,
     recovery_threshold: spec.bridge.thresholds.recovery, seed_string: helperSeed(root),
     sequencer_pubkey: sequencer.publicKey,
@@ -79,7 +90,7 @@ export async function prepareManagedHelperFunding(root: string, spec: Deployment
   const config = readToml(root, 'setup_defaults.toml')
   const amountSats = helperFundingAmount(config)
   await verifyDogecoinNetwork(spec.dogecoin.network, rpc)
-  if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
+  await checkHelperRecoveryTimelock(spec, rpc)
   try {
     const fact = await inspectFunding(data.helper, {address, confirmations: spec.bridge.confirmationsRequired, minimumSats: amountSats}, rpc)
     config.base_funding_utxos = [{amount_sats: fact.amountSats, prev_tx_hex: fact.rawTransaction, txid: fact.txid, vout: fact.vout}]

@@ -10,24 +10,32 @@ jobs:
     env:
       SDK_ALB_CHARTS: ${{ github.workspace }}/.test-sdk/charts
       SCROLLSDK_TEST_DEPLOYMENT_SPECS: ${{ github.workspace }}/.test-sdk-specs/examples
-      SCROLLSDK_TEST_SDK_CHART: ${{ github.workspace }}/.test-sdk/charts/l2-reth
+      SCROLLSDK_TEST_SDK_CHART: ${{ github.workspace }}/.test-sdk-nlb/charts/l2-reth
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: c2eb8bab629f16bb8ea982223351aaa08d52ed81
+          ref: 41334952f2185b2dc1d324f68d3838be3e8cfaf6
           path: .test-sdk
       - uses: actions/checkout@v4
         with:
           repository: DogeOS69/scroll-sdk
-          ref: 7a047ea87721a0c666aa3f312103392554f30260
+          ref: 3af814de7b21ed63c7ab022a9f71ca28f4f593b6
           path: .test-sdk-specs
+      # Test the merged SDK's minimal NLB bindings and installation recipes.
+      # Keep .test-sdk at the sdkRevision selected by .test-sdk-specs starters.
+      - uses: actions/checkout@v4
+        with:
+          repository: DogeOS69/scroll-sdk
+          ref: 3af814de7b21ed63c7ab022a9f71ca28f4f593b6
+          path: .test-sdk-nlb
       - uses: azure/setup-helm@v4.3.0
         with:
           version: v3.17.3
       - run: helm dependency build .test-sdk/charts/tso-service --skip-refresh
       - run: helm dependency build .test-sdk/charts/l2-reth --skip-refresh
+      - run: helm dependency build .test-sdk-nlb/charts/l2-reth --skip-refresh
       - run: helm dependency build .test-sdk/charts/blockscout
       - run: helm dependency build .test-sdk/charts/frontends --skip-refresh
       - run: helm dependency build .test-sdk/charts/proof-coordinator --skip-refresh
@@ -40,9 +48,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Validate pinned SDK installation recipes
+        run: python .test-sdk-nlb/examples/tests/test_makefile_context.py
       - name: Validate native dstack worker models and lifecycle offline
         run: |
           python -m pip install 'dstack==0.21.5'
           python scripts/test-proof-workers-controller.py
           python scripts/test-capacity-manager-fleets.py
+          python scripts/test-capacity-manager-preflight.py
       - run: yarn test

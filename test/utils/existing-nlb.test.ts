@@ -7,54 +7,72 @@ import os from 'node:os'
 import path from 'node:path'
 import sinon from 'sinon'
 
-import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
-
 import Nlb from '../../src/commands/setup/nlb.js'
 import {AwsCliRunner} from '../../src/utils/aws-cli.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../src/utils/bootnode-public-p2p.js'
-import {existingNlbEntries, publicBootnodeEnodes, verifyExistingNlb, verifyExistingNlbTargets} from '../../src/utils/existing-nlb.js'
+import {existingNlbEntries, publicBootnodeEnodes, validateExistingNlbSdk, verifyExistingNlb, verifyExistingNlbTargets} from '../../src/utils/existing-nlb.js'
+import {fixture} from '../fixtures/existing-nlb.js'
 
 const prefix = 'arn:aws:elasticloadbalancing:us-east-1:123456789012:'
-const lb = `${prefix}loadbalancer/net/bootnode-a/0123456789abcdef`
 const listener = `${prefix}listener/net/bootnode-a/0123456789abcdef/fedcba9876543210`
 const group = `${prefix}targetgroup/bootnode-a/1111111111111111`
 const sg = 'sg-0123456789abcdef0'
-const subnet = 'subnet-0123456789abcdef0'
-const eip = 'eipalloc-0123456789abcdef0'
-function fixture(): any {
-  const entry = {eipAllocations: [eip], enabled: true, existingNlb: {listenerArn: listener, loadBalancerArn: lb, securityGroupIds: [sg], targetGroupArn: group}, index: 0, mode: 'existing', sourceRanges: ['203.0.113.10/32'], subnets: [subnet]}
-  const spec = {bootnodePublicP2p: [entry], infrastructure: {aws: {accountId: '123456789012', eksClusterName: 'example', region: 'us-east-1'}, bootnodeCount: 2, kubeContext: 'example', namespace: 'default', provider: 'aws'}} as DeploymentSpec
-  const values = {reth: {nodeKey: {mode: 'secret'}}, role: 'bootnode'}
-  applyBootnodePublicP2p(values, 0, spec.bootnodePublicP2p)
-  const files = {'l2-reth-bootnode-production-0.yaml': yaml.dump(values)}
-  const responses: Record<string, any> = {
-    'ec2 describe-security-groups': {SecurityGroups: [{GroupId: sg, IpPermissions: [{FromPort: 30_303, IpProtocol: 'tcp', IpRanges: [{CidrIp: '203.0.113.10/32'}], ToPort: 30_303}], OwnerId: '123456789012', VpcId: 'vpc-example'}]},
-    'ec2 describe-subnets': {Subnets: [{AvailabilityZone: 'us-east-1a', OwnerId: '123456789012', SubnetId: subnet, VpcId: 'vpc-example'}]},
-    'eks describe-cluster': {cluster: {endpoint: 'https://eks.example.invalid', resourcesVpcConfig: {vpcId: 'vpc-example'}}},
-    'elbv2 describe-listeners': {Listeners: [{DefaultActions: [{TargetGroupArn: group, Type: 'forward'}], ListenerArn: listener, LoadBalancerArn: lb, Port: 30_303, Protocol: 'TCP'}]},
-    'elbv2 describe-load-balancer-attributes': {Attributes: [{Key: 'load_balancing.cross_zone.enabled', Value: 'false'}]},
-    'elbv2 describe-load-balancers': {LoadBalancers: [{AvailabilityZones: [{LoadBalancerAddresses: [{AllocationId: eip, IpAddress: '198.51.100.10'}], SubnetId: subnet, ZoneName: 'us-east-1a'}], IpAddressType: 'ipv4', LoadBalancerArn: lb, Scheme: 'internet-facing', SecurityGroups: [sg], State: {Code: 'active'}, Type: 'network', VpcId: 'vpc-example'}]},
-    'elbv2 describe-tags': {TagDescriptions: [{Tags: []}]},
-    'elbv2 describe-target-group-attributes': {Attributes: [{Key: 'proxy_protocol_v2.enabled', Value: 'false'}]},
-    'elbv2 describe-target-groups': {TargetGroups: [{HealthCheckEnabled: true, HealthCheckPort: 'traffic-port', HealthCheckProtocol: 'TCP', LoadBalancerArns: [lb], Port: 30_303, Protocol: 'TCP', TargetGroupArn: group, TargetType: 'ip', VpcId: 'vpc-example'}]},
-    'elbv2 describe-target-health': {TargetHealthDescriptions: [{Target: {Id: '10.0.0.5', Port: 30_303}, TargetHealth: {State: 'healthy'}}]},
-    'sts get-caller-identity': {Account: '123456789012'},
-  }
-  const calls: string[][] = []
-  const aws = {json(args: string[]): any {calls.push(args); const key = args.slice(0, 2).join(' '); if (!responses[key]) throw new Error(`Unexpected call ${key}`); return responses[key]}}
-  const kubeObjects: Record<string, any> = {
-    'config': {clusters: [{cluster: {server: 'https://eks.example.invalid'}}]},
-    'endpointslices.discovery.k8s.io': {items: [{endpoints: [{addresses: ['10.0.0.5'], conditions: {ready: true}}], metadata: {ownerReferences: [{kind: 'Service', uid: 'service-uid'}]}, ports: [{port: 30_303, protocol: 'TCP'}]}]},
-    'node': {metadata: {labels: {'topology.kubernetes.io/zone': 'us-east-1a'}}},
-    'pod': {spec: {nodeName: 'node-a'}, status: {conditions: [{status: 'True', type: 'Ready'}], podIP: '10.0.0.5'}},
-    'service': {metadata: {uid: 'service-uid'}, spec: {ports: [{port: 30_303, protocol: 'TCP', targetPort: 30_303}], selector: {'statefulset.kubernetes.io/pod-name': 'l2-reth-bootnode-0-0'}, type: 'ClusterIP'}},
-    'targetgroupbindings.elbv2.k8s.aws': {items: [{metadata: {namespace: 'default'}, spec: {networking: {ingress: [{from: [{securityGroup: {groupID: sg}}], ports: [{port: 30_303, protocol: 'TCP'}]}]}, serviceRef: {name: 'l2-reth-bootnode-0-p2p', port: 30_303}, targetGroupARN: group, targetType: 'ip'}}]},
-  }
-  const kube = (args: string[]): any => kubeObjects[args.includes('config') ? 'config' : args[args.indexOf('get') + 1]]
-  return {aws, calls, entry, files, kube, kubeObjects, responses, spec, values}
-}
 
 describe('independent bootnode NLB', () => {
+  it('requires the committed SDK chart interface that omits partner lists', () => {
+    const f = fixture()
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'existing-nlb-sdk-'))
+    const git = (args: string[]): void => {execFileSync('git', ['-C', root, ...args], {stdio: 'pipe'})}
+    try {
+      fs.mkdirSync(path.join(root, 'charts/l2-reth/templates'), {recursive: true})
+      fs.writeFileSync(path.join(root, 'charts/l2-reth/templates/p2p-targetgroupbinding.yaml'), '# test fixture\n')
+      git(['init', '--quiet'])
+      for (const version of ['0.1.10', '0.1.11']) {
+        fs.writeFileSync(path.join(root, 'charts/l2-reth/Chart.yaml'), `version: ${version}\n`)
+        git(['add', 'charts/l2-reth/Chart.yaml', 'charts/l2-reth/templates/p2p-targetgroupbinding.yaml'])
+        git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', version])
+        if (version === '0.1.10') expect(() => validateExistingNlbSdk(root, f.spec)).to.throw('0.1.11')
+        else expect(() => validateExistingNlbSdk(root, f.spec)).not.to.throw()
+      }
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  it('discovers infrastructure from minimal TG and SG references with inferred mode', () => {
+    const f = fixture()
+    delete f.entry.mode; delete f.entry.subnets; delete f.entry.eipAllocations
+    delete f.entry.existingNlb.loadBalancerArn; delete f.entry.existingNlb.listenerArn
+    expect(verifyExistingNlb(f.spec, f.files, f.aws)[0].publicEndpoints).to.deep.equal(['198.51.100.10:30303'])
+    const calls = f.calls as string[][]
+    expect(calls.findIndex(args => args[1] === 'describe-target-groups')).to.be.lessThan(calls.findIndex(args => args[1] === 'describe-load-balancers'))
+    f.responses['elbv2 describe-target-groups'].TargetGroups[0].LoadBalancerArns = []
+    expect(() => verifyExistingNlb(f.spec, f.files, f.aws)).to.throw('exactly one network')
+  })
+
+  it('rejects separate target groups that resolve to the same NLB', () => {
+    const f = fixture()
+    delete f.entry.existingNlb.loadBalancerArn; delete f.entry.existingNlb.listenerArn
+    const second = {...structuredClone(f.entry), index: 1}
+    second.existingNlb.targetGroupArn = group.replace('1111111111111111', '2222222222222222')
+    delete second.subnets; delete second.eipAllocations
+    f.spec.bootnodePublicP2p.push(second)
+    const values = structuredClone(f.values)
+    applyBootnodePublicP2p(values, 1, f.spec.bootnodePublicP2p)
+    f.files['l2-reth-bootnode-production-1.yaml'] = yaml.dump(values)
+    const aws = {json(args: string[]): any {
+      const response = structuredClone(f.aws.json(args))
+      if (args[1] === 'describe-target-groups') response.TargetGroups[0].TargetGroupArn = args[3]
+      return response
+    }}
+    expect(() => verifyExistingNlb(f.spec, f.files, aws)).to.throw('own independent NLB')
+  })
+
+  it('rejects NLB addresses without an EIP even when no allocation is declared', () => {
+    const f = fixture()
+    delete f.entry.subnets; delete f.entry.eipAllocations
+    delete f.responses['elbv2 describe-load-balancers'].LoadBalancers[0].AvailabilityZones[0].LoadBalancerAddresses[0].AllocationId
+    expect(() => verifyExistingNlb(f.spec, f.files, f.aws)).to.throw('fixed EIP')
+  })
+
   it('exports EIP enodes without changing the saved node public key', () => {
     const publicKey = 'ab'.repeat(64)
     expect(publicBootnodeEnodes(`enode://${publicKey}@l2-reth-bootnode-0:30303`, ['198.51.100.10:30303'])).to.deep.equal([`enode://${publicKey}@198.51.100.10:30303`])
@@ -62,17 +80,42 @@ describe('independent bootnode NLB', () => {
   })
   it('projects only binding intent, preserves identity, rejects creation fallback and shared NLBs', () => {
     const f = fixture()
+    expect(() => validateBootnodePublicP2p([f.entry], [0])).not.to.throw()
+    expect(f.values.reth.p2pExternal).not.to.have.property('sourceRanges')
     expect(f.values.reth.nodeKey.mode).to.equal('secret')
-    expect(f.values.reth.p2pExternal).to.include({allowOpenPeering: false, mode: 'existing'})
+    expect(f.values.reth.p2pExternal).to.include({mode: 'existing'})
     expect(f.values.reth.p2pExternal.existingNlb.targetGroupARN).to.equal(group)
     expect(() => applyBootnodePublicP2p(f.values, 0, [{...f.entry, existingNlb: undefined, mode: 'service'}])).to.throw('implicitly')
     expect(() => validateBootnodePublicP2p([{...f.entry, mode: 'service'}], [0])).to.throw('fallback')
     expect(() => validateBootnodePublicP2p([f.entry, {...f.entry, index: 1}], [0, 1])).to.throw('independent NLB')
     expect(() => validateBootnodePublicP2p([{...f.entry, existingNlb: {...f.entry.existingNlb, targetGroupArn: group.replace('123456789012', '999999999999')}}], [0])).to.throw('account and region')
-    expect(() => validateBootnodePublicP2p([{...f.entry, sourceRanges: ['0.0.0.0/0']}], [0])).to.throw('/0')
+    expect(() => validateBootnodePublicP2p([{...f.entry, sourceRanges: ['0.0.0.0/0']}], [0])).to.throw('must be omitted')
     expect(() => validateBootnodePublicP2p([{...f.entry, existingNlb: {...f.entry.existingNlb, listenerArn: listener.replace('bootnode-a', 'bootnode-b')}}], [0])).to.throw('belong')
     f.spec.infrastructure.aws.region = 'us-west-2'
     expect(() => existingNlbEntries(f.spec)).to.throw('account and region')
+  })
+
+  it('keeps spec and generated values unchanged across AWS-only partner additions and removals', () => {
+    const f = fixture()
+    const originalSpec = JSON.stringify(f.spec)
+    const originalFiles = JSON.stringify(f.files)
+    const permissions = f.responses['ec2 describe-security-groups'].SecurityGroups[0].IpPermissions
+    permissions[0].IpRanges.push({CidrIp: '198.51.100.0/24'})
+    expect(() => verifyExistingNlb(f.spec, f.files, f.aws)).not.to.throw()
+    permissions[0].IpRanges.shift()
+    expect(() => verifyExistingNlb(f.spec, f.files, f.aws)).not.to.throw()
+    permissions.splice(0)
+    expect(() => verifyExistingNlb(f.spec, f.files, f.aws)).not.to.throw()
+    expect(JSON.stringify(f.spec)).to.equal(originalSpec)
+    expect(JSON.stringify(f.files)).to.equal(originalFiles)
+    expect(f.calls.every((args: string[]) => /^(describe-|get-caller-identity)/.test(args[1]))).to.equal(true)
+  })
+
+  it('removes inherited template allowlists when generating an independent binding', () => {
+    const f = fixture()
+    f.values.reth.p2pExternal.sourceRanges = ['203.0.113.10/32']
+    applyBootnodePublicP2p(f.values, 0, [f.entry])
+    expect(f.values.reth.p2pExternal).not.to.have.property('sourceRanges')
   })
 
   it('renders generated values as an application-owned binding without an AWS resource owner', function () {
@@ -150,7 +193,10 @@ describe('independent bootnode NLB', () => {
     ['Service-owned resource', f => {f.responses['elbv2 describe-tags'].TagDescriptions[0].Tags.push({Key: 'service.k8s.aws/stack', Value: 'old-service'})}, 'externally managed'],
     ['extra SG', f => {f.responses['elbv2 describe-load-balancers'].LoadBalancers[0].SecurityGroups.push('sg-11111111')}, 'exactly match'],
     ['public ingress', f => {f.responses['ec2 describe-security-groups'].SecurityGroups[0].IpPermissions[0].IpRanges[0].CidrIp = '0.0.0.0/0'}, '/0'],
-    ['broader CIDR', f => {f.responses['ec2 describe-security-groups'].SecurityGroups[0].IpPermissions[0].IpRanges[0].CidrIp = '203.0.113.0/24'}, 'exactly match'],
+    ['combined public ingress', f => {f.responses['ec2 describe-security-groups'].SecurityGroups[0].IpPermissions[0].IpRanges = [{CidrIp: '0.0.0.0/1'}, {CidrIp: '128.0.0.0/1'}]}, 'all IPv4'],
+    ['IPv6 ingress', f => {f.responses['ec2 describe-security-groups'].SecurityGroups[0].IpPermissions[0].Ipv6Ranges = [{CidrIpv6: '::/0'}]}, 'only TCP30303'],
+    ['prefix-list bypass', f => {f.responses['ec2 describe-security-groups'].SecurityGroups[0].IpPermissions[0].PrefixListIds = [{PrefixListId: 'pl-example'}]}, 'only TCP30303'],
+    ['stale values allowlist', f => {f.values.reth.p2pExternal.sourceRanges = ['203.0.113.10/32']; f.files['l2-reth-bootnode-production-0.yaml'] = yaml.dump(f.values)}, 'remove sourceRanges'],
     ['SG-reference bypass', f => {f.responses['ec2 describe-security-groups'].SecurityGroups[0].IpPermissions[0].UserIdGroupPairs = [{GroupId: sg}]}, 'only TCP30303'],
     ['RPC ingress', f => {f.responses['ec2 describe-security-groups'].SecurityGroups[0].IpPermissions[0].FromPort = 8545}, 'only TCP30303'],
     ['changed EIP', f => {f.responses['elbv2 describe-load-balancers'].LoadBalancers[0].AvailabilityZones[0].LoadBalancerAddresses[0].AllocationId = 'eipalloc-11111111'}, 'declared EIP'],

@@ -34,7 +34,7 @@ import {
 } from '../config/constants.js'
 import {GENESIS_PREDEPLOYS, L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT} from '../constants/deployment.js'
 import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
-import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {GENESIS_SEQUENCER_AMOUNT_SATS, coreHelperNetwork} from './bridge-constants.js'
 import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deployment-spec-fields.js'
 import {validateDstackControllerConfig} from './dstack-controller-values.js'
 import {ETHEREUM_DA_RUNTIME_FIELDS, ethereumDaMainnetPolicyErrors, resolveEthereumDaSubmitterPolicy} from './ethereum-da-runtime.js'
@@ -146,6 +146,7 @@ export function resolveDeploymentSpecEnvRefs(spec: DeploymentSpec): DeploymentSp
   }
 
   if (spec.feeOracle?.ethereumRpcUrl?.includes('$ENV:') && resolved.feeOracle) resolved.feeOracle.ethereumRpcUrl = spec.feeOracle.ethereumRpcUrl
+  if (spec.database?.admin?.password?.includes('$ENV:') && resolved.database.admin) resolved.database.admin.password = spec.database.admin.password
   return resolved
 }
 
@@ -345,6 +346,16 @@ function getDogecoinClusterRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec
 }
 
 const DEFAULT_L1_FEE_VAULT_ADDR = '0x0000000000000000000000000000000000000001'
+
+function resolveL1FeeVaultAddress(value?: string): string {
+  if (value === undefined) return DEFAULT_L1_FEE_VAULT_ADDR
+  if (typeof value !== 'string' || !/^0x[\dA-Fa-f]{40}$/.test(value) || /^0x0{40}$/i.test(value)) {
+    throw new Error('contracts.l1FeeVaultAddress must be a nonzero 20-byte hexadecimal address')
+  }
+
+  return value
+}
+
 const ZERO_BYTES32 = '0x0000000000000000000000000000000000000000000000000000000000000000'
 const PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000001'
 const PLACEHOLDER_L2_MESSENGER_ADDRESS = '0x0000000000000000000000000000000000000002'
@@ -381,7 +392,7 @@ function assertGeneratedDataNetworkConsistency(configs: GeneratedConfigs): void 
 
   const dogeNetwork = dogeConfig.network
   const setupNetwork = setupDefaults.network
-  if (dogeNetwork !== setupNetwork) {
+  if (coreHelperNetwork(String(dogeNetwork)) !== setupNetwork) {
     throw new Error(
       `.data network mismatch: doge-config.toml network=${String(dogeNetwork)} but setup_defaults.toml network=${String(setupNetwork)}`
     )
@@ -747,6 +758,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
         path: field.path
       })
     }
+  }
+
+  try {resolveL1FeeVaultAddress(spec.contracts?.l1FeeVaultAddress)} catch {
+    errors.push({code: 'E004_INVALID_ADDRESS', message: 'Genesis fee-vault recipient must be a nonzero 20-byte hexadecimal address', path: 'contracts.l1FeeVaultAddress'})
   }
 
   if (spec.contracts?.feeVaultDogeRecipientAddress === undefined) {
@@ -1432,7 +1447,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     FEE_VAULT_DOGE_RECIPIENT_ADDR: spec.contracts.feeVaultDogeRecipientAddress
       ? feeVaultRecipientHash(spec.contracts.feeVaultDogeRecipientAddress, spec.dogecoin.network)
       : '0x0000000000000000000000000000000000000000',
-    L1_FEE_VAULT_ADDR: DEFAULT_L1_FEE_VAULT_ADDR,
+    L1_FEE_VAULT_ADDR: resolveL1FeeVaultAddress(spec.contracts.l1FeeVaultAddress),
     L2_BASE_FEE_OVERHEAD: spec.contracts.l2BaseFeeOverheadWei ?? L2_BASE_FEE_OVERHEAD_WEI,
     L2_BRIDGE_FEE_RECIPIENT_ADDR: spec.bridge.feeRecipient,
     MIN_WITHDRAWAL_AMOUNT: bridgeFees.minWithdrawalAmountWei,
@@ -1646,6 +1661,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   if (spec.signing.cubesigner) {
     config.cubesigner = {
       ...(spec.signing.cubesigner.mode ? {mode: spec.signing.cubesigner.mode} : {}),
+      ...(spec.signing.cubesigner.expectedPolicy ? {expectedPolicy: spec.signing.cubesigner.expectedPolicy} : {}),
       ...(spec.signing.cubesigner.policyReceipts ? {policyReceipts: spec.signing.cubesigner.policyReceipts} : {}),
       ...(spec.signing.cubesigner.productionPolicy
         ? {productionPolicy: spec.signing.cubesigner.productionPolicy}
@@ -1698,7 +1714,7 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
     dogecoin_rpc_user: externalRpc.username || '',
     fee_rate_sat_per_kvb: getBridgeFeeRateSatsPerKvb(spec),
     fee_wallet_target_amount: targetAmountsSats.feeWallet,
-    network: spec.dogecoin.network,
+    network: coreHelperNetwork(spec.dogecoin.network),
     recovery_key_count: spec.bridge.keyCounts.recovery,
     recovery_threshold: spec.bridge.thresholds.recovery,
     ...(spec.preparation?.bridge.mode !== 'production' && spec.bridge.seedString ? {seed_string: spec.bridge.seedString} : {}),

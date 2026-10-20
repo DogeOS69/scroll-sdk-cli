@@ -18,7 +18,7 @@ import {
 } from '../../utils/proof-worker-image-check.js'
 
 export default class ProofMaterials extends Command {
-  static description = 'Resume the saved proof-materials stage; explicit material flags select standalone material preparation'
+  static description = 'Resume the saved proof-materials stage; --generation or --preparation-receipt explicitly selects standalone material preparation'
 
   static examples = [
     '$ scrollsdk setup proof-materials --generation mock',
@@ -43,7 +43,7 @@ export default class ProofMaterials extends Command {
     json: Flags.boolean({default: false, description: 'Output structured JSON'}),
     'materials-dir': Flags.string({default: DEFAULT_PROOF_MATERIALS_ROOT, description: 'Deployment-relative material destination'}),
     'mock-worker-image': Flags.string({description: 'Mock Worker tag or digest; plain mock only, where it supplies the compiler identity'}),
-    'non-interactive': Flags.boolean({char: 'N', default: false, description: 'Do not prompt; omitted generation defaults to mock'}),
+    'non-interactive': Flags.boolean({char: 'N', default: false, description: 'Do not prompt; standalone preparation requires an explicit generation or preparation receipt'}),
     output: Flags.string({default: DEFAULT_PROOF_MATERIALS_RECEIPT, description: 'Deployment-relative receipt path'}),
     'preparation-receipt': Flags.string({description: 'Validated proof-release-preparation-v1.json; supplies every real-material flag except the materializers'}),
     'production-worker-image': Flags.string({description: 'Real Worker release tag or digest; real only'}),
@@ -54,7 +54,9 @@ export default class ProofMaterials extends Command {
 
   public async run(): Promise<void> {
     const {flags} = await this.parse(ProofMaterials)
-    const standalone = this.argv.some(argument => /^--?/.test(argument) && !['--deployment-dir', '--dir', '--json'].includes(argument.split('=')[0]))
+    const standalone = Boolean(flags.generation || flags['preparation-receipt'])
+    const materialFlags = this.argv.filter(argument => argument.startsWith('--') && !['--deployment-dir', '--dir', '--json', '--non-interactive'].includes(argument.split('=')[0]))
+    if (!standalone && materialFlags.length > 0) throw new Error('Standalone material flags require --generation or --preparation-receipt; --non-interactive alone resumes the saved stage')
     if (!standalone) {
       const explicitDeployment = this.argv.some(argument => argument === '--deployment-dir' || argument.startsWith('--deployment-dir='))
       if (flags.dir && explicitDeployment) throw new Error('Choose --dir or --deployment-dir, not both')

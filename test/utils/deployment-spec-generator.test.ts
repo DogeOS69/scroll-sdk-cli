@@ -27,6 +27,7 @@ import {
   writeGeneratedConfigs,
 } from '../../src/utils/deployment-spec-generator.js';
 import { deriveTsoUrl } from '../../src/utils/signer-policy-derivation.js';
+import {mergeBootstrapValues} from '../../src/utils/spec-bootstrap.js';
 import { generateValuesFiles } from '../../src/utils/values-generator.js';
 
 const TEST_PRIVATE_KEYS = {
@@ -264,6 +265,22 @@ describe('deployment-spec-generator', () => {
       expect(hasEnvRef('$ENV:My_Var_123')).to.be.true;
     });
   });
+
+  it('retains the database administrator password reference when freezing a plan', () => {
+    const spec = createMinimalSpec()
+    const name = 'SCROLLSDK_TEST_DATABASE_ADMIN_PASSWORD'
+    const previous = process.env[name]
+    spec.database.admin!.password = `$ENV:${name}`
+    process.env[name] = 'fake-test-database-password'
+    try {
+      const frozen = resolveDeploymentSpecEnvRefs(spec)
+      expect(frozen.database.admin!.password).to.equal(`$ENV:${name}`)
+      expect(JSON.stringify(frozen)).not.to.include('fake-test-database-password')
+    } finally {
+      if (previous === undefined) delete process.env[name]
+      else process.env[name] = previous
+    }
+  })
 
   it('freezes Ethereum references without credentials and retains refreshable references in private config', () => {
     const spec = createMinimalSpec()
@@ -1090,7 +1107,7 @@ describe('deployment-spec-generator', () => {
       expect(toml.parse(generateDogeConfigToml(spec))).not.to.have.property('test');
     });
 
-    it('uses a fixed L1 fee vault address and rejects an unsupported spec override', () => {
+    it('defaults the bootstrap fee-vault address and rejects a misspelled override', () => {
       const spec = createMinimalSpec() as any;
       spec.contracts.l1FeeVaultAddr = '0x2222222222222222222222222222222222222222';
       expect(() => generateConfigToml(spec)).to.throw('contracts.l1FeeVaultAddr');
@@ -1099,6 +1116,37 @@ describe('deployment-spec-generator', () => {
 
       expect(output).to.include('L1_FEE_VAULT_ADDR = "0x0000000000000000000000000000000000000001"');
       expect(output).not.to.include('L1_FEE_VAULT_ADDR = "0x2222222222222222222222222222222222222222"');
+    });
+
+    it('uses Core helper network names without changing runtime network names', () => {
+      for (const network of ['mainnet', 'testnet', 'regtest'] as const) {
+        const spec = createMinimalSpec();
+        spec.dogecoin.network = network;
+        const config = toml.parse(generateSetupDefaultsToml(spec));
+        expect(config.network).to.equal(network === 'mainnet' ? 'dogecoin' : network);
+        expect(spec.dogecoin.network).to.equal(network);
+      }
+    });
+
+    it('preserves an explicit bootstrap recipient independently of the final Dogecoin recipient', () => {
+      const spec = createMinimalSpec();
+      const before = toml.parse(generateConfigToml(spec)) as any;
+      spec.contracts.l1FeeVaultAddress = '0x1111111111111111111111111111111111111111';
+      expect(validateDeploymentSpec(spec).valid).to.equal(true);
+      const after = toml.parse(generateConfigToml(spec)) as any;
+      expect(after.contracts.L1_FEE_VAULT_ADDR).to.equal(spec.contracts.l1FeeVaultAddress);
+      expect(after.contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR).to.equal(before.contracts.FEE_VAULT_DOGE_RECIPIENT_ADDR);
+      after.contracts.L1_FEE_VAULT_ADDR = before.contracts.L1_FEE_VAULT_ADDR;
+      expect(after).to.deep.equal(before);
+    });
+
+    it('rejects invalid bootstrap fee-vault recipients during validation and generation', () => {
+      for (const address of ['', '0x' + '0'.repeat(40), '0x1234', 'REPLACE_WITH_ADDRESS', 1, null]) {
+        const spec = createMinimalSpec();
+        spec.contracts.l1FeeVaultAddress = address as any;
+        expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'contracts.l1FeeVaultAddress')).to.equal(true);
+        expect(() => generateConfigToml(spec)).to.throw('contracts.l1FeeVaultAddress');
+      }
     });
 
     it('includes admin dashboard and Grafana frontend URIs required by contract scripts', () => {
@@ -1150,9 +1198,9 @@ describe('deployment-spec-generator', () => {
       for (const key of ['ADMIN_SYSTEM_DASHBOARD_HOST', 'BLOCKSCOUT_BACKEND_HOST', 'COORDINATOR_API_HOST', 'L1_EXPLORER_HOST', 'ROLLUP_EXPLORER_API_HOST']) expect(config.ingress).not.to.have.property(key);
       expect(config.frontend.EXTERNAL_EXPLORER_URI_L1).to.equal(spec.frontend.externalUrls.l1Explorer);
       expect(blockscout.blockscout.ingress.hostname).to.equal(config.ingress.BLOCKSCOUT_HOST);
-      expect(blockscout.blockscout.ingress.paths[0].path).to.equal('/api');
+      expect(blockscout.blockscout.ingress).not.to.have.property('paths');
       expect(blockscout.frontend.ingress.hostname).to.equal(config.ingress.BLOCKSCOUT_HOST);
-      expect(blockscout.frontend.ingress.paths[0].path).to.equal('/');
+      expect(blockscout.frontend.ingress).not.to.have.property('paths');
       expect(blockscout.frontend.env.NEXT_PUBLIC_API_HOST).to.equal(config.ingress.BLOCKSCOUT_HOST);
       const tso = (yaml.load(files['tso-service-production.yaml']) as any).ingress.main;
       expect(tso.hosts[0].host).to.equal(config.ingress.TSO_HOST);
@@ -1628,6 +1676,34 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
+    for (const provider of ['aws', 'gcp'] as const) it(`keeps Dogecoin RPC credentials out of ${provider} values, including regeneration`, () => {
+      const spec = createMinimalSpec();
+      spec.infrastructure.provider = provider;
+      spec.infrastructure.aws = {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-west-2'};
+      const password = 'NONFUNCTIONAL_DOGECOIN_RPC_PASSWORD';
+      spec.dogecoin.clusterRpc = {password, username: 'fixture-user'};
+      const content = generateValuesFiles(spec)['dogecoin-production.yaml'];
+      const values = yaml.load(content) as any;
+      expect(content).not.to.include(password);
+      const {data} = values.externalSecrets['dogecoin-secret-env'];
+      expect(data).to.have.length(1);
+      expect(data[0].secretKey).to.equal('password');
+      expect(data[0].remoteRef.property).to.equal('DOGECOIN_RPC_PASSWORD');
+      expect(data[0].remoteRef.key).to.match(/\/dogecoin-secret-env$/);
+      const old = yaml.dump({rpcPassword: {secretKey: 'password', value: password}});
+      expect(mergeBootstrapValues(old, content, old)).not.to.include(password);
+    });
+
+    it('retains the Dogecoin password for chart-managed local Secrets', () => {
+      const spec = createMinimalSpec();
+      spec.infrastructure.provider = 'local';
+      spec.infrastructure.local = {useK8sSecrets: true};
+      spec.dogecoin.clusterRpc = {password: 'NONFUNCTIONAL_LOCAL_RPC_PASSWORD', username: 'fixture-user'};
+      const values = yaml.load(generateValuesFiles(spec)['dogecoin-production.yaml']) as any;
+      expect(values.externalSecrets).to.equal(undefined);
+      expect(values.rpcPassword.value).to.equal(spec.dogecoin.clusterRpc.password);
+    });
+
     it('projects public RPC and TSO routes while leaving controller and TLS policy to templates', () => {
       const spec = createMinimalSpec();
       spec.frontend.hosts.tso = 'tso.example.invalid';
@@ -1799,7 +1875,7 @@ describe('deployment-spec-generator', () => {
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT');
       expect(files['dogecoin-production.yaml']).to.include('rpcuser: cluster-rpc-user');
-      expect(files['dogecoin-production.yaml']).to.include('value: cluster-rpc-pass');
+      expect(files['dogecoin-production.yaml']).not.to.include('cluster-rpc-pass');
       expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-user');
       expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-pass');
       for (const role of ['rpc', 'bootnode', 'sequencer']) {

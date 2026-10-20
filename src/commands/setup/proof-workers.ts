@@ -8,8 +8,8 @@ import {operateWorkerCapacity, retireCapacitySession} from '../../utils/proof-wo
 import {createWorkerCapacityPlan} from '../../utils/proof-workers-plan.js'
 
 export default class ProofWorkers extends Command {
-  static args = {action: Args.string({default: 'status', options: ['plan', 'apply', 'status', 'destroy']})}
-  static description = 'Plan, submit, inspect or destroy bounded AWS or Vast.ai GPU workers through the deployed dstack controller'
+  static args = {action: Args.string({default: 'status', options: ['plan', 'apply', 'status', 'drain', 'destroy']})}
+  static description = 'Plan, submit, inspect, gracefully drain or forcibly destroy bounded AWS or Vast.ai GPU workers through the deployed dstack controller'
   static flags = {
     'aws-profile': Flags.string({description: 'For apply only: AWS CLI profile used to read the worker-credential master'}),
     'aws-region': Flags.string({description: 'For apply only: region of the proof coordinator secret; inferred from .data/proof-aws.json when omitted'}),
@@ -48,7 +48,7 @@ export default class ProofWorkers extends Command {
           return readProverWorkerMasterFromSecretsManager({awsProfile: flags['aws-profile'], awsRegion: flags['aws-region'] || proofAws?.secret.region, secretName})
         }
 
-        const result = operateWorkerCapacity(root, args.action as 'apply' | 'destroy' | 'status', undefined, undefined, readMaster)
+        const result = operateWorkerCapacity(root, args.action as 'apply' | 'destroy' | 'drain' | 'status', undefined, undefined, readMaster)
         if (!flags.json) this.log(JSON.stringify(result, null, 2))
         out.success(result)
       }

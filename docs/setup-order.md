@@ -10,7 +10,16 @@ storage required by your chosen deployment separately.
 For configuration generated from a deployment spec, see the
 [spec projection reference](spec-projection.md) for defaults, preserved inputs
 and the remaining setup steps. The [staged preparation workflow](spec-preparation.md)
-orchestrates those steps and resumes after external funding and partner handoffs.
+orchestrates those steps and resumes after external funding and partner handoffs. For a
+saved plan, run `setup render`, then `setup signer-session` when CubeSigner is
+configured, then `setup upload-secrets` (each accepts `--dir` for the saved
+deployment directory). Rendering does not create the remote session; the explicit
+session stage uses `cubesigner-policy prepare-session` in production mode and
+reuses or creates transport-mode credentials through the existing refresh flow.
+Completed session steps are skipped on retry.
+The manual commands below remain available independently. Before installation,
+follow the [runtime and activation checks](deployment-preflight.md#6-opt-into-cluster-rpc-and-reth-startup-checks);
+after source submission, [check final contract verification](deployment-preflight.md#8-check-final-contract-verification).
 
 Use core images and the topology compiler containing
 [dogeos-core #1483](https://github.com/DogeOS69/dogeos-core/pull/1483) and
@@ -41,6 +50,12 @@ cross-repository corrections and shadowfork configuration rehearsal.
 
 Production Bridge initialization follows the [staged production flow](spec-preparation.md#production-funding-and-resume).
 The legacy full `bridge-init` command uses a deterministic test helper.
+
+For staged CubeSigner deployments, follow [preparation and activation](cubesigner-preparation.md):
+`protocol-context → proof-materials / policy-prepare → proof-publish → signer-kit → render → signer-session → upload-secrets`.
+`signer-kit-publish` is a separate publication handoff. Attachment approval does not
+block expected configuration or an already authorized role's session preparation.
+Only fresh activation verification authorizes the guarded signer install target.
 
 ## 1. Prepare configuration and identities
 
@@ -167,6 +182,19 @@ initialization. Regenerating protocol context alone does not enable it.
 
 ## 4. Prepare proof and service configuration
 
+Production CubeSigner policy mode projects WP's
+`proof_system.correctness_policy_transport = "bridge_proof_ref_v1"` during
+`prep-charts`; proof readiness also rejects a mismatched native configuration.
+The public Proof Coordinator route is limited to `/v1/prover/tasks` and its
+descendants. Its ALB health check still uses the internal `/healthz` endpoint.
+
+For a saved staged plan, complete `setup bridge-funding`, then run
+`scrollsdk setup protocol-context` from the operator directory. This generates
+`deployment/.data/protocol_context.json` and stops before policy/proof builds.
+Use this boundary to hand off the context for an independently reproduced policy
+build. Existing completion records survive the staged-plan migration; do not
+replan or repeat funding. See [stage boundaries](spec-preparation.md#commands).
+
 Follow the [Proof operator runbook](proof-operator-runbook.md) for the selected
 proof mode. For AWS storage, its dependency order is:
 
@@ -209,12 +237,12 @@ For Blockscout, run `scrollsdk setup db-init` only when its database or permissi
 need initialization, before generating its Secrets and deploying it.
 `BLOCKSCOUT_DB_CONNECTION_STRING` is the only retained database setting.
 
-`scrollsdk setup bootnode-public-p2p` is deprecated and is not part of
-`setup apply`. For external Reth/RPC peers, configure `reth.p2pExternal`
-only in the selected bootnodes' indexed values after `prep-charts`, with
-approved source CIDRs, subnets and EIP allocations. Identity generation alone
-does not enable public P2P. See [Reth bootnode public P2P access](bootnode-public-p2p.md)
-for the configuration and deployment boundary.
+For external Reth/RPC peers using independent NLBs, run
+`scrollsdk setup bootnode-public-p2p --spec <spec-path>` after base indexed values
+and saved public identities exist. The focused command validates existing AWS
+resources, updates only selected P2P bindings and prints public enodes; it does
+not deploy Helm or run the full `setup apply` flow. AWS infrastructure owns the
+partner allowlist. See [Reth bootnode public P2P access](bootnode-public-p2p.md).
 
 ## Publish proof programs to an existing AWS S3 store
 
@@ -342,6 +370,12 @@ scrollsdk setup cubesigner-policy deploy \
   --key-id "$CUBESIGNER_KEY_ID" \
   --output .data/cubesigner-policy-deployment --json
 ```
+
+This command is a limited creation/attachment path, not the Council-governed
+upgrade workflow for an existing key with `RequireRoleSession`. It has no
+approval replay option and refuses an existing multi-policy attachment. For
+release-specific external builds and governed upgrades, use the
+[external policy runbook](cubesigner-external-policy.md) and Core governance tools.
 
 This command performs remote writes using the current `cs` login. It verifies
 the uploaded Wasm SHA-256, invokes the hosted policy to reject an empty request,

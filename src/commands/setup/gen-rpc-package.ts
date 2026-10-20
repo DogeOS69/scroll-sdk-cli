@@ -8,10 +8,14 @@ import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
+import type {DeploymentSpec} from '../../types/deployment-spec.js'
 import type { DogeConfig } from '../../types/doge-config.js'
 
 import { L1_INTERFACE_RPC_ENDPOINT } from '../../config/constants.js'
+import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import {readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
+import {verifyExistingNlb} from '../../utils/existing-nlb.js'
 import { buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import { deriveBootnodeRethEnodeUrl } from './l2-bootnode-reth.js'
 
@@ -379,10 +383,25 @@ export function normalizeConfigMapEnvData(envData: unknown): EnvVarMap {
   return normalized
 }
 
-export function convertPeersToExternalDomains(peers: string[], loadBalancerDomains: Record<string, string> = {}): string[] {
+/** Independent NLBs have ClusterIP Services; discover endpoints through AWS, never Service status. */
+export function discoverExistingNlbDomains(valuesFiles: Record<string, string>, spec?: DeploymentSpec, aws: Pick<AwsCliRunner, 'json'> = new AwsCliRunner()): Record<string, string[]> {
+  const indices = Object.entries(valuesFiles).flatMap(([name, content]) => {
+    const match = /^l2-reth-bootnode-production-(\d+)\.yaml$/.exec(name)
+    if (!match) return []
+    const p2p = (yaml.load(content) as any)?.reth?.p2pExternal
+    return p2p?.enabled && p2p.mode === 'existing' ? [Number(match[1])] : []
+  })
+  if (indices.length === 0) return {}
+  if (!spec) throw new Error('Independent bootnode NLB values require --spec for read-only AWS endpoint verification')
+  const verified = verifyExistingNlb(spec, valuesFiles, aws)
+  if (verified.length !== indices.length || verified.some(item => !indices.includes(item.entry.index))) throw new Error('Existing bootnode NLB values differ from spec selection')
+  return Object.fromEntries(verified.map(item => [`l2-reth-bootnode-${item.entry.index}-p2p`, item.publicEndpoints.map(endpoint => endpoint.split(':')[0])]))
+}
+
+export function convertPeersToExternalDomains(peers: string[], loadBalancerDomains: Record<string, string | string[]> = {}): string[] {
   return peers.flatMap(peer => {
     // External RPC packages should peer through bootnode public p2p LoadBalancers
-    // created by `setup bootnode-public-p2p`.
+    // resolved from Service status or verified independent NLB EIPs.
     // Format: enode://nodekey@hostname:port
     const match = peer.match(/@l2-((?:reth-)?bootnode)-(\d+)(?:[.:][^:]+)*:(\d+)/)
     if (match) {
@@ -397,7 +416,7 @@ export function convertPeersToExternalDomains(peers: string[], loadBalancerDomai
       // topology, omit that stale peer from the external RPC package.
       if (!domain) return []
 
-      return [peer.replace(/@l2-(?:reth-)?bootnode-\d+(?:[.:][^:]+)*:\d+/, `@${domain}:${port}`)]
+      return (Array.isArray(domain) ? domain : [domain]).map(endpoint => peer.replace(/@l2-(?:reth-)?bootnode-\d+(?:[.:][^:]+)*:\d+/, `@${endpoint}:${port}`))
     }
 
     return [peer]
@@ -818,6 +837,7 @@ export default class SetupGenRpcPackage extends Command {
   ]
 
   static override flags = {
+    'aws-profile': Flags.string({description: 'AWS profile for independently managed bootnode NLB discovery'}),
     'config-path': Flags.string({
       default: './config.toml',
       description: 'Path to config.toml file containing cluster configuration',
@@ -836,6 +856,7 @@ export default class SetupGenRpcPackage extends Command {
       char: 'n',
       description: 'Kubernetes namespace',
     }),
+    spec: Flags.string({description: 'Deployment spec required when values reference independent bootnode NLBs'}),
     'values-dir': Flags.string({
       default: './values',
       description: 'Directory containing Helm values files (must include genesis.yaml)',
@@ -909,7 +930,10 @@ export default class SetupGenRpcPackage extends Command {
 
       // Step 5: Get LoadBalancer domains
       this.log(chalk.blue('Step 1: Getting LoadBalancer domains...'))
-      const loadBalancerDomains = await this.getLoadBalancerDomains(namespace)
+      const valuesFiles = readAlbValues(path.resolve(flags['values-dir']))
+      const existingDomains = discoverExistingNlbDomains(valuesFiles, flags.spec ? readExistingAlbSpec(process.cwd(), flags.spec) : undefined, new AwsCliRunner(flags['aws-profile']))
+
+      const loadBalancerDomains = {...await this.getLoadBalancerDomains(namespace), ...existingDomains}
       if (Object.keys(loadBalancerDomains).length > 0) {
         this.log(chalk.green(`✓ Found ${Object.keys(loadBalancerDomains).length} LoadBalancer domains`))
         for (const [service, domain] of Object.entries(loadBalancerDomains)) {
@@ -1286,7 +1310,7 @@ export default class SetupGenRpcPackage extends Command {
     _config: any | undefined,
     dogeConfig: DogeConfig,
     rpcPackageDir: string,
-    loadBalancerDomains: Record<string, string> = {},
+    loadBalancerDomains: Record<string, string | string[]> = {},
     namespace: string,
     valuesDir: string,
   ): L2NodeEnvGenerationResult {
@@ -1381,7 +1405,7 @@ export default class SetupGenRpcPackage extends Command {
     }
   }
 
-  private async getLoadBalancerDomains(namespace: string): Promise<Record<string, string>> {
+  private async getLoadBalancerDomains(namespace: string): Promise<Record<string, string | string[]>> {
     try {
       const { execSync } = await import('node:child_process')
 
@@ -1392,9 +1416,9 @@ export default class SetupGenRpcPackage extends Command {
       })
 
       const services = JSON.parse(output)
-      const loadBalancerDomains: Record<string, string> = {}
+      const loadBalancerDomains: Record<string, string | string[]> = {}
 
-      // setup bootnode-public-p2p creates LoadBalancer services matching l2-bootnode-{N}-p2p.
+      // Legacy Service-owned endpoints are discovered separately from independent NLBs.
       // Reth bootnode charts may expose equivalent l2-reth-bootnode-{N}-p2p services.
       for (const service of services.items) {
         if (service.spec?.type === 'LoadBalancer' &&
@@ -1459,7 +1483,7 @@ export default class SetupGenRpcPackage extends Command {
 
   private resolveExternalPeerList(
     rethTrustedPeers: string | undefined,
-    loadBalancerDomains: Record<string, string>,
+    loadBalancerDomains: Record<string, string | string[]>,
     rethBootnodePeers: string[] = [],
   ): string {
     const peers = rethBootnodePeers.length > 0 ? rethBootnodePeers : (parsePeerListValue(rethTrustedPeers) || rethTrustedPeers?.split(',').map(peer => peer.trim()).filter(Boolean) || [])

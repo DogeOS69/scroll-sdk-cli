@@ -69,7 +69,7 @@ describe('public service ingress controller policy', () => {
 
   it('preserves proof coordinator host/backend, sets 120 seconds, and rejects a shorter timeout', () => {
     const actual = buildProofCoordinatorIngress('proof.example.invalid', base())
-    expect(actual.hosts).to.deep.equal([{host: 'proof.example.invalid', paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}]}])
+    expect(actual.hosts).to.deep.equal([{host: 'proof.example.invalid', paths: [{path: '/v1/prover/tasks', pathType: 'Prefix', service: {port: 7788}}]}])
     expect(actual.annotations[`${alb}load-balancer-attributes`]).to.equal('idle_timeout.timeout_seconds=120')
     for (const attributes of ['idle_timeout.timeout_seconds=60', 'access_logs.s3.enabled=false']) {
       expect(() => buildProofCoordinatorIngress('proof.example.invalid', {...base(), annotations: {...base().annotations, [`${alb}load-balancer-attributes`]: attributes}})).to.throw('at least 120')

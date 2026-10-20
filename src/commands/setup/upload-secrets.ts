@@ -8,6 +8,6 @@ export default class UploadSecrets extends Command {
 
   async run(): Promise<void> {
     const {flags} = await this.parse(UploadSecrets)
-    await runPreparationStage('upload-secrets', flags.dir, flags.json)
+    await runPreparationStage('upload-secrets', flags.dir, flags.json, flags['defer-cubesigner'])
   }
 }

@@ -4,7 +4,7 @@ import {deployCubesignerPolicy} from '../../../utils/cubesigner-policy-deploy.js
 import {JsonOutputContext} from '../../../utils/json-output.js'
 
 export default class CubesignerPolicyDeploy extends Command {
-  static description = 'Upload a compiled policy, verify its remote digest, attach its exact version to a key, and read it back'
+  static description = 'Limited initial policy upload/attachment; emits an operation record, not preparation receipts. For an already attached governed policy use setup cubesigner-policy reconcile'
   static flags = {
     'build-receipt': Flags.string({required: true}),
     'build-receipt-sha256': Flags.string({required: true}),

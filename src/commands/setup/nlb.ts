@@ -41,7 +41,7 @@ export default class Nlb extends Command {
       const identity = identities.find(identity => identity.index === item.entry.index)?.enodeUrl
       return {enodes: identity ? publicBootnodeEnodes(identity, item.publicEndpoints) : undefined, index: item.entry.index, publicEndpoints: item.publicEndpoints, service: item.serviceName}
     })
-    const note = 'No AWS resources changed. Partner RLPx identity, allow/deny-source and block-sync tests are still required; a healthy TCP target is not protocol acceptance.'
+    const note = 'No AWS resources changed. Partner allowlists are owned by AWS infrastructure; this check validates network boundaries, not partner approval. Empty ingress is closed. Partner RLPx identity, allow/deny-source and block-sync tests are still required; a healthy TCP target is not protocol acceptance.'
     this.log(flags.json ? JSON.stringify({endpoints, healthy, note, verified: true}) : `Verified ${verified.length} independent bootnode NLBs.\n${endpoints.map(item => `bootnode ${item.index}: ${item.enodes?.join(', ') ?? `${item.publicEndpoints.join(', ')} (saved public identity unavailable; retain the existing enode public key)`}`).join('\n')}\n${note}`)
   }
 }

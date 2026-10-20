@@ -1,5 +1,9 @@
 # Existing ALB mode
 
+Public RPC, Portal and Blockscout can instead use a controller-managed
+[shared ALB](shared-alb.md), alongside dedicated external bindings for TSO and
+Proof Coordinator. A service must select only one of these ownership models.
+
 Set `infrastructure.aws.alb.mode: existing` to select externally managed ALBs.
 Each application chart owns its TargetGroupBindings alongside its ClusterIP
 Services and workloads. Managed Ingresses are disabled. Installing or removing
@@ -40,6 +44,14 @@ matching application chart versions from that SDK revision.
 Binding keys map to existing application values: `tso-service`,
 `proof-coordinator`, `frontends`, `l2-reth-rpc-public`,
 `l2-reth-rpc-public-ws`, `blockscout-api`, `blockscout-frontend`.
+In existing ALB mode, the two public RPC bindings are independent opt-ins.
+Omitting `l2-reth-rpc-public` disables HTTP RPC ingress; omitting
+`l2-reth-rpc-public-ws` disables WebSocket RPC ingress. Omitting both generates
+neither RPC TargetGroupBinding and disables both ingresses, including in a fresh
+output directory. No pre-created values override is needed. The RPC node itself
+is still generated for internal use. Outside existing ALB mode, the default RPC
+ingress behavior is unchanged.
+
 This workflow does not modify or restrict other applications' ingress settings.
 Each binding requires its actual Kubernetes Service name and numeric Service
 port. HTTP and WebSocket RPC require separate target groups and distinguishable

@@ -12,6 +12,7 @@ import type {
   ProofTopologySpec,
 } from '../types/proof-topology.js'
 
+import {canonicalDogecoinNetwork} from './dogecoin-network.js'
 import {DOGECOIN_RPC_CREDENTIAL_PLACEHOLDER, ETHEREUM_BEACON_PLACEHOLDER, ETHEREUM_RPC_PLACEHOLDER, resolveEthereumRpc, sanitizeEthereumRpcToml} from './ethereum-rpc-secrets.js'
 import {removeRetiredBatchWitnessSources} from './proof-coordinator-config.js'
 import {buildS3PublicBaseUrl} from './s3-archive.js'
@@ -700,7 +701,7 @@ export function compileProofTopology(options: CompileProofTopologyOptions): Vali
         prover_public_url: proverPublicUrl,
         ...(options.ethereumL1RpcUrl ? {ethereum_l1_rpc_url: ETHEREUM_RPC_PLACEHOLDER} : {}),
         ...(options.bridge ? {bridge: {
-          dogecoin_network: options.bridge.dogecoinNetwork,
+          dogecoin_network: canonicalDogecoinNetwork(options.bridge.dogecoinNetwork),
           dogecoin_rpc_password_file: mountedInput(bridgePasswordName),
           dogecoin_rpc_url: options.bridge.dogecoinRpcUrl,
           dogecoin_rpc_user: DOGECOIN_RPC_CREDENTIAL_PLACEHOLDER,

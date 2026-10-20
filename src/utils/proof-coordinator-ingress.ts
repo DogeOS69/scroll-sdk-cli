@@ -7,7 +7,7 @@ export function buildProofCoordinatorIngress(host: string, existing: Record<stri
     enabled: true,
     hosts: [{
       host,
-      paths: [{path: '/', pathType: 'Prefix', service: {port: 7788}}],
+      paths: [{path: '/v1/prover/tasks', pathType: 'Prefix', service: {port: 7788}}],
     }],
   }, 'proof-coordinator', validate)
 }

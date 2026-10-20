@@ -118,6 +118,22 @@ describe('production Bridge sequencer KMS', () => {
     expect(() => validatePreparation(spec)).to.throw('KMS-enabled image')
   })
 
+  it('keeps the signing identity when unrelated AWS routing changes, but rejects cluster identity drift', () => {
+    prepareSequencerKms(root, spec, runner())
+    const identity = productionSequencer(root, spec)
+    spec.infrastructure.aws!.secretsPrefix = 'another-prefix'
+    spec.infrastructure.aws!.sharedAlb = {enabled: true} as any
+    prepareSequencerKms(root, spec, runner())
+    expect(productionSequencer(root, spec)).deep.eq(identity)
+    expect(calls.filter(args => args[1] === 'create-key')).length(1)
+    for (const field of ['accountId', 'eksClusterName', 'region'] as const) {
+      const original = spec.infrastructure.aws![field]
+      spec.infrastructure.aws![field] = 'different'
+      expect(() => productionSequencer(root, spec)).to.throw('not prepared')
+      spec.infrastructure.aws![field] = original!
+    }
+  })
+
   it('creates once, pins the immutable ARN/public key and resumes after an IAM failure', () => {
     failPolicy = true
     expect(() => prepareSequencerKms(root, spec, runner())).to.throw('Injected')

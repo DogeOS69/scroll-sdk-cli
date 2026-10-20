@@ -3,7 +3,7 @@ const ALB = 'alb.ingress.kubernetes.io/'
 const NGINX = 'nginx.ingress.kubernetes.io/'
 export type PublicIngressService = string
 
-/** Controller, certificates and edge policy belong to operator values, not spec. */
+/** Normalize the effective controller settings after merging operator/spec values. */
 export function reconcilePublicServiceIngress(existing: Record<string, any>, service: PublicIngressService, validate = true): Record<string, any> {
   const ingress = structuredClone(existing)
   if (ingress.existingAlbBinding) ingress.enabled = false
@@ -46,14 +46,11 @@ export function reconcilePublicServiceIngress(existing: Record<string, any>, ser
     }
   }
 
-  // Helm recursively merges chart defaults: explicit tombstones prevent old
-  // packaged defaults from reintroducing nginx annotations/TLS at render time.
+  // Clear legacy TLS Secret lists when reconciling older Dogecoin values.
   if (service === 'dogecoin') {
-    ingress.annotations[`${NGINX}backend-protocol`] = null
     ingress.tls = []
   }
 
-  if (service === 'blockscout') for (const key of ['enable-cors', 'cors-allow-origin', 'cors-allow-headers', 'cors-allow-methods', 'cors-max-age']) ingress.annotations[`${NGINX}${key}`] = null
   return ingress
 }
 

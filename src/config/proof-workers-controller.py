@@ -98,11 +98,11 @@ def main(payload):
     project = plan['project']
     if action == 'status':
         return {'workers': snapshot(client, plan)}
-    if action == 'destroy':
+    if action in ('destroy', 'drain'):
         failed = False
         for worker in plan['workers']:
             try:
-                cleanup(client, plan, worker)
+                cleanup(client, plan, worker, abort=action == 'destroy')
             except Exception:
                 failed = True
         if failed:

@@ -54,6 +54,50 @@ describe('spec values runtime policy across entry points', () => {
     await Generate.run([mode, '--output', directory, '--json', ...args], cli)
   }
 
+  it('regenerates shared public ingress settings without losing Portal paths', async () => {
+    spec.infrastructure.aws!.sharedAlb = {
+      certificateArn: `arn:aws:acm:${spec.infrastructure.aws!.region}:${spec.infrastructure.aws!.accountId}:certificate/00000000-0000-0000-0000-000000000000`,
+      groupName: 'public-example', services: ['frontends', 'l2-reth-rpc-public'],
+    }
+    const directory = path.join(root, 'deployment')
+    await run('--bootstrap', directory, '--sdk-dir', sdk, '--force')
+    const portal = read(directory, 'frontends')
+    expect(portal.ingress.main.annotations['alb.ingress.kubernetes.io/group.name']).eq('public-example')
+    const routes = [{path: '/', pathType: 'Prefix'}, {path: '/api', pathType: 'Prefix', service: {name: 'example-api', port: 80}}]
+    portal.ingress.main.hosts[0].paths = routes
+    fs.writeFileSync(path.join(directory, 'values/frontends-production.yaml'), yaml.dump(portal))
+    spec.frontend.hosts = {...spec.frontend.hosts, frontend: 'renamed.example.invalid'}
+    await run('--with-values', directory, '--sdk-dir', sdk, '--force')
+    const regenerated = read(directory, 'frontends')
+    expect(regenerated.ingress.main.hosts[0]).deep.eq({host: 'renamed.example.invalid', paths: routes})
+    expect(regenerated.ingress.main.enabled).eq(true)
+    expect(read(directory, 'l2-reth-rpc-public').ingress.websocket.enabled).eq(false)
+  })
+
+  it('rolls back a failed bootstrap and preserves an operator Makefile on retry', async () => {
+    const directory = path.join(root, 'deployment')
+    const obstruction = path.join(directory, '.data/protocol_seed.toml')
+    fs.mkdirSync(obstruction, {recursive: true})
+    fs.writeFileSync(path.join(directory, '.scrollsdkignore'), '.scrollsdk/\n')
+    fs.mkdirSync(path.join(directory, '.scrollsdk'))
+    fs.writeFileSync(path.join(directory, '.scrollsdk/state.json'), 'private workflow state')
+    let error: unknown
+    try {await run('--bootstrap', directory, '--sdk-dir', sdk, '--force')} catch (error_) {error = error_}
+    expect(error).to.be.instanceOf(Error)
+    expect(fs.existsSync(path.join(directory, 'Makefile'))).false
+    expect(fs.existsSync(path.join(directory, 'config.toml'))).false
+    expect(fs.existsSync(path.join(directory, 'values'))).false
+    expect(fs.readFileSync(path.join(directory, '.scrollsdk/state.json'), 'utf8')).eq('private workflow state')
+    fs.rmdirSync(obstruction)
+    const makefile = '# operator-owned Makefile\nNAMESPACE ?= reviewed-test\n'
+    fs.writeFileSync(path.join(directory, 'Makefile'), makefile)
+    await run('--bootstrap', directory, '--sdk-dir', sdk, '--force')
+    expect(fs.readFileSync(path.join(directory, 'Makefile'), 'utf8')).eq(makefile)
+    expect(fs.existsSync(path.join(directory, 'config.toml'))).true
+    expect(fs.existsSync(path.join(directory, 'values/frontends-config.yaml'))).true
+    expect(fs.readdirSync(root).filter(name => name.includes('.scrollsdk-generation-'))).empty
+  })
+
   for (const network of ['mainnet', 'testnet'] as const) {
     it(`bootstraps ${network} before policy receipts exist without downgrading enforcement`, async () => {
       spec.dogecoin.network = network
@@ -94,7 +138,8 @@ describe('spec values runtime policy across entry points', () => {
     expect(fs.existsSync(directory)).to.equal(false)
   })
 
-  for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects existing ALB bindings through ${mode} without re-enabling ingress on regeneration`, async () => {
+  for (const rpcSelection of ['both', 'http', 'ws', 'none'])
+    for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects existing ALB bindings through ${mode} with ${rpcSelection} RPC endpoints on fresh generation and regeneration`, async () => {
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture', region: 'us-east-1'}, provider: 'aws'}
     // Exercise the stacked bootstrap fix together with existing ALB projection.
     if (mode === '--bootstrap') spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
@@ -117,8 +162,19 @@ describe('spec values runtime policy across entry points', () => {
     spec.infrastructure.aws!.alb.endpoints.proof = {listenerArn: `${prefix}listener/app/proof/3333333333333333/4444444444444444`, loadBalancerArn: `${prefix}loadbalancer/app/proof/3333333333333333`}
     spec.infrastructure.aws!.alb.bindings['proof-coordinator'] = {endpoint: 'proof', serviceRef: {name: 'proof-coordinator', port: 7788}, targetGroupArn: `${prefix}targetgroup/proof/${String(++index).padStart(16, '0')}`}
 
+    if (!['both', 'http'].includes(rpcSelection)) delete spec.infrastructure.aws!.alb.bindings['l2-reth-rpc-public']
+    if (!['both', 'ws'].includes(rpcSelection)) delete spec.infrastructure.aws!.alb.bindings['l2-reth-rpc-public-ws']
+    // Prove no operator overlay from an earlier generation is required.
+    fs.rmSync(directory, {force: true, recursive: true})
     for (let repeat = 0; repeat < 2; repeat++) {
       await run(mode, directory, '--sdk-dir', sdk, '--force')
+      const rpc = read(directory, 'l2-reth-rpc-public')
+      expect(rpc.ingress.main.enabled).to.equal(false)
+      expect(rpc.ingress.websocket.enabled).to.equal(false)
+      for (const name of ['l2-reth-rpc-public', 'l2-reth-rpc-public-ws']) {
+        expect(Object.hasOwn(rpc.targetGroupBindings ?? {}, name)).to.equal(Object.hasOwn(spec.infrastructure.aws!.alb.bindings, name))
+      }
+
       if (mode === '--bootstrap') {
         const env = Object.fromEntries(read(directory, 'cubesigner-signer').env.map((item: any) => [item.name, item.value]))
         expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).to.equal('production_verifier_key_policy')

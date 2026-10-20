@@ -8,8 +8,8 @@ import path from 'node:path'
 import type {RotateKeyIntent, RotationCluster} from './rotation-cluster.js'
 import type {LivenessOutpoint, RotateKeyStatus, RotationExport} from './rotation-export.js'
 
+import {canonicalDogecoinNetwork} from './dogecoin-network.js'
 import {assertDeploymentIdentity, assertPredecessor, formatOutpoint, isOutpoint, rotationSigners} from './rotation-export.js'
-import {tsoSignerNetwork} from './tso-signer-network.js'
 import {WP_VALUES_FILE, isFreshPoll, parseLastPolls} from './tso-signer-polls.js'
 
 /** Runs an external tool (helm, make, kubectl) with extra env; injectable for tests. Throws on failure. */
@@ -20,7 +20,7 @@ export const runTool: Run = (command, args, cwd, env) => execFileSync(command, a
 
 /**
  * Merge every current and target key into the WP `tsoSigners`, in the chart's
- * field names. Never removes or replaces an entry: an identical entry is a
+ * field names, canonicalizing legacy network aliases. An identical entry is a
  * no-op, and a key already registered with another transport key (or the
  * reverse, or another role/delivery/network) is an error.
  */
@@ -28,8 +28,8 @@ const REGISTRATION_FIELDS = ['delivery', 'network', 'publicKeyOverride', 'roles'
 
 export function mergeRotationSigners(existing: unknown, rotation: RotationExport): {added: string[]; signers: any[]} {
   if (!Array.isArray(existing)) throw new Error(`${WP_VALUES_FILE} has no tsoSigners list`)
-  const signers = [...existing]
-  const network = tsoSignerNetwork(rotation.network)
+  const signers = existing.map(entry => ({...entry, network: canonicalDogecoinNetwork(entry?.network)}))
+  const network = canonicalDogecoinNetwork(rotation.network)
   const added: string[] = []
   for (const signer of rotationSigners(rotation)) {
     const matches = signers.filter((entry: any) => String(entry?.publicKeyOverride ?? '').toLowerCase() === signer.public_key || String(entry?.transportPubkey ?? '').toLowerCase() === signer.transport_pubkey)
@@ -72,10 +72,11 @@ export async function registerRotation(options: RegisterOptions): Promise<Regist
   let values: any
   try {values = yaml.load(fs.readFileSync(file, 'utf8'))} catch {throw new Error(`Cannot read ${WP_VALUES_FILE}`)}
   const {added, signers} = mergeRotationSigners(values?.tsoSigners, rotation)
+  const changed = added.length > 0 || signers.some((signer, index) => signer.network !== values.tsoSigners[index].network)
   const wanted = rotationSigners(rotation).map(signer => signer.public_key)
   const live = new Set(status.registered_signer_pubkeys.map(key => key.toLowerCase()))
-  // Install when keys were added, or when an earlier install failed after the values were saved.
-  const install = added.length > 0 || wanted.some(key => !live.has(key))
+  // Install changed registrations (including network aliases), or retry missing live keys.
+  const install = changed || wanted.some(key => !live.has(key))
   if (install) {
     const merged = yaml.dump({...values, tsoSigners: signers}, {lineWidth: -1, noRefs: true})
     // Render the merged values with the chart's own guards before writing anything.
@@ -85,7 +86,7 @@ export async function registerRotation(options: RegisterOptions): Promise<Regist
       try {run('helm', ['template', 'withdrawal-processor', ...wpChart(cluster.deploymentDir, run, env), '--kube-context', cluster.context, '--namespace', cluster.namespace, '--values', path.join(scratch, 'values.yaml')], cluster.deploymentDir, env)} catch {throw new Error('helm template rejected the merged tsoSigners; nothing was written')}
     } finally {fs.rmSync(scratch, {force: true, recursive: true})}
 
-    if (added.length > 0) {
+    if (changed) {
       const temporary = `${file}.tmp-${process.pid}`
       // eslint-disable-next-line no-bitwise -- keep the values file permissions
       fs.writeFileSync(temporary, merged, {flag: 'wx', mode: fs.statSync(file).mode & 0o777})
@@ -95,7 +96,7 @@ export async function registerRotation(options: RegisterOptions): Promise<Regist
     try {
       run('make', ['install-withdrawal-processor', `KUBE_CONTEXT=${cluster.context}`, `NAMESPACE=${cluster.namespace}`], cluster.deploymentDir, env)
       run('kubectl', ['--context', cluster.context, '-n', cluster.namespace, 'rollout', 'status', 'statefulset/withdrawal-processor', '--timeout=300s'], cluster.deploymentDir, env)
-    } catch {throw new Error(`The WP install or rollout failed${added.length > 0 ? ` after ${WP_VALUES_FILE} was updated` : ''}; fix it and re-run register, which installs again until the WP reports every key`)}
+    } catch {throw new Error(`The WP install or rollout failed${changed ? ` after ${WP_VALUES_FILE} was updated` : ''}; fix it and re-run register, which installs again until the WP reports every key`)}
   }
 
   // The WP only reports keys the TSO confirmed to it; wait for every export key.

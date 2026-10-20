@@ -1,8 +1,8 @@
-import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {CubesignerExpectedPolicyInputs, CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
 import type {MonitoringConfig} from '../utils/monitoring-slack.js'
 import type {CapacityManagerConfig} from './capacity-manager.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
-import type {ExistingAlbConfig} from './existing-alb.js'
+import type {ExistingAlbConfig, SharedAlbConfig} from './existing-alb.js'
 import type {PreparationConfig} from './preparation.js'
 import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
 import type {ProofWorkersConfig} from './proof-workers.js'
@@ -74,6 +74,9 @@ export interface DeploymentSpec {
 
   /** Genesis configuration */
   genesis: GenesisConfig
+
+  /** YAML overlays keyed by generated values filename. Frozen in the plan and reapplied after chart preparation; never place credentials here. */
+  helmValues?: Record<string, string>
 
   /** Explicit identity operations, executed separately by setup gen-keystore. */
   identities?: DeploymentIdentityIntent
@@ -197,6 +200,8 @@ export interface InfrastructureConfig {
     region: string
     /** Secrets Manager prefix */
     secretsPrefix?: string
+    /** Opt in public services to one controller-managed HTTPS ALB. */
+    sharedAlb?: SharedAlbConfig
   }
 
   /** Number of bootnode instances */
@@ -664,6 +669,7 @@ export interface SigningConfig {
 
   /** CubeSigner TEE key configuration */
   cubesigner?: {
+    expectedPolicy?: CubesignerExpectedPolicyInputs
     /** Read-only CubeSigner identity lookup during plan. Omit keyId only for a single-key role. */
     identity?: {keyId?: string; roleId: string}
     mode?: CubesignerPolicyMode
@@ -782,9 +788,11 @@ export interface ContractsConfig {
     penaltyFactor: number
     scalar: number
   }
-
   /** L1 contract deployment block (set after deployment) */
   l1DeploymentBlock?: number
+
+  /** Temporary genesis/bootstrap recipient; defaults to address(1). Not the final Dogecoin withdrawal target. */
+  l1FeeVaultAddress?: string
 
   /** Fresh-chain L2 system-config base fee overhead, in wei. */
   l2BaseFeeOverheadWei?: string
@@ -925,13 +933,14 @@ export interface BootnodePublicP2p {
   enabled: boolean
   /** Existing infrastructure stays outside the application Helm lifecycle. */
   existingNlb?: {
-    listenerArn: string
-    loadBalancerArn: string
+    listenerArn?: string
+    loadBalancerArn?: string
     securityGroupIds: string[]
     targetGroupArn: string
   }
   index: number
   mode?: 'existing' | 'service'
+  /** Service mode only. Existing NLB partner allowlists are owned by AWS infrastructure. */
   sourceRanges?: string[]
   subnets?: string[]
 }

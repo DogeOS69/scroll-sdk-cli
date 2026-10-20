@@ -2,7 +2,7 @@ import * as toml from '@iarna/toml'
 import fs from 'node:fs'
 
 import type {DogeConfig} from '../types/doge-config.js'
-import type {CubesignerPolicyReceiptInputs} from './cubesigner-policy-receipts.js'
+import type {CubesignerExpectedPolicyInputs, CubesignerPolicyReceiptInputs} from './cubesigner-policy-receipts.js'
 
 import {resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {AwaitingInput, localPath, privateWrite, writeJson} from './preparation-io.js'
@@ -16,6 +16,16 @@ export function importPreparationPolicyReceipts(root: string): void {
   const config = toml.parse(fs.readFileSync(file, 'utf8')) as unknown as DogeConfig
   const selection = config.cubesigner
   if (selection?.mode !== 'production_verifier_key_policy') return
+
+  const expectedFile = localPath(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
+  if (selection.expectedPolicy || fs.existsSync(expectedFile)) {
+    const expectedPolicy: CubesignerExpectedPolicyInputs = selection.expectedPolicy ?? JSON.parse(fs.readFileSync(proofRegularFile(expectedFile), 'utf8'))
+    resolveCubesignerPolicy({deploymentDir: root, keys: (selection.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))),
+      network: config.network,
+      scope: 'preparation', selection: {...selection, expectedPolicy}})
+    if (!selection.expectedPolicy) {selection.expectedPolicy = expectedPolicy; privateWrite(file, toml.stringify(config as unknown as toml.JsonMap))}
+    return
+  }
 
   const resolve = (policyReceipts: CubesignerPolicyReceiptInputs | undefined) => resolveCubesignerPolicy({
     deploymentDir: root,
@@ -42,7 +52,7 @@ export function importPreparationPolicyReceipts(root: string): void {
   if (!fs.existsSync(input)) writeJson(input, inputTemplate)
   const waiting = () => new AwaitingInput({
     file: input, inputTemplate,
-    message: 'Complete policy publication and Council-approved attachment, then fill receipts.json with the governed release/attachment references and their SHA-256 digests. Paths are relative to the deployment directory. Include liveEvidence if required by the policy. Rerun the same preparation command; do not edit the spec, frozen intent or doge-config.toml.',
+    message: 'Expected policy inputs are missing. Use setup cubesigner-policy prepare-input and prepare to validate the published version and material identities before approval; see docs/cubesigner-preparation.md. Verified release/attachment receipts remain supported. If the policy is already published and Council-approved, use scrollsdk setup cubesigner-policy reconcile --dir <deployment> --input <reviewed-input.json>; do not repeat publication or approval. See docs/cubesigner-external-policy.md for the release/test inputs. Attachment approval is not required for preparation. Include liveEvidence if required by the release. Rerun the same preparation command; do not edit the spec, frozen intent or doge-config.toml.',
   })
   let refs: CubesignerPolicyReceiptInputs
   try {refs = JSON.parse(fs.readFileSync(proofRegularFile(input, 64 * 1024), 'utf8'))} catch {throw waiting()}

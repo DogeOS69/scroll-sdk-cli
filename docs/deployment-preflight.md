@@ -9,9 +9,22 @@ permissions and validate signer routing. Run them from the deployment directory.
 
 Create the intended role/key and session with `setup cubesigner-init` and
 `setup cubesigner-refresh`. Existing local files can be reused directly when
-continuing in the same deployment directory. For optional backup and recovery
-before archiving/replacing deployment inputs, use the `cubesigner` maintenance
-group:
+continuing in the same deployment directory.
+
+For a saved staged plan, run `setup signer-session --dir .` after `setup render --dir .` and
+before `setup upload-secrets --dir .` when running from the deployment directory.
+Production mode uses `setup cubesigner-policy prepare-session`, including its
+reviewed lifetimes and interrupted-creation journal. Transport mode reuses valid
+local files or calls `setup cubesigner-refresh` when both files are absent.
+Completed session steps are skipped on retry. Rendering
+alone no longer creates a remote session. If a provider request failed without a
+recorded result, inspect the remote session state before retrying. See the
+[staged preparation workflow](spec-preparation.md#commands) for the
+complete sequence. The standalone identity/session commands remain available for
+manual workflows.
+
+For optional backup and recovery before archiving/replacing deployment inputs,
+use the `cubesigner` maintenance group:
 
 ```bash
 scrollsdk cubesigner checkpoint --action export \
@@ -54,12 +67,15 @@ scrollsdk setup proof-config-check --json
 scrollsdk setup deployment-preflight --json
 ```
 
-`deployment-preflight` is read-only. It checks the contract owner signing
+By default, `deployment-preflight` checks local configuration. It checks the contract owner signing
 configuration, the fixed 42,069,000 sat genesis sequencing output, WP fees, the DA batcher allowlist,
 the relationship between chunk gas and genesis block gas, CubeSigner policy
 selection, and dstack configuration. It consumes doge-config and conventional
 values/native paths. It does not rewrite configuration, choose a release, inspect
 live database schemas or perform database recovery.
+
+Optional runtime probes are described below. Kubernetes operations are read-only;
+the signer and Reth probes create disposable local Docker containers.
 
 `setup gen-keystore --accounts` fills an empty owner with the deployer address;
 an explicit owner is preserved. Missing local owner signing access is reported
@@ -192,3 +208,80 @@ generation, without mutations. Customize namespace/deployment for chart name
 overrides. This is Deployment availability, not provider authentication, GPU
 allocation, worker readiness or proof acceptance. Controller installation and
 GPU fleet/task submission remain separate actions.
+
+## 6. Opt into cluster, RPC and Reth startup checks
+
+Prepare manifests with `helm template` using the same chart version, namespace
+and values planned for installation. Paths passed to `--rendered-manifest` are
+relative to `--deployment-dir`. Load authenticated RPC URLs into the named
+environment variables through your private configuration; pass only variable
+names on the command line.
+
+```bash
+scrollsdk setup deployment-preflight --deployment-dir . --json \
+  --kube-context YOUR_EXPLICIT_CONTEXT \
+  --rendered-manifest rendered/reth.yaml \
+  --rendered-manifest rendered/ingress.yaml \
+  --ethereum-rpc-env SEPOLIA_RPC_A --ethereum-rpc-env SEPOLIA_RPC_B \
+  --ethereum-chain-id 11155111 --ethereum-rpc-quorum 2 \
+  --signer-container local-attestation-signer \
+  --dogecoin-rpc-env DOGECOIN_RPC_URL \
+  --reth-image example.invalid/approved-rollup-node:reviewed-tag
+```
+
+Replace the example image with the exact reviewed image. Select only the probes
+you need; omitted probes report `not-checked`.
+
+| Flags | Check and limit |
+| --- | --- |
+| `--rendered-manifest` and `--kube-context` | Per-Pod CPU/memory fit on ready nodes; ALB manifests also require the Load Balancer Controller and TargetGroupBinding CRD. This excludes current utilization, aggregate capacity, taints, affinity and storage topology. |
+| `--ethereum-rpc-env`, `--ethereum-chain-id`, `--ethereum-rpc-quorum` | A four-call batch checks chain ID and latest/safe/finalized headers, then compares a shared finalized block across the required number of endpoints. Defaults are Sepolia chain ID 11155111 and quorum 1. This does not test Beacon APIs or ongoing reliability. |
+| `--signer-container` and `--dogecoin-rpc-env` | Both flags are required together. Disposable curl calls `getblockchaininfo` from the running signer's network namespace, with credentials on stdin. This checks RPC reachability, not attestation or proof acceptance. |
+| `--reth-image` | Starts the selected image with `.data/genesis.json` and a local L1 fixture in two disposable containers with external networking disabled. Requires HTTP startup and a short stability window. It does not test real DA, chain sync or production readiness. |
+
+Docker and the probe images must be available for container checks; missing images
+may be pulled. Temporary containers and Reth data are removed after the check.
+
+## 7. Verify CubeSigner activation before installation
+
+The matching SDK Makefile's `install-cubesigner-signer` target invokes this gate
+before Helm. To inspect the gate directly after Secret upload:
+
+```bash
+scrollsdk setup cubesigner-policy verify-activation --dir . \
+  --kube-context YOUR_EXPLICIT_CONTEXT --namespace default \
+  --values values/cubesigner-signer-production.yaml \
+  --chart oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer \
+  --chart-version 0.1.9 --json
+```
+
+Use the same chart/version, namespace and values as your installation. Provider
+read access and Kubernetes access are required; `--session-file` optionally
+selects a private management session file. The gate renders the workload, checks
+remote key/role/policy/session state and compares delivered Secrets and protocol
+context. Non-mainnet `transport_only` must be explicit; production mode requires
+expected material bindings, executed attachment and fresh governance evidence,
+plus the reviewed runtime-session limits. `--policy-only` checks production
+policy without runtime delivery, returns pending activation, and cannot authorize
+installation; full activation requires an explicit `--kube-context`. Unknown
+attached policies fail even in transport mode. This command does not create sessions, approve policies, install releases,
+inspect a running Pod's refresh cache or establish real-proof acceptance.
+
+## 8. Check final contract verification
+
+After Blockscout is available, submit source and require full verification, or
+read the final status without resubmitting:
+
+```bash
+scrollsdk setup verify-contracts --config-dir . --preinstalls \
+  --require-verified --wait-seconds 120
+scrollsdk setup verify-contracts --config-dir . --preinstalls --status-only
+```
+
+`--preinstalls` includes the required preinstalls alongside business contracts;
+use `--preinstalls-only` to restrict the target set. `--status-only` performs no
+Docker invocation or submission. Both status modes fail if any selected target
+is partial, pending or unavailable; only full verification passes. The optional
+polling window defaults to zero and is limited to 600 seconds. Without either
+status flag, successful submission reports final status as `not-checked`.
+Block-hash history has no Solidity source and remains a separate bytecode check.

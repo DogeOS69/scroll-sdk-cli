@@ -4,11 +4,18 @@ For supported public applications on AWS, select [existing ALB references](exist
 `infrastructure.aws.alb`. Final preparation requires bindings for exposed
 endpoints; Helm installs bindings without owning the ALB lifecycle.
 
-`setup plan` saves a fresh deployment plan. Six stage commands execute only their
+`setup plan` saves a fresh deployment plan. Eleven stage commands execute only their
 selected stage, persist completed steps and stop for external inputs. Run the
 commands from the private working directory containing your spec and environment
 file. A stage checks its prerequisites and never executes another stage for you.
 They do not install Helm releases or claim that a running chain has passed acceptance.
+
+The initial plan is written in a temporary sibling directory and published only
+after all plan records are saved. If writing fails, rerun `setup plan` with the
+same output directory. Bootstrap stages its generated files before publishing
+them and rolls back if publication fails. An existing Makefile is preserved,
+including with `generate-from-spec --bootstrap --force`, so retrying bootstrap
+does not discard operator edits.
 
 The CLI does not create or modify `.gitignore` in generated deployment directories
 or bundles. Operators manage Git ignore rules; existing `.gitignore` files are
@@ -26,25 +33,30 @@ Secrets Manager or Vault, like Dogecoin RPC credentials. The monitor chart's
 ExternalSecret synchronizes the referenced Kubernetes Secret; do not upload a
 standalone Grafana admin YAML.
 See the SDK's `examples/deployment-spec.md` for the two releases' values and
-verification. Do not rerun `install-all` to add missing releases after contracts
-have already been deployed.
+verification. Use the individual installation targets and verify each release
+before proceeding.
 
 The SDK templates disable Grafana and Dogecoin ingress by default. The CLI
 preserves the ingress switches in deployment values; generating domains does
 not enable public access. Use local port forwarding, or explicitly configure
 and enable ingress in the relevant values file. Existing operator choices are
 preserved on regeneration. Blockscout values may be generated for later use,
-but `make install-all` does not install Blockscout or its contract verifier.
-Prepare its database and values, then opt in with `make install-blockscout`.
+and installation is explicit. Prepare its database and values, then install
+Blockscout and its contract verifier with `make install-blockscout`.
 Before final `setup render`, fill the enabled ingress certificate references and
 TSO edge network-policy CIDRs in the deployment values. Intermediate chart
-compilation inside `setup proof-materials` defers these edge inputs and status-page
+compilation inside `setup proof-publish` defers these edge inputs and status-page
 reconciliation, while still validating internal callers and enabled isolation.
 Local configuration may be edited between stages. Changes to recorded TOML,
 genesis or other generated files produce warnings and do not block preparation.
 Values YAML and Makefile remain excluded from fingerprint tracking.
 These defaults come from the committed SDK revision selected by plan/bootstrap;
 an older checkout or an existing deployment retains its own settings.
+
+For Reth RPC and bootnode followers, review
+[restart on signer rotation](reth-only-peers.md#follower-restart-on-signer-rotation)
+when selecting SDK templates and checking generated values. The
+`--consensus.exit-on-signer-rotation` flag must not be enabled on sequencers.
 
 The canonical operator spec and environment templates live in the scroll-sdk
 repository: [deployment-spec.example.yaml](https://github.com/DogeOS69/scroll-sdk/blob/v0.3.0-develop/examples/deployment-spec.example.yaml)
@@ -54,7 +66,7 @@ under `test/fixtures/deployment-spec/`; those are not operator templates.
 
 The SDK example selects testnet production Bridge preparation and active/real/enforce
 proofs; it generates real identities from an approved proof release after the protocol
-context exists. `setup proof-materials` exports the signer deployment kit and waits
+context exists. `setup signer-kit` exports the signer deployment kit; `setup signer-kit-publish` waits
 for its publication record. `setup render` regenerates configuration and Secrets
 before the final enforcing check; no partner policy receipts are collected.
 
@@ -147,7 +159,7 @@ the L2 RPC; its fee sampling RPC is independent of that balance check and of DA.
 The complete bridge-operator sequence (inputs, funding, external Secrets,
 installation order, partner handoff, GPU startup and runtime acceptance) is in
 [`scroll-sdk/examples/bridge-operator-deployment.md`](https://github.com/DogeOS69/scroll-sdk/blob/feat/spec-preparation-examples/examples/bridge-operator-deployment.md).
-`plan` and the six stage commands are preparation entrypoints; they do not replace Helm installation
+`plan` and the twelve stage commands are preparation entrypoints; they do not replace Helm installation
 or automatically rent a GPU.
 
 
@@ -160,10 +172,17 @@ scrollsdk setup bridge-funding
 # Fund the displayed helper address and record helper.txid/vout, then rerun.
 # Core distributes to the wallets and funds the final Bridge automatically.
 scrollsdk setup bridge-funding
+scrollsdk setup protocol-context
+# Hand off the context before selecting the approved policy build route.
 scrollsdk setup proof-materials
-# For enforce mode: publish the kit via Governance and save published.json, then rerun.
-scrollsdk setup proof-materials
+scrollsdk setup policy-prepare
+# Import the published expected policy: see cubesigner-preparation.md.
+scrollsdk setup proof-publish
+scrollsdk setup signer-kit
+# Separate explicit publication/handoff; this does not block unrelated render.
+scrollsdk setup signer-kit-publish
 scrollsdk setup render
+scrollsdk setup signer-session  # only when CubeSigner is configured
 scrollsdk setup upload-secrets
 # Review deployment/Makefile and install releases manually.
 ```
@@ -205,16 +224,57 @@ generation so a retry uses the same identity.
 | `setup genesis` | Bootstrap pinned templates; pin the deployer; generate local genesis and contract addresses. | No AWS calls, funding or service identity creation. |
 | `setup aws` | Prepare declared service identities, proof store/IAM/token, archive access, Bridge sequencer KMS, controller credentials and selected existing databases. | Resource facts are saved automatically; no copy back into the spec. No GPU allocation. |
 | `setup bridge-funding` | Bind genesis/DA anchor; verify helper funding; invoke Core setup and marked funding; verify all resulting outpoints. | One operator wallet handoff. Setup and Bridge funding broadcast transactions and require manual reconciliation after ambiguous failures. |
-| `setup proof-materials` | Generate protocol context; import declared inputs; bake/import proof materials; compile/publish proof configuration; export the deployment kit and record its publication. | Preliminary chart compilation is needed to bind the kit. Wait for its immutable URL and manifest digest within this stage. |
-| `setup render` | Render final values/native configuration with the recorded kit publication; generate private Secrets; prepare optional capacity-manager values and WP access; run proof checks. | Helm releases remain uninstalled. |
-| `setup upload-secrets` | Upload using the saved provider, region, namespace and Secret prefix. | AWS defaults to the deployment-specific prefix; no retyping it. |
+| `setup protocol-context` | Generate canonical `.data/protocol_context.json` and its runtime YAML from completed Bridge funding. | Stops before CubeSigner policy builds, proof baking, publication and governance. No funding is replayed. |
+| `setup proof-materials` | Import, bake, export and check proof materials. | No policy attachment, artifact publication or session creation. |
+| `setup policy-prepare` | Build/import the reviewed policy and emit its handoff. | Independent of proof baking after protocol context; no provider mutation. |
+| `setup proof-publish` | Compile expected configuration and publish the selected proof bundle. | Explicit cloud boundary; requires complete material identities and concrete published policy. |
+| `setup signer-kit` | Export the canonical signer deployment kit. | Local export only. |
+| `setup signer-kit-publish` | Publish the kit or consume its reviewed publication record. | Separate cloud/human handoff; unrelated render/upload can proceed while pending. |
+| `setup render` | Render production values and generate private Secrets. | No remote session creation or Helm installation. |
+| `setup signer-session` | Validate/reuse or create the role session using the selected mode. | Explicit provider mutation when absent. `--defer-cubesigner` records this work as deferred. |
+| `setup upload-secrets` | Upload using the saved destination. Signer Secrets have a separate checkpoint. | `--defer-cubesigner` excludes signer files even if stale files exist locally. |
 
-`setup proof-materials --generation ...` and other explicit material flags retain
-the standalone material utility. Without material flags, the command runs the
-saved stage and defaults to `deployment/`, like the other stage commands.
+Follow [CubeSigner preparation and activation](cubesigner-preparation.md) for the
+complete workflow. Expected policy preparation does not require attachment approval.
+The session step uses role authorization independently of the new attachment;
+valid scoped sessions are reused and invalid sessions require explicit recovery.
+Production mode delegates to `cubesigner-policy prepare-session`, preserving its
+reviewed lifetime limits, remote validation and interrupted-creation journal.
+Non-mainnet transport mode reuses existing local role/key/expiry-matching files
+or calls `cubesigner-refresh` when both files are absent; activation verifies
+remote session state before installation. Completed session steps are skipped
+on retry. An ambiguous transport-mode creation failure requires provider
+inspection before retrying.
+Use `signer-session --defer-cubesigner` and `upload-secrets --defer-cubesigner` to proceed
+with unrelated services. Deferred steps are recorded as deferred, never completed.
+Rerun signer-session and upload without the flag to finish only those steps.
+
+`proof-materials --generation ...` or `--preparation-receipt ...` explicitly selects
+the standalone utility. `--non-interactive` alone still resumes the saved stage;
+other material flags without an explicit standalone selector are rejected.
 
 Existing v1 plans remain resumable with `setup apply`; new v2 plans require the
 explicit stage commands. `setup apply` does not execute an unfinished staged plan.
+
+`setup protocol-context` is an independent handoff boundary. It requires all
+Bridge funding prerequisites to be completed and runs only the existing context
+generation step. Rerunning a completed stage does not regenerate its artifacts.
+The command accepts the same `--dir` / `--deployment-dir` options as other stages.
+
+Saved plans must match the current workflow steps. Older step layouts are not
+migrated; incompatible plans fail before execution without modifying the saved
+plan or state. Completed steps of a matching plan are skipped on resume.
+
+For a release requiring an external reproducible policy build (for example,
+`tools/cubesigner/build-verifier.sh <commit>`), stop after this context stage and
+follow that release's build and governance instructions. Import the reviewed
+artifact with `setup cubesigner-policy import` as described in the
+[external policy runbook](cubesigner-external-policy.md). That command selects
+the external build for the existing `cubesigner-policy-build` preparation step;
+it does not mark any workflow step complete or grant approval. On resume, the
+step revalidates the imported artifact and current context instead of exporting
+a compiler image. Do not use an incompatible compiler to advance a checkpoint.
+
 
 Planning validates the spec and pinned SDK templates, writes the private plan,
 and lists local, read-only, cloud and chain steps. It does not provision resources
@@ -404,8 +464,7 @@ reconciliation. Do not delete workflow state or blindly repeat `setup`.
 ### Explicit external-wallet funding
 
 Set `preparation.bridge.production.funding: external` to retain the manual
-sequencer/fee-wallet and marked Bridge funding handoffs below. Saved older plans
-continue using this path.
+sequencer/fee-wallet and marked Bridge funding handoffs below.
 
 Supply the actual sequencer output index; the CLI accepts zero and nonzero
 indices without an opt-in flag. Address, amount, confirmations, unspent status
@@ -435,7 +494,7 @@ The workflow:
    sequencer outpoint. No placeholder namespace is presented as a funding target.
 6. Displays the final Bridge address and the required funding marker. Waits for
    a confirmed marked funding output, verifies it, then completes the funding stage. The next explicit command,
-   `setup proof-materials`, generates protocol context and proof configuration.
+   `setup protocol-context`, exports protocol context; subsequent proof stages prepare and publish configuration.
 
 The default funding input is `.scrollsdk/inputs/bridge-funding.json`; omit
 `fundingFile` unless a custom location is needed. No file is required at plan
@@ -550,8 +609,10 @@ the CLI verifies the exported Wasm and its SHA-256 and writes a v2 build receipt
 See [the CubeSigner setup guide](setup-order.md#cubesigner-wasm-preparation-and-attachment)
 for registry authentication and the implemented interface. For staged deployments
 with `signing.cubesigner` configured (except explicit `mode: transport_only`),
-`setup proof-materials` first exports the policy Wasm using the existing
-`setup cubesigner-policy build` command. It never publishes or attaches a policy.
+`setup policy-prepare` prepares the policy Wasm using the selected build
+source. The default is `setup cubesigner-policy build`; an explicit
+`setup cubesigner-policy import` selection reuses a verified external artifact.
+Neither preparation route publishes or attaches a policy.
 
 The proof release manifest does not select the private policy compiler. On the
 first run, the stage writes `.scrollsdk/inputs/cubesigner-policy/compiler.json`
@@ -568,39 +629,24 @@ Core release owner:
 
 These are release provenance, not values an operator invents or the proof
 producer's image digest. Authenticate Docker to private GHCR with a token granting
-`read:packages`; keep the token out of this file. Rerun `scrollsdk setup proof-materials`.
+`read:packages`; keep the token out of this file. Rerun `scrollsdk setup policy-prepare`.
 The compiler exports offline, checks the image revision and Wasm checksum, and
 writes `.data/cubesigner-policy/{cubesigner_verifier_policy.wasm,cubesigner_verifier_policy.wasm.sha256,build-receipt.json}`.
 An interrupted step reuses a matching verified export; conflicting output is never
 overwritten. Earlier staged plans acquire this local step without replaying
 genesis, AWS provisioning or funding. No spec structure change is needed.
 
-`.data/cubesigner-policy-governance-handoff.json` records the Wasm hash and build
-provenance for the governance handoff. It is **not** approval or attachment
-evidence. Use the approved governance tools to publish, propose the exact
-attachment, collect Council approval and complete attachment with provider
-readback. Preserve `RequireRoleSession`. Before `prep-charts`, the `charts` step
-pauses when production receipts are absent and creates
-`.scrollsdk/inputs/cubesigner-policy/receipts.json`. Its protocol-context path and
-SHA-256 are already populated. Copy the governed release/attachment receipts,
-Wasm and test report into the deployment directory, preserving receipt-relative
-artifact paths. Fill the input's release/attachment paths and SHA-256 digests,
-CubeSigner environment and organization; include `liveEvidence` if required by
-the release. Input paths are relative to the deployment directory, not to
-`receipts.json`. Obtain receipt hashes from the governance handoff and check the
-received files with `sha256sum`.
+`.data/cubesigner-policy-governance-handoff.json` records build provenance only.
+After the authorized publisher returns a concrete version, use
+`cubesigner-policy prepare-input` and `prepare` from the
+[linked workflow](cubesigner-preparation.md). This derives and validates expected
+inputs without fabricating an attachment receipt. `proof-publish` imports them
+into managed configuration without changing frozen intent or genesis.
 
-Rerun `scrollsdk setup proof-materials`. The CLI verifies the exact key, role,
-protocol context and policy evidence before importing the references into
-managed configuration. Do not change the original spec, frozen plan or
-`.data/doge-config.toml`. Existing plans use this handoff without replaying
-completed steps; invalid evidence leaves managed configuration unchanged.
-Already imported references remain authoritative on retries. See
-[the receipt contract](proof-config-transactions.md#cubesigner-receipts-and-external-signer-evidence).
-
-Building Wasm alone does not make the key ready to sign. This stage does not
-invent governance commands, approve on behalf
-of Council members, or configure the organization resolver.
+Existing verified `receipts.json` remains supported by `reconcile` and retains its
+strict meaning. Do not rename operation records or populate an attachment with
+an unexecuted approval. Council review, identical-request execution and fresh
+activation verification gate signer installation, not configuration generation.
 
 The workflow does not create an EKS cluster, rent GPU capacity or install releases.
 
@@ -611,16 +657,17 @@ and optional `waiting` instructions; the response's `warnings` lists detected
 local file changes. Exit codes: `0` for `stage-complete` or
 `prepared`, `2` for `waiting`, and `1` for failure or `recovery-required`.
 `stage-complete` means only the selected stage is complete. `prepared` means all
-six stages are complete; running-service acceptance remains separate. A wait or
+selected stages are complete; running-service acceptance remains separate. A wait or
 failure reports the same stage as the next command. A successfully printed JSON result with
 `status: waiting` is not a completed deployment.
 
 Each completed step and artifact fingerprints are saved before proceeding.
-Fingerprints are diagnostic only: edited or missing files produce warnings,
-and the next step runs using the files currently on disk. This also applies to
-old saved plans, with no opt-out flag or manual state-file repair. Warnings name
-files without printing their contents. Operator-owned `values/*.yaml` (including
-nested YAML files) and `Makefile` remain excluded from fingerprint tracking.
+Missing recorded artifacts stop the workflow with `recovery-required`; restore
+them from a backup before retrying. Completed steps are not replayed to recreate
+lost credentials, transactions or generated files. Content changes remain advisory:
+warnings name files without printing their contents. Operator-owned
+`values/*.yaml` (including nested YAML files) and `Makefile` are tracked for
+existence, while edits to their content remain permitted.
 External funding and governance inputs remain editable under `.scrollsdk/inputs/`.
 
 Changes to the saved `plan.json` or `intent.json` content hashes also produce
@@ -682,6 +729,7 @@ should not have to copy protocol addresses into the spec:
 | Gas policy | Explicit genesis gas limit and base fee; Galileo scalars and penalty factor; L2 system-config base fee overhead |
 | Prepared identities | Genesis uses deployer/owner inputs. The isolated generator config uses the deployer for the shared reader's mandatory Fee Oracle address; this does not become the runtime Fee Oracle identity. The AWS stage prepares the actual service identity |
 | Fee-vault withdrawal destination | Required: `contracts.feeVaultDogeRecipientAddress` is a Dogecoin P2PKH address. Plan rejects a missing or invalid recipient before SDK resolution, CubeSigner lookup or proof-release downloads; apply also rejects saved plans missing it before running any step. The CLI validates the network and derives its hash160 for `FEE_VAULT_DOGE_RECIPIENT_ADDR`. This is not an EVM account or an automatic choice of the Bridge fee-wallet. |
+| Fee-vault genesis/bootstrap recipient | Optional: `contracts.l1FeeVaultAddress` projects to `L1_FEE_VAULT_ADDR`; defaults to `0x0000000000000000000000000000000000000001`. Use a nonzero 20-byte hex address only when deliberately preserving a previous genesis input. It is temporary: contract initialization replaces the vault recipient with `FEE_VAULT_DOGE_RECIPIENT_ADDR` before routing withdrawals through the adapter. Changing it changes genesis; create a new preparation plan and regenerate all artifacts consistently. Do not patch genesis storage directly. |
 | Optional components | Blockscout database, explorer verification, Ethereum devnet and public service hostnames are configured only for the selected components |
 
 Keep the fee-vault recipient key under separate custody. The spec needs only its
@@ -730,7 +778,7 @@ confirmation, AWS permissions, real proofs or cluster deployment acceptance.
 
 ## Generated proof identities and external completion evidence
 
-Signer-kit publication can run automatically inside `setup proof-materials` for
+Signer-kit publication runs explicitly in `setup signer-kit-publish` for
 new plans with `preparation.deploymentKitPublication: {mode: s3}` (optional
 `awsProfile`). The plan marks this as a cloud operation. The selected
 `proofArtifacts.s3` bucket and region determine the destination; each kit uses
@@ -769,24 +817,19 @@ imports `.data/proof-materials-v1.json`. Operators do not invent identity hashes
 or copy a generic compiler identity from another deployment. Image/receipt
 mismatches fail validation. These image checks do not execute a GPU proof.
 
-For enforce, `setup proof-materials` exports the signer deployment kit (`deployment-kit`, the
-same writer as `setup export-deployment-kit`) and pauses at
+For enforce, `setup signer-kit` exports the signer deployment kit (`deployment-kit`, the
+same writer as `setup export-deployment-kit`). `setup signer-kit-publish` pauses at
 `deployment-kit-published`. `.scrollsdk/inputs/deployment-kit/request.json`
 names the kit directory, version and manifest SHA-256. Publish that directory
 unchanged at an immutable https URL, put the URL and manifest SHA-256 on the
 deployment's governance record, then save
 `{"url": "<https URL>", "manifest_sha256": "<sha>"}` as
-`.scrollsdk/inputs/deployment-kit/published.json` and rerun `setup proof-materials`. It
+`.scrollsdk/inputs/deployment-kit/published.json` and rerun `setup signer-kit-publish`. It
 records the publication in `[attestationSigner.deploymentKit]` and completes
 that stage. Then run `setup render` to regenerate values and Secrets and run the
 final check. Legacy v1 plans resume with `setup apply`. The kit version is derived from the signer-relevant inputs, so a
 rerun or a runtime refresh with unchanged inputs reuses the same kit and
-publication. Observe and mock deployments have no kit. Plans created by an
-earlier CLI migrate in place: their `signer-policy`, `signer-receipts` and
-`charts-validated` steps are replaced by the kit steps (and `render-final`
-for staged plans). Completed genesis, cloud provisioning and funding steps are
-kept; no funding transaction is replayed. Old receipts do not satisfy the new
-publication requirement. After rollout, run `setup proof-config-check --live` as the final
+publication. Observe and mock deployments have no kit. After rollout, run `setup proof-config-check --live` as the final
 acceptance check.
 
 The contracts deployment environment uses rc.5's `DEPLOYER_PRIVATE_KEY`,
@@ -970,10 +1013,14 @@ These prices are example ceilings, not provider quotations. `L40S` is also
 supported with a compatible checked Worker image (CUDA architecture 89); select
 its fleet, instance type and price ceilings explicitly using the SDK's qualified
 AWS profile guidance. SDK DevNet profiles are not copied into a new deployment.
+For a checked Worker image built for CUDA architecture 86, AWS `A10G` is
+supported (for example, `g5.4xlarge`). Select `gpu: A10G` and the instance type
+explicitly; fleet selectors retain the AWS/dstack name `A10G`, and the planner
+uses 22 GiB of usable VRAM. Verify the regional price and capacity before rental.
 The manager image must be a compatible, separately published immutable image;
 this workflow neither builds nor publishes it.
 
-- `setup proof-materials` prepares and verifies the Worker programs and publication.
+- `setup proof-materials` prepares and verifies the Worker programs; `setup proof-publish` publishes them.
 - `setup render` uses `prep-charts` to generate
   `values/capacity-manager-production.yaml` from those verified inputs, plus a
   same-namespace WP NetworkPolicy peer for the manager. It saves the spec's
@@ -982,12 +1029,13 @@ this workflow neither builds nor publishes it.
   to dstack or rent GPU workers.
 - Install the supporting releases manually, including WP with the generated
   NetworkPolicy, proof token Secrets, and the dstack controller.
-- No separate capacity-manager preparation or credential command is required.
-  Make synchronizes the referenced Worker token to the selected dstack project
-  before Helm installs the manager. Its controller token is referenced in place.
+- For a newly planned deployment, no separate capacity preparation command is
+  required. Make validates the project and prepares empty fleets before Helm
+  installs the manager. The manager mounts existing Secret references and mints
+  a separate credential for each Worker; no shared Worker token is copied to dstack.
 - From `deployment/`, review the generated values and run
   `make install-capacity-manager`. **This explicit installation starts Core's
-  capacity reconciliation and may rent paid workers.** `install-all` excludes it.
+  capacity reconciliation and may rent paid workers.**
 
 `setup capacity-manager` defaults to `./deployment` (override with `--dir`), and
 `credentials` (used automatically by Make) / `status` use the saved spec context unless `--kube-context` is
@@ -996,10 +1044,39 @@ Deployment, not proof-worker acceptance. There is no SDK rental-duration cap on
 Core's continuous manager. Follow the SDK drain/retirement instructions: pausing
 or uninstalling the manager alone does not establish that remote billing stopped.
 
-Do not switch an existing frozen deployment by editing its intent JSON. This is
-an opt-in for newly planned deployments; a live controller handoff requires the
-SDK's explicit retirement procedure. The two capacity owners are mutually
-exclusive, and preparation refuses an unretired SDK Worker session.
+For an existing deployment, keep its frozen intent and preparation plan intact.
+After completing the SDK's Worker retirement procedure (`status` / `destroy`
+until the saved session is `destroyed`), select `capacityManager` in a separate
+spec file, without `proofWorkers`, then prepare locally:
+
+```bash
+scrollsdk setup capacity-manager prepare --dir ./deployment \
+  --spec ./capacity-manager-spec.yaml --sdk-dir /path/to/scroll-sdk \
+  --dstack-url https://controller.example.invalid
+```
+
+Only the `capacityManager` section is read from `--spec`. Kubernetes targeting,
+controller configuration and proof inputs remain those of the frozen deployment.
+The selection is saved separately in `.scrollsdk/capacity-manager/config.json`
+and reused on subsequent `prepare` and `prep-charts` runs. This command validates
+and reuses the existing proof contract, publication and checked Worker image;
+it does not replay genesis, funding, proof compilation or secret upload.
+
+If the production values file is missing, preparation reads its template from
+`templates.sdkRevision` in the frozen intent, using `--sdk-dir` or the SDK
+checkout saved in the preparation plan. It does not update other templates or
+the Makefile. The pinned SDK and existing Makefile must support Capacity Manager.
+The controller URL must already have working HTTPS (HTTP is allowed only for a
+literal loopback IP); `--dstack-url` records that endpoint, not a TLS deployment.
+With frozen `dstackController.internalTls`, it must match that configured endpoint.
+Without the flag, preparation preserves the URL in existing values or uses the
+frozen internal TLS configuration.
+
+Review the generated values, WP NetworkPolicy and empty fleet YAML before
+installing. Preparation commits these local outputs together; failure leaves
+existing files intact. It refuses an unretired SDK session and refuses to replace
+a changed prepared capacity plan until the old manager is drained and its plan
+archived. After a handoff, the saved capacity plan also blocks SDK Worker apply.
 
 ### Shared namespace and automatic capacity credentials
 
@@ -1016,10 +1093,11 @@ No extra capacity-manager admin-token Secret is created.
 
 After uploading Secrets, install dstack and the proof services with the generated
 Makefile. Then run `make install-capacity-manager`. That target first waits for
-dstack's rollout, reads the referenced worker token from Kubernetes (after the
-proof chart's ExternalSecret has synchronized), and registers it in the selected
-dstack project via its API. It then installs the manager. Failure to synchronize
-stops the recipe before Helm; retry the same Make target after fixing the cause.
+dstack's rollout and prepares the selected project fleets via the controller.
+It then installs the manager with the existing dstack, proof-work and
+worker-credential-master Secret references. Ensure the proof chart's ExternalSecret
+has synchronized before installation. A fleet preparation failure stops the
+recipe before Helm; retry the same Make target after fixing the cause.
 The preflight first checks project/backend availability and creates missing
 empty fleets (`fleet.action: create`, the default), or checks existing fleets
 (`fleet.action: reuse`). Both modes compare the effective fleet configuration;
@@ -1041,6 +1119,10 @@ configuration operator-owned and the install preflight verifies that it exists.
 
 For Vast, retain `providers: [vastai]` and `vastaiApiKeyEnv: VASTAI_API_KEY` in
 `preparation.dstack`; the value stays in `deployment.env` and generated Secrets.
+`capacityManager.minReliability` defaults to `0.95` and accepts values from `0.95`
+to `1`. It is projected to Vast fleet `backend_options.min_reliability`, with
+`offer_order: price`. Explicitly carry over any stricter reliability floor when
+switching from bounded Workers. AWS fleets do not receive Vast backend options.
 For AWS, use the controller's existing IRSA role and explicit existing VPCs:
 
 ```yaml
@@ -1185,3 +1267,91 @@ are preserved, including an operator CIDR overlapping an ALB subnet. Values and
 the receipt participate in the same generation transaction. Discovery uses only
 AWS describe calls and Kubernetes reads. Applying the rendered NetworkPolicy and
 verifying CNI enforcement remain deployment acceptance steps.
+
+## Reproducible Helm tuning and runtime checks
+
+Optional `helmValues` maps a generated values filename to a YAML overlay. The
+plan freezes the overlay text. Bootstrap and each chart-preparation pass merge
+it into the standard `values/*.yaml` files consumed by the normal Make targets;
+no private helper script or extra Helm arguments are needed. Existing operator
+Makefiles are preserved. Use externally managed Secret references in overlays;
+never place passwords, tokens or keys in this field. Arrays replace except
+named `env` entries, which merge by name. Unknown filenames and invalid mappings
+fail rather than silently producing unused files. Removing an override does not
+undo existing operator edits; review/reset those fields explicitly.
+
+```yaml
+helmValues:
+  l2-reth-rpc-production.yaml: |
+    resources:
+      requests: {cpu: 500m, memory: 2Gi}
+      limits: {cpu: "2", memory: 4Gi}
+  scroll-monitor-production.yaml: |
+    loki:
+      persistence: {size: 20Gi}
+```
+
+Missing recorded artifacts, including values and the Makefile, now stop preparation
+with `recovery-required`. Restore the files from the deployment backup and retry;
+completed funding or identity steps are never replayed to repair a missing file.
+Edits to values/Makefile remain operator-owned. Other changed files remain advisory.
+The sequencer KMS fingerprint binds AWS account, EKS cluster, region, namespace,
+deployment name, service account and explicit KMS intent, not ALB/Secret routing.
+Old KMS fingerprints or changed stage layouts are not automatically reinterpreted:
+use the original CLI for those saved plans or perform a separately reviewed migration.
+
+The generated SDK `install-cubesigner-signer` target invokes
+`setup cubesigner-policy verify-activation` before Helm. This branch supports
+explicit non-mainnet `transport_only` and governed production selection.
+The check renders the selected chart, verifies singleton session mounts, reads
+current remote key/role/policy/session state and compares delivered Kubernetes
+Secrets and protocol context. Unknown attached policies fail closed even in
+transport mode. The result does not claim real-proof acceptance, inspection of
+an existing Pod's refresh cache, or completion of installation. Production
+expected material bindings, executed attachment, fresh Council/role evidence and
+reviewed session lifetimes remain mandatory; release-required acceptance evidence
+is also checked. `--policy-only` leaves activation pending and cannot authorize
+installation. No governance action is performed by this check.
+
+`setup deployment-preflight` keeps network/container probes explicit:
+
+```bash
+scrollsdk setup deployment-preflight --deployment-dir deployment --json \
+  --kube-context example-context --rendered-manifest rendered/reth.yaml \
+  --rendered-manifest rendered/ingress.yaml \
+  --ethereum-rpc-env SEPOLIA_RPC_A --ethereum-rpc-env SEPOLIA_RPC_B \
+  --ethereum-rpc-quorum 2 --ethereum-chain-id 11155111 \
+  --signer-container local-attestation-signer --dogecoin-rpc-env DOGECOIN_RPC_URL \
+  --reth-image example.invalid/approved-rollup-node:reviewed-tag
+```
+
+Prepare the manifest files with `helm template` using the same chart/version,
+namespace and values as installation. The cluster check reads ready nodes and,
+when ALB resources are present, the Load Balancer Controller and TargetGroupBinding
+CRD. Per-Pod CPU/memory fit is a necessary condition only; it excludes existing
+utilization, affinity, taints, storage topology and aggregate capacity.
+The Ethereum probe sends `eth_chainId` and `latest`/`safe`/`finalized` block lookups
+in one four-call batch, then checks quorum at a shared finalized height. It does
+not establish Beacon availability or long-term provider reliability.
+The signer probe runs disposable curl in the existing container's network
+namespace and calls `getblockchaininfo`; credentials travel on stdin, not argv.
+The Reth probe uses two disposable containers sharing a network-disabled namespace, with a readable temporary copy of public
+genesis mounted read-only, a disposable public consensus signer address, a local deterministic L1 fixture
+(`node:22-alpine`), mock blob input, bounded resources and ephemeral storage. It confirms
+startup through the HTTP-server startup event and a three-second stability window; it does not establish sync or
+full application acceptance. Both probes create only local disposable containers.
+Omitted checks are explicitly `not-checked`, never implied to have passed.
+
+Contract source submission and final verification are separate:
+
+```bash
+scrollsdk setup verify-contracts --config-dir deployment --preinstalls --require-verified --wait-seconds 120
+scrollsdk setup verify-contracts --config-dir deployment --preinstalls --status-only
+```
+
+Without a status flag, the runner reports final status as `not-checked`.
+`--status-only` performs no Docker invocation or submission. Blockscout results
+are reported per target as `verified`, `partial`, `pending`, or `unavailable`;
+only full verification of every selected target exits successfully. Block-hash
+history has no Solidity source and remains a bytecode check. Optional preinstalls
+are outside the required source-verification set.

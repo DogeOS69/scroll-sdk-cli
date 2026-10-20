@@ -21,18 +21,20 @@ import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
-import {prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
+import {CAPACITY_MANAGER_STATE_PATHS, prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
 import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import {canonicalDogecoinNetwork} from '../../utils/dogecoin-network.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {verifyDstackAcmCertificate} from '../../utils/dstack-internal-tls.js'
 import {type EthereumDaRuntimeConfig, ethereumDaMainnetPolicyErrors, ethereumDaRuntimeEnv, resolveEthereumDaSubmitterPolicy} from '../../utils/ethereum-da-runtime.js'
 import {ETHEREUM_RPC_KEYS, proofCoordinatorRpcKeys, readEthereumRpcSecretStore, reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
-import {projectExistingAlbDirectory, readExistingAlbSpec, suppressExistingAlbIngress, validateExistingAlb} from '../../utils/existing-alb.js'
+import {projectExistingAlbDirectory, projectSharedAlbValues, readExistingAlbSpec, suppressExistingAlbIngress, validateExistingAlb} from '../../utils/existing-alb.js'
 import {frontendDepositEnv, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import { GenerationTransaction } from '../../utils/generation-transaction.js'
 import {ensureGenesisSequencerTransaction} from '../../utils/genesis-sequencer-transaction.js'
@@ -70,8 +72,7 @@ import {
 } from '../../utils/signer-roles.js'
 import {specDstackController} from '../../utils/spec-kubernetes-target.js'
 import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
-import {reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
-import {tsoSignerNetwork} from '../../utils/tso-signer-network.js'
+import {TSO_ALB_EDGE_RECEIPT, reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
 import {
   WITHDRAWAL_NATIVE_CONFIG_RELPATH,
   buildWithdrawalDeploymentFacts,
@@ -166,7 +167,9 @@ export function buildFrontendExternalUrlUpdates(
 ): Record<string, unknown> {
   return {
     GRAFANA_URI: getConfigValue('frontend.GRAFANA_URI'),
+    REACT_APP_EXTERNAL_EXPLORER_URI_L1: getConfigValue('frontend.DOGE_EXTERNAL_EXPLORER_URI_L1') ?? getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L1'),
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L2'),
+    REACT_APP_EXTERNAL_RPC_URI_L1: getConfigValue('frontend.DOGE_EXTERNAL_RPC_URI_L1') ?? getConfigValue('frontend.EXTERNAL_RPC_URI_L1'),
     REACT_APP_EXTERNAL_RPC_URI_L2: getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
   }
 }
@@ -177,11 +180,11 @@ export function buildFrontendExternalUrlUpdates(
  * `attestationSigner.external` keeps the original imported set. So the
  * imported signers seed the attestation entries only while WP values have none
  * (initial onboarding); after that every existing attestation entry is kept
- * as is (with the WP network name) and nothing is re-added, so a retired key
+ * with a canonical network name and nothing is re-added, so a retired key
  * stays retired. The Correctness (CubeSigner) entry is always rebuilt.
  */
 export function mergeTsoSigners(existing: unknown[], built: TsoSignerEntry[]): TsoSignerEntry[] {
-  const kept = (existing as TsoSignerEntry[]).filter(entry => entry?.roles?.includes('Attestation')).map(entry => ({...entry, network: tsoSignerNetwork(entry.network)}))
+  const kept = (existing as TsoSignerEntry[]).filter(entry => entry?.roles?.includes('Attestation')).map(entry => ({...entry, network: canonicalDogecoinNetwork(entry.network)}))
   const attestation = kept.length > 0 ? kept : built.filter(item => item.roles.includes('Attestation'))
   return [...built.filter(item => !item.roles.includes('Attestation')), ...attestation]
 }
@@ -199,7 +202,7 @@ export function buildRethInitialTrustedPeers(rethSequencerPeers: string[]): stri
  * delivery, no URI, with both descriptor keys pinned.
  */
 export function buildTsoSigners(config: Pick<DogeConfig, 'attestationSigner' | 'cubesigner' | 'network'>): TsoSignerEntry[] {
-  const network = tsoSignerNetwork(config.network)
+  const network = canonicalDogecoinNetwork(config.network)
   const cubesignerRoles = config.cubesigner?.roles || []
   if (cubesignerRoles.length > 1) {
     throw new Error('CubeSigner supports exactly one TEE role and one in-cluster deployment')
@@ -254,9 +257,9 @@ export function buildCubesignerPrepEnv(
     DOGEOS_CUBESIGNER_SIGNER_TSO_URL: 'http://tso-service:3000',
     NETWORK: config.network,
   }
-  Object.assign(env, cubesignerPolicyEnvironment(resolveCubesignerPolicy({
-    deploymentDir,
-    keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network,
+  Object.assign(env, cubesignerPolicyEnvironment(resolveCubesignerPolicy({deploymentDir,
+    keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))),
+    network: config.network, scope: 'preparation',
     selection: config.cubesigner,
   })))
 
@@ -1336,7 +1339,7 @@ export default class SetupPrepCharts extends Command {
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
   private outputTestData: Record<string, any> = {}
-  // Resolve pinned governance inputs at the source: .scrollsdk/ is excluded from staging.
+  // Resolve pinned governance inputs at the source: governance receipts remain excluded from staging.
   private policyInputRoot?: string
   private proofIntent?: ResolvedProofIntent
   private skipL2ContractDeploymentBlock: boolean = false
@@ -1414,7 +1417,7 @@ export default class SetupPrepCharts extends Command {
 
     const deploymentRoot = process.cwd()
     const originalValuesDir = path.resolve(deploymentRoot, flags['values-dir'])
-    const transaction = GenerationTransaction.begin(deploymentRoot)
+    const transaction = GenerationTransaction.begin(deploymentRoot, this.flags['proof-preparation'] ? [] : [...CAPACITY_MANAGER_STATE_PATHS, TSO_ALB_EDGE_RECEIPT])
     let generation: PrepChartGenerationResult
     let changedFiles: string[] = []
     try {
@@ -2041,10 +2044,9 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
           REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
           REACT_APP_EXTERNAL_DOCS_URI: this.formatUrl("https://docs." + sharedHost, "/en/home"),
-          REACT_APP_EXTERNAL_EXPLORER_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_EXPLORER_URI_L1"),
-          REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
           REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
           REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
+          REACT_APP_L1_GAS_PRICE_ORACLE: this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),
           REACT_APP_L1_STANDARD_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L2_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_MOAT_ADDRESS: this.getConfigValue("contractsFile.L2_MOAT_PROXY_ADDR"),
@@ -2160,7 +2162,7 @@ export default class SetupPrepCharts extends Command {
     }
 
     // attestation-signer is partner-operated through docker-compose. Remove
-    // values left by older CLI releases so a later `helm install-all` cannot
+    // values left by older CLI releases so later Helm installations cannot
     // accidentally resurrect the retired in-cluster deployment shape.
     for (const file of removeRetiredAttestationSignerValues(valuesDir)) {
       this.jsonCtx.info(`Removed retired in-cluster attestation signer values: ${file}`)
@@ -2526,26 +2528,6 @@ export default class SetupPrepCharts extends Command {
             ingressUpdated = true;
           }
         }
-
-        /*
-        NEXT_PUBLIC_NETWORK_ID: "221122420"
-        */
-        const oldNetworkName = frontend?.env?.NEXT_PUBLIC_NETWORK_NAME;
-        const newNetworkName = this.getConfigValue("general.CHAIN_NAME_L2");
-        if (!oldNetworkName || oldNetworkName !== newNetworkName) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_NAME`, newValue: newNetworkName, oldValue: oldNetworkName });
-          frontend.env.NEXT_PUBLIC_NETWORK_NAME = newNetworkName;
-          ingressUpdated = true;
-        }
-
-        const oldValue = frontend?.env?.NEXT_PUBLIC_NETWORK_ID;
-        const newValue = this.getConfigValue("general.CHAIN_ID_L2");
-        if (!oldValue || oldValue !== this.getConfigValue("general.CHAIN_ID_L2")) {
-          changes.push({ key: `frontend.env.NEXT_PUBLIC_NETWORK_ID`, newValue, oldValue });
-          frontend.env.NEXT_PUBLIC_NETWORK_ID = newValue;
-          ingressUpdated = true;
-        }
-
 
         interface BlockscoutEnvMapping {
           configKey: string;
@@ -2921,6 +2903,7 @@ export default class SetupPrepCharts extends Command {
           l2MessengerAddress: this.getConfigValue('contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR'),
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
           networkStr: this.withdrawalProcessorConfig.network_str,
+          productionVerifierKeyPolicy: this.dogeConfig.cubesigner?.mode === 'production_verifier_key_policy',
         })
 
         const nativeConfigPath = path.resolve(path.dirname(path.resolve(valuesDir)), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
@@ -3025,7 +3008,7 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: env not found in config`);
         }
 
-        const policyResolution = resolveCubesignerPolicy({deploymentDir: this.policyInputRoot, keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, selection: this.dogeConfig.cubesigner})
+        const policyResolution = resolveCubesignerPolicy({deploymentDir: this.policyInputRoot, keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, scope: 'preparation', selection: this.dogeConfig.cubesigner})
         for (const warning of policyResolution.warnings) this.jsonCtx.addWarning(warning)
         const projection = cubesignerLiveEvidenceProjection(policyResolution)
         productionYaml.configMaps ||= {}
@@ -3339,6 +3322,7 @@ export default class SetupPrepCharts extends Command {
 
       {
         const previous = JSON.stringify(productionYaml)
+        projectSharedAlbValues(productionYaml, `${chartName}-production.yaml`, this.albSpec)
         suppressExistingAlbIngress(productionYaml, `${chartName}-production.yaml`, this.albSpec)
         reconcileDeploymentIngresses(productionYaml, chartName, !this.flags['proof-preparation'])
         validateServiceNetworkPolicy(productionYaml, chartName, this.flags['proof-preparation'])
@@ -3346,6 +3330,14 @@ export default class SetupPrepCharts extends Command {
           changes.push({key: 'ingress', newValue: 'reconciled controller settings', oldValue: 'previous controller settings'})
           updated = true
         }
+      }
+
+      // Existing ALB projection above may disable Ingress, so choose the host
+      // environment only after the effective ingress state is known.
+      if (chartName === 'blockscout' && reconcileBlockscoutFrontend(productionYaml['blockscout-stack'],
+        this.getConfigValue('ingress.BLOCKSCOUT_HOST'), this.getConfigValue('general.CHAIN_NAME_L2'), this.getConfigValue('general.CHAIN_ID_L2'))) {
+        changes.push({key: 'blockscout-stack.frontend', newValue: 'canonical network config and unique environment', oldValue: 'legacy environment'})
+        updated = true
       }
 
       const pcRpcFile = path.resolve(path.dirname(path.resolve(valuesDir)), 'proof-coordinator/ProofCoordinator.toml')

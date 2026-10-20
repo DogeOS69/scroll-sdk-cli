@@ -6,6 +6,7 @@ import Docker from 'dockerode'
 import path from 'node:path'
 
 import { CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY, DOCKER_TAGS_URL } from '../../constants/docker.js'
+import {awaitVerificationStatus, verificationTargets} from '../../utils/contracts-verification-status.js'
 import {PREINSTALLS_CHECK_IMAGE} from '../../utils/preinstalls-image-check.js'
 import {PreinstallsVerificationExitError, preparePreinstallsVerification, runPreinstallsVerification} from '../../utils/preinstalls-source-verification.js'
 
@@ -39,6 +40,9 @@ export default class ContractsVerification extends Command {
       description: 'Only submit preinstalls sources; skip the DogeOS contracts verifier',
       exclusive: ['preinstalls', 'image-tag'],
     }),
+    'require-verified': Flags.boolean({description: 'Fail unless every selected target has full Blockscout verification; submission success is insufficient'}),
+    'status-only': Flags.boolean({description: 'Read final Blockscout source-verification status without submitting or running Docker'}),
+    'wait-seconds': Flags.integer({default: 0, description: 'Bounded polling window for --status-only or --require-verified', max: 600, min: 0}),
   }
 
   public async run(): Promise<void> {
@@ -52,14 +56,15 @@ export default class ContractsVerification extends Command {
     const preinstalls = flags.preinstalls || flags['preinstalls-only']
       ? preparePreinstallsVerification(directory, flags['preinstalls-image']) : undefined
 
-    if (!flags['preinstalls-only']) {
+    const statusPlan = flags['status-only'] || flags['require-verified'] ? verificationTargets(directory, !flags['preinstalls-only'], Boolean(preinstalls)) : undefined
+    if (!flags['status-only'] && !flags['preinstalls-only']) {
       this.log(chalk.blue('Running Docker contracts verification...'))
       const imageTag = await this.getDockerImageTag(flags['image-tag'])
       this.log(chalk.blue(`Using Docker image tag: ${imageTag}`))
       await this.runDockerCommand(imageTag, directory)
     }
 
-    if (preinstalls) {
+    if (preinstalls && !flags['status-only']) {
       this.log(chalk.blue('Submitting preinstalls sources to Blockscout...'))
       try {
         await runPreinstallsVerification(preinstalls, message => this.log(message))
@@ -68,6 +73,15 @@ export default class ContractsVerification extends Command {
         // Docker errors can contain container request details. Keep endpoint/config private.
         this.error('Preinstalls verification failed. Check the verifier output and Docker availability, then retry with --preinstalls-only.')
       }
+    }
+
+    if (statusPlan) {
+      const targets = await awaitVerificationStatus(statusPlan, flags['wait-seconds'])
+      const verified = targets.every(target => target.status === 'verified')
+      this.log(JSON.stringify({status: verified ? 'verified' : 'incomplete', targets}, null, 2))
+      if (!verified) this.error('Source verification is incomplete; pending, partial or unavailable targets are not fully verified. Retry --status-only to read results without resubmitting.')
+    } else {
+      this.log('Verification runner finished. Final explorer status: not-checked. Use --status-only to check final results, or --require-verified to require full verification after submission.')
     }
   }
 
@@ -189,7 +203,10 @@ export default class ContractsVerification extends Command {
           try {
             // Pull alpine if not available
             try {
-              await docker.pull('alpine:latest')
+              const ownershipPull = await docker.pull('alpine:latest')
+              await new Promise<void>((resolve, reject) => {
+                docker.modem.followProgress(ownershipPull, error => error ? reject(error) : resolve())
+              })
             } catch {
               // Ignore pull errors - image might already exist
             }

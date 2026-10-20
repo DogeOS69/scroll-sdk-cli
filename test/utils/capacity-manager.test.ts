@@ -8,8 +8,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {assertSdkWorkersRetired, buildCapacityManagerValues, capacityManagerDstackUrl, capacityManagerFleets, prepareCapacityManager, resolveCapacityManager} from '../../src/utils/capacity-manager.js'
+import {CAPACITY_MANAGER_STATE_PATHS, assertSdkWorkersRetired, buildCapacityManagerValues, capacityManagerDstackUrl, capacityManagerFleets, prepareCapacityManager, prepareCapacityManagerIfSelected, resolveCapacityManager} from '../../src/utils/capacity-manager.js'
+import {assertDeploymentSpecFields} from '../../src/utils/deployment-spec-fields.js'
 import {generateDstackControllerValues} from '../../src/utils/dstack-controller-values.js'
+import {GenerationTransaction} from '../../src/utils/generation-transaction.js'
 import {writeJson} from '../../src/utils/preparation-io.js'
 import {preparationSteps} from '../../src/utils/preparation-plan.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
@@ -32,12 +34,60 @@ function fixture() {
 }
 
 describe('Core capacity manager', () => {
+  it('rejects empty explicit or saved capacity selections instead of reusing frozen intent', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-empty-selection-'))
+    try {
+      writeJson(path.join(root, '.scrollsdk/intent.json'), fixture().spec)
+      const specFile = path.join(root, 'capacity-selection.yaml')
+      let contractReads = 0
+      const readContract = (): never => {contractReads++; throw new Error('Unexpected proof contract read')}
+      for (const content of ['', '# no selection\n', 'null\n', 'false\n', '[]\n']) {
+        fs.writeFileSync(specFile, content)
+        expect(() => prepareCapacityManager(root, readContract, {specFile})).to.throw('Select capacityManager without proofWorkers')
+      }
+
+      writeJson(path.join(root, '.scrollsdk/capacity-manager/config.json'), null)
+      expect(() => prepareCapacityManager(root, readContract)).to.throw('Select capacityManager without proofWorkers')
+      expect(contractReads).to.equal(0)
+      expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
   it('requires Core-compatible controller transport without disclosing rejected URLs', () => {
     for (const url of ['https://controller.example.invalid', 'https://controller.example.invalid:8443/api/', 'http://127.0.0.1:3000', 'http://127.1.2.3:3000', 'http://[::1]:3000']) expect(capacityManagerDstackUrl(url)).to.equal(url)
     for (const url of [undefined, '', 'http://dstack-controller.chain.svc:3000', 'http://localhost:3000', 'http://192.0.2.1:3000', 'ftp://controller.example.invalid', 'https://user:FAKE_PASSWORD@controller.example.invalid', 'https://controller.example.invalid/?token=FAKE_TOKEN', 'https://controller.example.invalid/#fragment', 'https://<TODO>', 'https://controller.example.invalid?']) {
       expect(() => capacityManagerDstackUrl(url)).to.throw('verified HTTPS controller endpoint')
       try {capacityManagerDstackUrl(url)} catch (error) {expect((error as Error).message).not.to.include('FAKE_')}
     }
+  })
+
+  it('projects the Vast reliability floor without adding Vast options to AWS fleets', () => {
+    const {spec} = fixture()
+    expect(capacityManagerFleets(spec).configurations[0]).not.to.have.property('backend_options')
+    spec.capacityManager!.provider = 'vastai'
+    expect(capacityManagerFleets(spec).configurations[0].backend_options).to.deep.equal([{min_reliability: 0.95, offer_order: 'price', type: 'vastai'}])
+    spec.capacityManager!.minReliability = 0.99
+    expect(() => assertDeploymentSpecFields({capacityManager: spec.capacityManager})).not.to.throw()
+    expect(capacityManagerFleets(spec).configurations[0].backend_options[0].min_reliability).to.equal(0.99)
+    for (const invalid of [0.94, 1.01, Number.NaN]) {
+      spec.capacityManager!.minReliability = invalid
+      expect(() => resolveCapacityManager(spec)).to.throw('minReliability')
+    }
+  })
+
+  it('does not silently skip selected capacity when workflow files are ignored by chart generation', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-hook-'))
+    try {
+      writeJson(path.join(root, '.scrollsdk/intent.json'), fixture().spec)
+      fs.writeFileSync(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n')
+      // Incomplete proof input must be diagnosed, never reported as a successful skip.
+      writeJson(path.join(root, '.data/proof-deployment.json'), {inputs: {publication: {}}, schemaVersion: 8})
+      const transaction = GenerationTransaction.begin(root, CAPACITY_MANAGER_STATE_PATHS)
+      try {expect(() => prepareCapacityManagerIfSelected(transaction.stagingRoot)).to.throw()}
+      finally {transaction.rollback()}
+
+      expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 
   it('binds imported controller project/backend to capacity intent without extra operator commands', async () => {
@@ -123,6 +173,19 @@ describe('Core capacity manager', () => {
     expect(() => buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)).to.throw('GPU/image')
   })
 
+  it('binds AWS A10G fleets to sm86 workers without weakening the image check', () => {
+    const input = fixture()
+    Object.assign(input.spec.capacityManager!, {gpu: 'A10G', instanceTypes: ['g5.4xlarge']})
+    input.imageCheck.cudaArchitectures = ['86']
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    expect((toml.parse(values.manager.policy) as any).pool).to.include({gpu_class: 'A10G', vram_gib: 22})
+    const {configurations} = capacityManagerFleets(input.spec)
+    expect(configurations[0].resources.gpu.name).to.deep.equal(['A10G'])
+    expect(configurations[0].instance_types).to.deep.equal(['g5.4xlarge'])
+    input.imageCheck.cudaArchitectures = ['89']
+    expect(() => buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)).to.throw('GPU/image')
+  })
+
 
   for (const managedTls of [false, true]) it(`prepares reproducible values and a WP-only peer without allocating (managed TLS: ${managedTls})`, () => {
     const input = fixture()
@@ -136,6 +199,7 @@ describe('Core capacity manager', () => {
     input.spec.proofTopology!.deployment.workerSecretName = 'dedicated-worker-secret'
     try {
       writeJson(path.join(root, '.scrollsdk/intent.json'), input.spec)
+      fs.writeFileSync(path.join(root, '.scrollsdkignore'), '.scrollsdk/\n')
       writeJson(path.join(root, '.data/worker.json'), input.worker)
       writeJson(path.join(root, '.data/publication.json'), input.publication)
       writeJson(path.join(root, '.data/proof-worker-image-check-v1.json'), input.imageCheck)
@@ -162,7 +226,26 @@ describe('Core capacity manager', () => {
       fs.writeFileSync(managerPath, original)
       }
 
+      for (const service of ['dstack-controller', 'proof-coordinator', 'capacity-manager', 'withdrawal-processor']) {
+        const file = path.join(root, `values/${service}-production.yaml`)
+        const saved = fs.readFileSync(file, 'utf8')
+        const malformed = 'config: [\npassword: NONFUNCTIONAL_PRIVATE_MARKER\n'
+        fs.writeFileSync(file, malformed)
+        try {
+          let failure: unknown
+          try {prepareCapacityManager(root, () => contract)} catch (error) {failure = error}
+          expect(failure).to.be.instanceOf(Error)
+          expect((failure as Error).message).to.include('contents omitted').and.not.to.include('NONFUNCTIONAL_PRIVATE_MARKER')
+          expect(fs.readFileSync(file, 'utf8')).to.equal(malformed)
+          expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
+        } finally {fs.writeFileSync(file, saved)}
+      }
+
+      fs.writeFileSync(path.join(root, 'Makefile'), '# operator note\ninstall-capacity-manager:\n\thelm upgrade --install capacity-manager example/chart\n')
       const result = prepareCapacityManager(root, () => contract)
+      const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8')
+      expect(makefile).to.include('# operator note')
+      expect(makefile.indexOf('setup capacity-manager credentials')).to.be.lessThan(makefile.indexOf('helm upgrade'))
       const first = fs.readFileSync(result.valuesFile, 'utf8')
       const fleet = yaml.load(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/fleets/aws-l4.yaml'), 'utf8')) as any
       expect(fleet.nodes).to.deep.equal({max: 2, min: 0, target: 0})
@@ -186,7 +269,62 @@ describe('Core capacity manager', () => {
       writeJson(path.join(root, '.scrollsdk/intent.json'), input.spec)
       expect(() => prepareCapacityManager(root, () => contract)).to.throw('drain the old manager')
       expect(fs.readFileSync(result.valuesFile, 'utf8')).to.equal(first)
+
+      const sdk = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-handoff-sdk-'))
+      try {
+        createSdkFixture(sdk)
+        fs.writeFileSync(path.join(sdk, 'examples/values/capacity-manager-production.yaml'), original)
+        execFileSync('git', ['-C', sdk, 'add', 'examples/values/capacity-manager-production.yaml'])
+        execFileSync('git', ['-C', sdk, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Nonfunctional capacity template'], {stdio: 'pipe'})
+        const revision = execFileSync('git', ['-C', sdk, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim()
+        fs.writeFileSync(path.join(sdk, 'examples/values/capacity-manager-production.yaml'), 'invalid uncommitted template\n')
+        const frozen = structuredClone(input.spec)
+        frozen.templates = {sdkRevision: revision}
+        frozen.proofWorkers = {minReliability: 0.99}
+        delete frozen.capacityManager
+        writeJson(path.join(root, '.scrollsdk/intent.json'), frozen)
+        writeJson(path.join(root, '.scrollsdk/plan.json'), {id: 'original-plan', sdkDirectory: sdk})
+        writeJson(path.join(root, '.scrollsdk/state.json'), {bridgeFunding: 'completed'})
+        writeJson(path.join(root, '.scrollsdk/proof-workers/plan.json'), {})
+        writeJson(path.join(root, '.scrollsdk/proof-workers/state.json'), {status: 'submitted'})
+        fs.rmSync(path.join(root, '.scrollsdk/capacity-manager'), {recursive: true})
+        fs.rmSync(managerPath)
+        const specFile = path.join(sdk, 'capacity-selection.yaml')
+        // Only the capacity selection is consumed, never unrelated edits to the new spec.
+        fs.writeFileSync(specFile, yaml.dump({...input.spec, infrastructure: {namespace: 'must-not-be-used'}}))
+        const options = {dstackUrl: managedTls ? `https://${internalTls.hostname}` : 'https://new-controller.example.invalid', specFile}
+        // Preparation may proceed while the old bounded worker is running.
+        // Activation is still blocked until a graceful drain is complete.
+        expect(() => assertSdkWorkersRetired(root)).to.throw('Retire')
+        const before = ['.scrollsdk/intent.json', '.scrollsdk/plan.json', '.scrollsdk/state.json', '.data/worker.json', '.data/publication.json'].map(file => fs.readFileSync(path.join(root, file), 'utf8'))
+        expect(() => prepareCapacityManager(root, () => contract, {...options, dstackUrl: 'http://not-loopback.invalid'})).to.throw()
+        expect(fs.existsSync(managerPath)).to.equal(false)
+        const handoff = prepareCapacityManager(root, () => contract, options)
+        expect(handoff.namespace).to.equal('chain')
+        expect((yaml.load(fs.readFileSync(managerPath, 'utf8')) as any).manager.dstack.serverUrl).to.equal(options.dstackUrl)
+        expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/config.json'), 'utf8'))).to.deep.equal({capacityManager: {...input.spec.capacityManager, ...(managedTls ? {} : {connection: {mode: 'existing-https', serverUrl: options.dstackUrl}})}})
+        expect(['.scrollsdk/intent.json', '.scrollsdk/plan.json', '.scrollsdk/state.json', '.data/worker.json', '.data/publication.json'].map(file => fs.readFileSync(path.join(root, file), 'utf8'))).to.deep.equal(before)
+        const generated = fs.readFileSync(managerPath, 'utf8')
+        prepareCapacityManager(root, () => contract)
+        expect(fs.readFileSync(managerPath, 'utf8')).to.equal(generated)
+        // The saved revision wins over edits to the SDK working tree.
+        expect(generated).to.include('4Gi')
+      } finally {fs.rmSync(sdk, {force: true, recursive: true})}
     } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  it('projects configurable per-family runtime estimates and rejects invalid durations', () => {
+    const input = fixture()
+    input.spec.capacityManager!.runtimeEstimates = {scrollChunkSeconds: 900}
+    expect(() => assertDeploymentSpecFields({capacityManager: input.spec.capacityManager})).not.to.throw()
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    const policy = toml.parse(values.manager.policy) as any
+    expect(policy.families.scroll_chunk.runtime_seconds).to.equal(900)
+    expect(policy.families.scroll_batch.runtime_seconds).to.equal(300)
+    for (const seconds of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      input.spec.capacityManager!.runtimeEstimates.scrollChunkSeconds = seconds
+      expect(() => resolveCapacityManager(input.spec)).to.throw('positive integer seconds')
+    }
   })
 
   it('generates a bounded AWS policy and preserves the compiler worker contract', () => {

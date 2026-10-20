@@ -1,4 +1,8 @@
+import * as toml from '@iarna/toml'
 import { expect } from 'chai'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import BridgeInitCommand, {
   BRIDGE_TIMELOCK_MARGIN_BLOCKS,
@@ -346,4 +350,39 @@ describe('bridge genesis immutable image selection', () => {
 
     expect(BridgeInitCommand.flags.image.exclusive).to.include('image-tag')
   })
+})
+
+describe('Core helper network synchronization', () => {
+  it('converts legacy mainnet setup files and does not rewrite an already normalized file', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-network-'))
+    try {
+      const file = path.join(root, 'setup_defaults.toml')
+      fs.writeFileSync(file, 'network = "mainnet"\nfee_wallet_target_amount = 100000000\n')
+      const command = Object.create(BridgeInitCommand.prototype)
+      command.jsonCtx = {info() {}}
+      command.syncSetupDefaultsNetwork(file, 'mainnet')
+      const once = fs.readFileSync(file, 'utf8')
+      expect(toml.parse(once)).to.deep.equal({fee_wallet_target_amount: 100_000_000, network: 'dogecoin'})
+      command.syncSetupDefaultsNetwork(file, 'mainnet')
+      expect(fs.readFileSync(file, 'utf8')).to.equal(once)
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+})
+
+
+describe('Core bridge info network synchronization', () => {
+  for (const nested of [true, false]) {
+    it(`preserves Core mainnet spelling in ${nested ? 'profiled' : 'flat'} bridge info`, () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-info-network-'))
+      try {
+        const file = path.join(root, 'GenerateBridgeInfo.toml')
+        fs.writeFileSync(file, `${nested ? '[default]\n' : ''}network = "dogecoin"\ntimelock = 6681548\n`)
+        const command = Object.create(BridgeInitCommand.prototype)
+        command.jsonCtx = {info() {}}
+        command.updateGenerateBridgeInfoNetwork(file, 'mainnet', true)
+        const config = toml.parse(fs.readFileSync(file, 'utf8'))
+        expect(nested ? config.default : config).to.deep.equal({network: 'dogecoin', timelock: 6_681_548})
+      } finally {fs.rmSync(root, {force: true, recursive: true})}
+    })
+  }
 })
