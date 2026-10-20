@@ -12,8 +12,11 @@ Create the intended role/key and session with `setup cubesigner-init` and
 continuing in the same deployment directory.
 
 For a saved staged plan, run `setup signer-session --dir .` after `setup render --dir .` and
-before `setup upload-secrets --dir .` when running from the deployment directory. It calls `setup cubesigner-refresh` with the saved
-deployment configuration and skips completed session creation on retry. Rendering
+before `setup upload-secrets --dir .` when running from the deployment directory.
+Production mode uses `setup cubesigner-policy prepare-session`, including its
+reviewed lifetimes and interrupted-creation journal. Transport mode reuses valid
+local files or calls `setup cubesigner-refresh` when both files are absent.
+Completed session steps are skipped on retry. Rendering
 alone no longer creates a remote session. If a provider request failed without a
 recorded result, inspect the remote session state before retrying. See the
 [staged preparation workflow](spec-preparation.md#commands) for the
@@ -257,8 +260,11 @@ read access and Kubernetes access are required; `--session-file` optionally
 selects a private management session file. The gate renders the workload, checks
 remote key/role/policy/session state and compares delivered Secrets and protocol
 context. Non-mainnet `transport_only` must be explicit; production mode requires
-release and attachment receipts. Unknown attached policies fail even in transport
-mode. This command does not create sessions, approve policies, install releases,
+expected material bindings, executed attachment and fresh governance evidence,
+plus the reviewed runtime-session limits. `--policy-only` checks production
+policy without runtime delivery, returns pending activation, and cannot authorize
+installation; full activation requires an explicit `--kube-context`. Unknown
+attached policies fail even in transport mode. This command does not create sessions, approve policies, install releases,
 inspect a running Pod's refresh cache or establish real-proof acceptance.
 
 ## 8. Check final contract verification

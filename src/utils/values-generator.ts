@@ -827,6 +827,9 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
 
   if (externalSecrets) {
     values.externalSecrets = externalSecrets
+    // The chart reads the external Secret. Clear obsolete inline values too
+    // when merging an existing deployment, rather than retaining a credential.
+    values.rpcPassword.value = ''
   }
 
   return yaml.dump(values)
@@ -1030,10 +1033,10 @@ function generateCubesignerValues(spec: DeploymentSpec, bootstrap = false): stri
   // Bootstrap emits an incomplete production configuration; runtime generation
   // remains strict. Never ignore provided receipts or legacy policy evidence.
   const pendingPolicy = bootstrap && selection?.mode === 'production_verifier_key_policy'
-    && !selection.policyReceipts && !selection.productionPolicy
+    && !selection.policyReceipts && !selection.expectedPolicy && !selection.productionPolicy
   const policyResolution: ReturnType<typeof resolveCubesignerPolicy> = pendingPolicy
     ? {mode: 'production_verifier_key_policy', warnings: ['CubeSigner policy receipts are pending; this bootstrap configuration is not ready for deployment']}
-    : resolveCubesignerPolicy({keys: (spec.signing?.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.keyId, materialId: key.materialId, roleId: role.roleId}))), network: spec.dogecoin.network, selection: spec.signing?.cubesigner})
+    : resolveCubesignerPolicy({keys: (spec.signing?.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.keyId, materialId: key.materialId, roleId: role.roleId}))), network: spec.dogecoin.network, scope: 'preparation', selection: spec.signing?.cubesigner})
   const productionPolicy = policyResolution.policy
 
   const image = resolveImage(spec, 'cubesignerSigner', {

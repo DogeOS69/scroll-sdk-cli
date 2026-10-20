@@ -27,6 +27,7 @@ import {
   writeGeneratedConfigs,
 } from '../../src/utils/deployment-spec-generator.js';
 import { deriveTsoUrl } from '../../src/utils/signer-policy-derivation.js';
+import {mergeBootstrapValues} from '../../src/utils/spec-bootstrap.js';
 import { generateValuesFiles } from '../../src/utils/values-generator.js';
 
 const TEST_PRIVATE_KEYS = {
@@ -1675,6 +1676,34 @@ describe('deployment-spec-generator', () => {
   });
 
   describe('generateValuesFiles', () => {
+    for (const provider of ['aws', 'gcp'] as const) it(`keeps Dogecoin RPC credentials out of ${provider} values, including regeneration`, () => {
+      const spec = createMinimalSpec();
+      spec.infrastructure.provider = provider;
+      spec.infrastructure.aws = {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-west-2'};
+      const password = 'NONFUNCTIONAL_DOGECOIN_RPC_PASSWORD';
+      spec.dogecoin.clusterRpc = {password, username: 'fixture-user'};
+      const content = generateValuesFiles(spec)['dogecoin-production.yaml'];
+      const values = yaml.load(content) as any;
+      expect(content).not.to.include(password);
+      const {data} = values.externalSecrets['dogecoin-secret-env'];
+      expect(data).to.have.length(1);
+      expect(data[0].secretKey).to.equal('password');
+      expect(data[0].remoteRef.property).to.equal('DOGECOIN_RPC_PASSWORD');
+      expect(data[0].remoteRef.key).to.match(/\/dogecoin-secret-env$/);
+      const old = yaml.dump({rpcPassword: {secretKey: 'password', value: password}});
+      expect(mergeBootstrapValues(old, content, old)).not.to.include(password);
+    });
+
+    it('retains the Dogecoin password for chart-managed local Secrets', () => {
+      const spec = createMinimalSpec();
+      spec.infrastructure.provider = 'local';
+      spec.infrastructure.local = {useK8sSecrets: true};
+      spec.dogecoin.clusterRpc = {password: 'NONFUNCTIONAL_LOCAL_RPC_PASSWORD', username: 'fixture-user'};
+      const values = yaml.load(generateValuesFiles(spec)['dogecoin-production.yaml']) as any;
+      expect(values.externalSecrets).to.equal(undefined);
+      expect(values.rpcPassword.value).to.equal(spec.dogecoin.clusterRpc.password);
+    });
+
     it('projects public RPC and TSO routes while leaving controller and TLS policy to templates', () => {
       const spec = createMinimalSpec();
       spec.frontend.hosts.tso = 'tso.example.invalid';
@@ -1846,7 +1875,7 @@ describe('deployment-spec-generator', () => {
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCE__KIND');
       expect(files['withdrawal-processor-production.yaml']).not.to.include('DOGEOS_WITHDRAWAL_ETHEREUM_DA__BLOB_SOURCES__BEACON__ENDPOINT');
       expect(files['dogecoin-production.yaml']).to.include('rpcuser: cluster-rpc-user');
-      expect(files['dogecoin-production.yaml']).to.include('value: cluster-rpc-pass');
+      expect(files['dogecoin-production.yaml']).not.to.include('cluster-rpc-pass');
       expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-user');
       expect(files['dogecoin-production.yaml']).not.to.include('external-rpc-pass');
       for (const role of ['rpc', 'bootnode', 'sequencer']) {

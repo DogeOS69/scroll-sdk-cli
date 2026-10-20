@@ -9,7 +9,7 @@ import type {PreparationPlan} from '../../src/utils/preparation-plan.js'
 import {POLICY_BUILD_RECEIPT_SCHEMA} from '../../src/utils/cubesigner-policy-build.js'
 import {POLICY_COMPILER_INPUT, POLICY_OUTPUT, prepareCubesignerPolicy} from '../../src/utils/preparation-cubesigner-policy.js'
 import {AwaitingInput, digest, writeJson} from '../../src/utils/preparation-io.js'
-import {migratePolicyBuildStep, preparationSteps} from '../../src/utils/preparation-plan.js'
+import {preparationSteps} from '../../src/utils/preparation-plan.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 
 const image = `ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:${'a'.repeat(64)}`
@@ -45,7 +45,7 @@ describe('staged CubeSigner policy preparation', () => {
   it('uses the existing build command and reconciles a completed export on retry', async () => {
     select()
     const runner = new CommandPreparationRunner(async (_root, _step, args) => command(args))
-    await runner.run({effect: 'local', id: 'cubesigner-policy-build', retry: 'safe', stage: 'proof-materials', title: 'test'}, spec, root, {} as PreparationPlan)
+    await runner.run({effect: 'local', id: 'cubesigner-policy-build', retry: 'safe', stage: 'policy-prepare', title: 'test'}, spec, root, {} as PreparationPlan)
     expect(calls[0]).deep.eq(['cubesigner-policy', 'build', '--compiler-image', image, '--expected-core-revision', revision, '--output', path.join(root, POLICY_OUTPUT)])
     await prepareCubesignerPolicy(root, command)
     expect(calls).length(1)
@@ -77,18 +77,8 @@ describe('staged CubeSigner policy preparation', () => {
     expect(calls).empty
   })
 
-  it('adds only the policy step when migrating a saved staged plan', () => {
-    const steps = preparationSteps(spec, true)
-    const old = steps.filter(step => step.id !== 'cubesigner-policy-build')
-    const plan = {deploymentName: 'test', id: 'old', schema: 'scrollsdk/preparation/v2', sdkDirectory: root, specHash: 'unchanged', steps: old} as PreparationPlan
-    const migrated = migratePolicyBuildStep(plan, spec)
-    expect(migrated.steps).deep.eq(steps)
-    expect(migrated.specHash).eq(plan.specHash)
-    expect(plan.steps).deep.eq(old)
-    expect(migratePolicyBuildStep(migrated, spec)).eq(migrated)
-    const unknown = {...plan, steps: old.slice(1)}
-    expect(migratePolicyBuildStep(unknown, spec)).eq(unknown)
-    expect(steps.find(step => step.id === 'cubesigner-policy-build')?.stage).eq('proof-materials')
+  it('places the policy build in its independent preparation stage', () => {
+    expect(preparationSteps(spec, true).find(step => step.id === 'cubesigner-policy-build')?.stage).eq('policy-prepare')
   })
 
   it('leaves legacy workflows, non-CubeSigner and transport-only deployments unchanged', () => {

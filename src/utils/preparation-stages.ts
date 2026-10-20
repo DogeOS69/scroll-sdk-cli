@@ -1,6 +1,6 @@
 import type {PreparationStep} from './preparation-plan.js'
 
-export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'protocol-context', 'proof-materials', 'render', 'signer-session', 'upload-secrets'] as const
+export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'protocol-context', 'proof-materials', 'policy-prepare', 'proof-publish', 'signer-kit', 'signer-kit-publish', 'render', 'signer-session', 'upload-secrets'] as const
 export type PreparationStage = typeof PREPARATION_STAGES[number]
 
 /** Stage boundaries are explicit; prerequisites are checked, never executed implicitly. */
@@ -9,11 +9,15 @@ export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationSt
     aws: ['identities', 'proof-aws', 'archive', 'archive-access', 'bridge-sequencer-kms', 'dstack', 'dstack-db', 'blockscout-db'],
     'bridge-funding': ['bridge-fee-wallet', 'bridge-prepare', 'ethereum-anchor', 'managed-helper-prepare', 'managed-helper-funding', 'managed-helper-setup', 'production-wallets', 'helper-funding', 'helper-setup', 'bridge-info', 'production-funding', 'helper-fund', 'managed-helper-fund', 'managed-helper-verify'],
     genesis: ['bootstrap', 'genesis-local'],
-    'proof-materials': ['cubesigner-policy-build', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials', 'charts', 'proof-publish', 'charts-published', 'deployment-kit', 'deployment-kit-published'],
+    'policy-prepare': ['cubesigner-policy-build'],
+    'proof-materials': ['external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials'],
+    'proof-publish': ['charts', 'proof-publish', 'charts-published'],
     'protocol-context': ['protocol-context'],
     render: ['render-final', 'secrets', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
+    'signer-kit': ['deployment-kit'],
+    'signer-kit-publish': ['deployment-kit-published'],
     'signer-session': ['cubesigner-session'],
-    'upload-secrets': ['secret-upload'],
+    'upload-secrets': ['secret-upload', 'cubesigner-secret-upload'],
   }
   const steps = new Map(legacy.map(step => [step.id, step]))
   steps.delete('genesis')
@@ -29,4 +33,12 @@ export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationSt
 export function stageCommand(stage: PreparationStage, directory?: string): string {
   const suffix = directory ? ` --dir '${directory.replaceAll("'", "'\\''")}'` : ''
   return `scrollsdk setup ${stage}${suffix}`
+}
+
+/** Policy and proof preparation share context, but neither depends on the other. */
+export function prerequisiteStages(stage: PreparationStage): PreparationStage[] {
+  if (stage === 'policy-prepare') return PREPARATION_STAGES.slice(0, PREPARATION_STAGES.indexOf('proof-materials'))
+  const earlier = PREPARATION_STAGES.slice(0, PREPARATION_STAGES.indexOf(stage))
+  // Kit publication is an explicit handoff; it cannot prevent preparing unrelated services.
+  return ['render', 'signer-session', 'upload-secrets'].includes(stage) ? earlier.filter(item => item !== 'signer-kit-publish') : earlier
 }

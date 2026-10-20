@@ -257,9 +257,9 @@ export function buildCubesignerPrepEnv(
     DOGEOS_CUBESIGNER_SIGNER_TSO_URL: 'http://tso-service:3000',
     NETWORK: config.network,
   }
-  Object.assign(env, cubesignerPolicyEnvironment(resolveCubesignerPolicy({
-    deploymentDir,
-    keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network,
+  Object.assign(env, cubesignerPolicyEnvironment(resolveCubesignerPolicy({deploymentDir,
+    keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))),
+    network: config.network, scope: 'preparation',
     selection: config.cubesigner,
   })))
 
@@ -3008,7 +3008,7 @@ export default class SetupPrepCharts extends Command {
           this.error(`${chartName}: env not found in config`);
         }
 
-        const policyResolution = resolveCubesignerPolicy({deploymentDir: this.policyInputRoot, keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, selection: this.dogeConfig.cubesigner})
+        const policyResolution = resolveCubesignerPolicy({deploymentDir: this.policyInputRoot, keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, scope: 'preparation', selection: this.dogeConfig.cubesigner})
         for (const warning of policyResolution.warnings) this.jsonCtx.addWarning(warning)
         const projection = cubesignerLiveEvidenceProjection(policyResolution)
         productionYaml.configMaps ||= {}

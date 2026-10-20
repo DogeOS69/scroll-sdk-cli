@@ -5,7 +5,7 @@ import {isDeepStrictEqual} from 'node:util'
 
 import {POLICY_BUILD_RECEIPT_SCHEMA} from './cubesigner-policy-build.js'
 import {EXTERNAL_POLICY_SCHEMA} from './cubesigner-policy-import.js'
-import {type CubesignerPolicyReceiptInputs, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
+import {type CubesignerExpectedPolicyInputs, type CubesignerPolicyReceiptInputs, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {localPath, writeJson} from './preparation-io.js'
 import {POLICY_RECEIPTS_INPUT} from './preparation-policy-receipts.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
@@ -34,7 +34,7 @@ const hash = (file: string) => `sha256:${proofFileHash(file)}`
 
 /** Read existing remote state only. Never uploads, attaches, approves, signs, or changes an allowlist. */
 export async function reconcileCubesignerPolicy(options: {
-  connect: () => Promise<PolicyReadbackClient>; directory: string; input: string; output: string
+  connect: () => Promise<PolicyReadbackClient>; directory: string; input: string; output: string; prepareOnly?: boolean
 }) {
   const root = fs.realpathSync(options.directory)
   const input = json(proofRegularFile(localPath(root, options.input), 128 * 1024))
@@ -49,7 +49,7 @@ export async function reconcileCubesignerPolicy(options: {
   const configDigest = hash(proofRegularFile(configFile))
   const config = toml.parse(fs.readFileSync(proofRegularFile(configFile), 'utf8')) as ObjectValue
   const selection = config.cubesigner
-  requireValue(selection?.mode === 'production_verifier_key_policy' && !selection.policyReceipts && !selection.productionPolicy,
+  requireValue(selection?.mode === 'production_verifier_key_policy' && (options.prepareOnly || !selection.policyReceipts) && !selection.productionPolicy,
     'Deployment must select explicit production mode without an existing receipt selection or manually transcribed policy')
   const declaredKeys = (selection.roles ?? []).flatMap((role: ObjectValue) => (role.keys ?? []).map((entry: ObjectValue) => ({keyId: entry.key_id, materialId: entry.material_id, roleId: role.role_id})))
   requireValue(isDeepStrictEqual(declaredKeys, [{keyId: key.keyId, materialId: key.materialId, roleId: key.roleId}]), 'Reconciliation key/role differs from saved deployment configuration')
@@ -87,10 +87,26 @@ export async function reconcileCubesignerPolicy(options: {
     && releaseInput.verifierProvenance?.aggregateVerifyingKeySha256 === hash(vk), 'Verifier provenance does not match supplied artifacts')
   const live = input.liveEvidence ? read(input.liveEvidence, 'liveEvidence', 512 * 1024) : undefined
   const output = localPath(root, options.output)
+  if (options.prepareOnly && fs.existsSync(output)) {
+    const archived = json(proofRegularFile(path.join(output, 'expected-selection.json')))
+    requireValue(json(proofRegularFile(path.join(output, 'preparation-request.json'))).inputSha256 === hash(proofRegularFile(localPath(root, options.input))), 'Existing preparation belongs to different inputs; review a new output explicitly')
+    const resolved = resolveCubesignerPolicy({deploymentDir: root, keys: declaredKeys, network: config.network, scope: 'preparation', selection: {expectedPolicy: archived as CubesignerExpectedPolicyInputs, mode: 'production_verifier_key_policy'}})
+    const client = await options.connect()
+    requireValue(client.environment === input.environment && client.organization === input.organization, 'Management session environment/organization mismatch')
+    const [name, version] = releaseInput.policyIdentifier.split('/')
+    const policy = object(await client.policy(name, version), 'published policy')
+    requireValue(policy.name === name && policy.version === Number(version.slice(1)) && policy.policy_type === 'Wasm' && policy.rules?.length === 1 && policy.rules[0].hash === resolved.policy?.policyArtifactDigest.replace('sha256:', '0x'), 'Published version changed during preparation recovery')
+    const selectionPath = localPath(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
+    requireValue(!fs.existsSync(selectionPath) || isDeepStrictEqual(json(proofRegularFile(selectionPath)), archived), 'Expected selection changed; refusing replacement')
+    requireValue(!selection.expectedPolicy || isDeepStrictEqual(selection.expectedPolicy, archived), 'Managed expected selection differs from preparation archive')
+    if (!fs.existsSync(selectionPath)) writeJson(selectionPath, archived)
+    return {directory: output, liveAcceptance: 'not-verified', nextCommand: 'scrollsdk setup proof-publish', policyIdentifier: releaseInput.policyIdentifier, receiptSelection: selectionPath, status: 'configuration-inputs-prepared-activation-pending'}
+  }
+
   requireValue(!fs.existsSync(output), 'Output already exists; use a new evidence directory')
   const receiptInput = localPath(root, POLICY_RECEIPTS_INPUT)
   const original = fs.existsSync(receiptInput) ? fs.readFileSync(proofRegularFile(receiptInput), 'utf8') : undefined
-  if (original) {
+  if (original && !options.prepareOnly) {
     const existing = JSON.parse(original)
     requireValue(existing.release?.sha256 === 'REPLACE_WITH_RELEASE_RECEIPT_SHA256'
       && existing.attachment?.sha256 === 'REPLACE_WITH_ATTACHMENT_RECEIPT_SHA256'
@@ -110,7 +126,7 @@ export async function reconcileCubesignerPolicy(options: {
     const protocol = copy(context, 'protocol_context.json')
     const wasm = copy(wasmFile, 'policy.wasm')
     const testsRef = copy(testsFile, 'tests.json')
-    copy(buildFile, 'build-receipt.json')
+    const buildRef = copy(buildFile, 'build-receipt.json')
     const liveRef = live ? copy(live, 'live.json') : undefined
     requireValue(protocol.sha256 === releaseInput.protocolContextSha256 && wasm.sha256 === `sha256:${build.wasm.sha256}`
       && testsRef.sha256 === `sha256:${releaseInput.tests.sha256.replace(/^sha256:/, '')}`
@@ -138,6 +154,36 @@ export async function reconcileCubesignerPolicy(options: {
       && typeof policy.policy_id === 'string' && /^NamedPolicy#[\da-f-]{36}$/.test(policy.policy_id)
       && policy.rules?.length === 1 && policy.rules[0].hash === `0x${wasm.sha256.slice(7)}`, 'Remote policy identity/version/Wasm mismatch')
     const providerIdentifier = `${policy.policy_id}/${version}`
+    if (options.prepareOnly) {
+      const materialsRef = copy(read(input.materials, 'materials'), 'materials.json')
+      const publicBridgeRef = copy(read(input.publicBridge, 'publicBridge'), 'bridge.json')
+      const bridgeRef = copy(bridge, 'bridge-program.vmexe')
+      const vkRef = copy(vk, 'aggregate-vk')
+      writeJson(path.join(stage, 'published.json'), {checkedAt: createdAt, environment: client.environment,
+        organization: client.organization, policyArtifactDigest: wasm.sha256, policyIdentifier: release.policyIdentifier,
+        providerPolicyIdentifier: providerIdentifier, schema: 'scrollsdk/cubesigner-policy-published/v1'})
+      const expected: CubesignerExpectedPolicyInputs = {
+        aggregateVerifyingKey: vkRef, bridgeProgram: bridgeRef, buildReceipt: buildRef,
+        environment: input.environment, key: {keyId: key.keyId, materialId: key.materialId, roleId: key.roleId}, materials: materialsRef, organization: input.organization, protocolContext: protocol, publicBridge: publicBridgeRef, publishedVersion: {path: 'published.json', sha256: hash(path.join(stage, 'published.json'))},
+        release: refs.release, ...(liveRef ? {liveEvidence: liveRef} : {}),
+      }
+      resolveCubesignerPolicy({deploymentDir: stage, keys: [expected.key], network: config.network, scope: 'preparation',
+        selection: {expectedPolicy: expected, mode: 'production_verifier_key_policy'}})
+      for (const ref of [expected.release, expected.protocolContext, expected.materials, expected.publicBridge, expected.buildReceipt, expected.bridgeProgram, expected.aggregateVerifyingKey, expected.publishedVersion, expected.liveEvidence]) {
+        if (ref) ref.path = path.join(options.output, ref.path)
+      }
+
+      requireValue(hash(context) === protocol.sha256 && hash(proofRegularFile(configFile)) === configDigest, 'Deployment changed during preparation')
+      const selectionPath = localPath(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
+      requireValue(!fs.existsSync(selectionPath), 'Expected policy already selected; review existing evidence before replacing it')
+      writeJson(path.join(stage, 'expected-selection.json'), expected)
+      writeJson(path.join(stage, 'preparation-request.json'), {inputSha256: hash(proofRegularFile(localPath(root, options.input)))})
+      fs.renameSync(stage, output)
+      writeJson(selectionPath, expected)
+      return {directory: output, liveAcceptance: 'not-verified', nextCommand: 'scrollsdk setup proof-publish',
+        policyIdentifier: release.policyIdentifier, receiptSelection: selectionPath, status: 'configuration-inputs-prepared-activation-pending'}
+    }
+
     const observed = object(await client.key(key.roleId, key.keyId), 'key readback')
     requireValue(observed.key_id === key.keyId && observed.material_id === key.materialId && observed.enabled === true, 'Remote key identity or enabled state mismatch')
     const expected = [{RequireRoleSession: [key.roleId]}, providerIdentifier]

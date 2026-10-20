@@ -43,4 +43,22 @@ describe('preparation stage command reporting', () => {
     expect(info.args.flat().join('\n')).not.to.include('Preparation complete')
     expect(process.exitCode).to.equal(2)
   })
+
+  it('carries explicit credential deferral from render to the separate session stage', () => {
+    const log = sinon.stub(console, 'log')
+    reportPreparationStage(new JsonOutputContext('setup render', true), 'render', 'deployment', {files: {}, nextStage: 'signer-session', planId: 'test-plan', status: 'stage-complete', steps: {'render-final': 'completed'}}, true, true)
+    const report = JSON.parse(log.firstCall.args[0]).data
+    expect(report.nextCommand).equal('scrollsdk setup signer-session --defer-cubesigner')
+    expect(report.activation.status).equal('pending')
+    expect(report.activation.nextCommand).include('--kube-context')
+  })
+
+  it('resumes deferred credentials without adding a policy approval prerequisite', () => {
+    const log = sinon.stub(console, 'log')
+    reportPreparationStage(new JsonOutputContext('setup upload-secrets', true), 'upload-secrets', 'deployment', {deferred: ['cubesigner-session', 'cubesigner-secret-upload'], files: {}, planId: 'test-plan', status: 'stage-complete', steps: {'secret-upload': 'completed'}}, true, true)
+    const report = JSON.parse(log.firstCall.args[0]).data
+    expect(report.nextCommand).equal('scrollsdk setup signer-session')
+    expect(report.deferred).deep.equal(['cubesigner-session', 'cubesigner-secret-upload'])
+    expect(report.activation.status).equal('pending')
+  })
 })

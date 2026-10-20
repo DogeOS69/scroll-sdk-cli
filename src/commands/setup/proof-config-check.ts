@@ -24,6 +24,7 @@ export default class ProofConfigCheck extends Command {
     'kube-context': Flags.string({dependsOn: ['live'], description: 'Kubernetes context for --live'}),
     live: Flags.boolean({default: false, description: 'After rollout: also require a fresh authenticated TSO poll from every Attestation signer in the WP tsoSigners'}),
     namespace: Flags.string({default: 'default', dependsOn: ['live'], description: 'Kubernetes namespace for --live'}),
+    scope: Flags.string({default: 'activation', description: 'Preparation validates expected policy materials; it never authorizes signer installation', options: ['activation', 'preparation']}),
     spec: Flags.string({description: 'Optional DeploymentSpec proof source'}),
   }
 
@@ -67,9 +68,10 @@ export default class ProofConfigCheck extends Command {
         workerBundleId = result.bundleId
       }
 
-      const readiness = proofEnforcementReadiness(deploymentDir, contract, config)
+      const readiness = proofEnforcementReadiness(deploymentDir, contract, config, flags.scope as 'activation' | 'preparation')
       if (contract.enforcement === 'enforce' && !readiness.ready) throw new Error(`Proof enforcement is blocked:\n- ${readiness.blockers.join('\n- ')}`)
       for (const blocker of readiness.blockers) output.addWarning(`Enforcement pending: ${blocker}`)
+      if (flags.live && flags.scope !== 'activation') throw new Error('--live requires activation scope')
       const live = flags.live ? await liveSignerAcceptance({context: flags['kube-context'], deploymentDir, enforcement: contract.enforcement, namespace: flags.namespace, now: ProofConfigCheck.now, readMetrics: ProofConfigCheck.readMetrics}) : undefined
 
       output.logSuccess(`Verified ${contract.mode}/${contract.generation}/${contract.enforcement} proof deployment ${contract.generationId}`)

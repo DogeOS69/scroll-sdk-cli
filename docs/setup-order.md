@@ -14,7 +14,9 @@ orchestrates those steps and resumes after external funding and partner handoffs
 saved plan, run `setup render`, then `setup signer-session` when CubeSigner is
 configured, then `setup upload-secrets` (each accepts `--dir` for the saved
 deployment directory). Rendering does not create the remote session; the explicit
-session stage wraps `cubesigner-refresh` and skips completed creation on retry.
+session stage uses `cubesigner-policy prepare-session` in production mode and
+reuses or creates transport-mode credentials through the existing refresh flow.
+Completed session steps are skipped on retry.
 The manual commands below remain available independently. Before installation,
 follow the [runtime and activation checks](deployment-preflight.md#6-opt-into-cluster-rpc-and-reth-startup-checks);
 after source submission, [check final contract verification](deployment-preflight.md#8-check-final-contract-verification).
@@ -48,6 +50,12 @@ cross-repository corrections and shadowfork configuration rehearsal.
 
 Production Bridge initialization follows the [staged production flow](spec-preparation.md#production-funding-and-resume).
 The legacy full `bridge-init` command uses a deterministic test helper.
+
+For staged CubeSigner deployments, follow [preparation and activation](cubesigner-preparation.md):
+`protocol-context → proof-materials / policy-prepare → proof-publish → signer-kit → render → signer-session → upload-secrets`.
+`signer-kit-publish` is a separate publication handoff. Attachment approval does not
+block expected configuration or an already authorized role's session preparation.
+Only fresh activation verification authorizes the guarded signer install target.
 
 ## 1. Prepare configuration and identities
 

@@ -200,7 +200,11 @@ try {
     input.bridge = fund(bridge.p2sh_address, setup.bridge_target_amount, true);
     fs.writeFileSync(file, JSON.stringify(input));
     await cmd('06-bridge-complete', ['bridge-funding', '--dir', deployment]);
+    await cmd('07-context', ['protocol-context', '--dir', deployment]);
     await cmd('07-proof-materials', ['proof-materials', '--dir', deployment]);
+    await cmd('07-policy-prepare', ['policy-prepare', '--dir', deployment]);
+    await cmd('07-proof-publish', ['proof-publish', '--dir', deployment]);
+    await cmd('07-signer-kit', ['signer-kit', '--dir', deployment]);
     result = await cmd('08-render', ['render', '--dir', deployment]);
     if (result?.status !== 'stage-complete' || !result.nextCommand.includes('upload-secrets'))
         throw Error('Preparation did not complete rendering');

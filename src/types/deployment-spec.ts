@@ -1,4 +1,4 @@
-import type {CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
+import type {CubesignerExpectedPolicyInputs, CubesignerPolicyMode, CubesignerPolicyReceiptInputs} from '../utils/cubesigner-policy-receipts.js'
 import type {MonitoringConfig} from '../utils/monitoring-slack.js'
 import type {CapacityManagerConfig} from './capacity-manager.js'
 import type {DstackControllerConfig} from './dstack-controller.js'
@@ -669,6 +669,7 @@ export interface SigningConfig {
 
   /** CubeSigner TEE key configuration */
   cubesigner?: {
+    expectedPolicy?: CubesignerExpectedPolicyInputs
     /** Read-only CubeSigner identity lookup during plan. Omit keyId only for a single-key role. */
     identity?: {keyId?: string; roleId: string}
     mode?: CubesignerPolicyMode

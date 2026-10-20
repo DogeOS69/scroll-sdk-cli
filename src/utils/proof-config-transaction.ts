@@ -120,10 +120,10 @@ export function prepareProofConfig(options: {
     if (!Number.isSafeInteger(runtime.observeRealProofDeadlineMs) || runtime.observeRealProofDeadlineMs! <= 0) throw new Error('runtime.observeRealProofDeadlineMs must be a positive safe integer, supplied in the request or existing proof topology')
     // Receipt dependencies stay in the deployment input root and are hash-checked
     // before projection; generated live evidence is copied into the chart map.
-    const policy = resolveCubesignerPolicy({deploymentDir: root, keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network, selection: config.cubesigner})
-    if (config.cubesigner?.policyReceipts) {
+    const policy = resolveCubesignerPolicy({deploymentDir: root, keys: (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: config.network, scope: 'preparation', selection: config.cubesigner})
+    if ((config.cubesigner?.expectedPolicy ?? config.cubesigner?.policyReceipts)) {
       // Preserve explicit references across the candidate-directory boundary.
-      for (const ref of Object.values(config.cubesigner.policyReceipts)) {
+      for (const ref of Object.values(config.cubesigner.expectedPolicy ?? config.cubesigner.policyReceipts!)) {
         if (ref && typeof ref === 'object' && 'path' in ref) ref.path = path.resolve(root, ref.path)
       }
     }
@@ -211,7 +211,7 @@ export function prepareProofConfig(options: {
     // needs rebasing; opaque native programs and compiler files remain verbatim.
     const handoff = path.join(stage, '.data/preparation/proof-release-preparation-v1.json')
     if (fs.existsSync(handoff)) fs.writeFileSync(handoff, fs.readFileSync(handoff, 'utf8').replaceAll(JSON.stringify(stage).slice(1, -1), JSON.stringify(target).slice(1, -1)))
-    const readiness = proofEnforcementReadiness(stage, contract, config)
+    const readiness = proofEnforcementReadiness(stage, contract, config, 'preparation')
     const warnings = [...policy.warnings, ...readiness.blockers.map(blocker => `Enforcement pending: ${blocker}`)]
     const receipt = {contract: publicationPlan ? PREPARED_CONTRACT : '.data/proof-deployment.json',createdAt: new Date().toISOString(), releaseSha256: selected.sha256, request, schema: 'scrollsdk/proof-config-prepared/v1', warnings, ...(publicationPlan ? {publicationPlan, publicationPlanSha256: hash(publicationPlan)} : {}), files: snapshot(stage)}
     jsonWrite(path.join(stage, PREPARED), receipt)
@@ -250,7 +250,7 @@ export async function publishProofConfig(options: {apply: boolean; awsProfile?: 
   try {
     if (fs.existsSync(path.join(root, '.data/proof-deployment.json')) || fs.existsSync(path.join(root, '.data/proof-program-publication-v1.json'))) throw new Error('Prepared configuration was already published or has a publication receipt; refusing repeated mutation')
     const config = toml.parse(fs.readFileSync(path.join(root, contract.intentSource.path), 'utf8')) as unknown as DogeConfig
-    const before = proofEnforcementReadiness(root, contract, config)
+    const before = proofEnforcementReadiness(root, contract, config, 'preparation')
     // The kit for this configuration is exported and published after activation.
     const pending = withoutPendingDeploymentKit(before.blockers).filter(item => item !== 'Program-publication receipt is not bound to the deployment contract')
     if (contract.enforcement === 'enforce' && pending.length > 0) throw new Error(`Enforcement evidence is incomplete before publication: ${pending.join('; ')}`)
@@ -266,7 +266,7 @@ export async function publishProofConfig(options: {apply: boolean; awsProfile?: 
       if (proofFileHash(proofRegularFile(path.join(root, relative))) !== expected.sha256) throw new Error(`Published but local input changed: ${relative}`)
     }
 
-    const readiness = proofEnforcementReadiness(root, final, config)
+    const readiness = proofEnforcementReadiness(root, final, config, 'preparation')
     const failed = withoutPendingDeploymentKit(readiness.blockers)
     if (contract.enforcement === 'enforce' && failed.length > 0) throw new Error(`Published but final enforcement checks failed: ${failed.join('; ')}`)
     validateProofDeploymentContract(root, prepared.contract)
