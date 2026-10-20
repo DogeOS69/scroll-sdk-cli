@@ -5,6 +5,7 @@ import {JsonFileSessionManager} from '@cubist-labs/cubesigner-sdk-fs-storage'
 import os from 'node:os'
 import path from 'node:path'
 
+import {readCubesignerOrganization} from './cubesigner-organization.js'
 import {readRoleScopedPolicyKey} from './cubesigner-policy-readback.js'
 import {type PolicyReadbackClient} from './cubesigner-policy-reconcile.js'
 
@@ -29,7 +30,7 @@ export async function connectActivationClient(sessionFile?: string): Promise<Act
       return response.json()
     },
     key: (role, key) => readRoleScopedPolicyKey(api, role, key),
-    organization: client.orgId,
+    ...await readCubesignerOrganization(client),
     policy: (name, version) => api.policyGet(name, version as `v${number}`),
     role: id => api.roleGet(id),
     sessions: id => api.sessionsList(id).fetchAll(),

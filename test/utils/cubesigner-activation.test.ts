@@ -122,6 +122,25 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  it('prepares and recovers an organization alias while pinning its canonical identity', async () => {
+    const configFile = path.join(root, '.data/doge-config.toml')
+    const config: any = toml.parse(fs.readFileSync(configFile, 'utf8'))
+    delete config.cubesigner.expectedPolicy
+    fs.writeFileSync(configFile, toml.stringify(config))
+    fs.rmSync(path.join(root, 'prepared-policy'), {recursive: true})
+    const selectionFile = path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
+    fs.rmSync(selectionFile)
+    input.organization = 'fixture_org'
+    client.organizationName = 'fixture_org'
+    await prepare()
+    expect(JSON.parse(fs.readFileSync(selectionFile, 'utf8')).organization).equal('Org#fixture')
+    fs.rmSync(selectionFile)
+    await prepare()
+    expect(JSON.parse(fs.readFileSync(selectionFile, 'utf8')).organization).equal('Org#fixture')
+    client.organization = 'Org#another'
+    await rejects(() => prepare(), 'Prepared organization differs')
+  })
+
   it('prepares complete production pins without creating attachment receipts; strict resolution remains closed', () => {
     const selected: any = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8'))
     expect(selected.cubesigner.policyReceipts).equal(undefined)

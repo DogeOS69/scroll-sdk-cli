@@ -102,6 +102,20 @@ describe('reconcile an externally governed policy into preparation receipts', ()
 
   it('rejects another environment before any read', async () => {await fails('environment/organization mismatch', {...client(), environment: 'prod'}); expect(calls).to.deep.equal([])})
   it('rejects another organization before any read', async () => {await fails('environment/organization mismatch', {...client(), organization: 'Org#other'}); expect(calls).to.deep.equal([])})
+  it('accepts a provider-verified alias and emits canonical organization bindings', async () => {
+    input.organization = 'fixture_org'
+    await run({...client(), organizationName: 'fixture_org'})
+    const refs = JSON.parse(fs.readFileSync(path.join(root, selection), 'utf8'))
+    expect(refs.organization).equal('Org#fixture')
+    const attachment = JSON.parse(fs.readFileSync(path.join(root, refs.attachment.path), 'utf8'))
+    expect(attachment.organization).equal('Org#fixture')
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'input.json'), 'utf8')).organization).equal('fixture_org')
+  })
+  it('rejects an unverified organization alias before reading policy or key state', async () => {
+    input.organization = 'another_org'
+    await fails('environment/organization mismatch', {...client(), organizationName: 'fixture_org'})
+    expect(calls).deep.equal([])
+  })
   it('rejects passing tests for another context before connecting', async () => {
     write('test-report.json', {result: 'passed'})
     input.release.tests = {...ref('test-report.json'), result: 'passed'}
