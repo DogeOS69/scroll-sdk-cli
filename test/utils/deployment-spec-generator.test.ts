@@ -743,10 +743,10 @@ describe('deployment-spec-generator', () => {
     });
 
     for (const [policyIdentifier, accepted] of [
-      ['Policy_123/v1', true], ['abc/v999999999', true], ['a'.repeat(30) + '/v1', true],
-      ['policy-name/v1', false], ['policy.name/v1', false], ['ab/v1', false],
-      ['a'.repeat(31) + '/v1', false], ['Policy_123/v0', false],
-    ] as const) it(`checks provider-compatible policy name ${policyIdentifier}`, () => {
+      ['policy_123/v1', true], ['abc/v999999999', true], ['a'.repeat(30) + '/v1', true],
+      ['Policy_123/v1', false], ['_policy/v1', false], ['latest_policy/v1', false], ['policy-name/v1', false], ['policy.name/v1', false], ['ab/v1', false],
+      ['a'.repeat(31) + '/v1', false], ['policy_123/v0', false],
+    ] as const) it(`checks provider and signer compatible policy name ${policyIdentifier}`, () => {
       const spec = createMinimalSpec();
       spec.signing!.cubesigner!.productionPolicy = {
         policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,

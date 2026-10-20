@@ -58,9 +58,9 @@ describe('CubeSigner policy deployment', () => {
     expect(calls.filter(argv => argv.includes('create'))).to.have.length(1)
   })
 
-  for (const name of ['test-policy', 'test.policy', 'ab', 'a'.repeat(31)]) it(`rejects invalid name ${name} before provider calls or output creation`, () => {
+  for (const name of ['Policy_123', '_policy', 'latest_policy', 'test-policy', 'test.policy', 'ab', 'a'.repeat(31)]) it(`rejects invalid name ${name} before provider calls or output creation`, () => {
     const {args, calls} = fixture()
-    expect(() => deployCubesignerPolicy({...args, name})).throw('3-30 ASCII letters')
+    expect(() => deployCubesignerPolicy({...args, name})).throw('3-30 lowercase ASCII letters')
     expect(calls).empty
     expect(fs.existsSync(args.output)).equal(false)
   })

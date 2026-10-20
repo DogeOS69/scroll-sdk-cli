@@ -24,7 +24,7 @@ export function deployCubesignerPolicy(options: {
   buildReceipt: string; buildReceiptSha256: string; keyId: string; name: string; organization: string; output: string
   run?: PolicyToolRunner
 }): {attachmentReceipt: string; policyIdentifier: string; wasmSha256: string} {
-  if (!isCubesignerPolicyName(options.name)) throw new Error('Invalid policy name: use 3-30 ASCII letters, digits or underscores')
+  if (!isCubesignerPolicyName(options.name)) throw new Error('Invalid policy name: use 3-30 lowercase ASCII letters, digits or underscores, starting with a letter or digit and excluding latest')
   if (!options.keyId.startsWith('Key#') || !options.organization.startsWith('Org#')) throw new Error('Explicit CubeSigner key and organization IDs are required')
   const run = options.run ?? runPolicyTool
   const cs = (args: string[]): Json => {

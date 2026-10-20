@@ -275,6 +275,13 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     expect(fs.existsSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'))).equal(true)
     expect(fs.existsSync(path.join(root, 'prepared-policy/attachment.json'))).equal(false)
   })
+  it('rejects preparation recovery when the alias resolves to a different provider policy ID', async () => {
+    const selectionPath = path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
+    fs.rmSync(selectionPath)
+    remote.policy.policy_id = 'NamedPolicy#00000000-0000-0000-0000-000000000002'
+    await rejects(() => prepare(), 'Published version changed during preparation recovery')
+    expect(fs.existsSync(selectionPath)).equal(false)
+  })
   for (const field of ['policyIdentifier', 'programIdentityDigest', 'protocolContextSha256']) it(`blocks invalid expected ${field}`, async () => {
     input.release[field] = field === 'policyIdentifier' ? 'dogeos-bridge/latest' : 'unknown'
     write('invalid-input.json', input)

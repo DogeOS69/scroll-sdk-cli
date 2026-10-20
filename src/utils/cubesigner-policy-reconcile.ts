@@ -64,7 +64,7 @@ export async function reconcileCubesignerPolicy(options: {
   requireValue(isDeepStrictEqual(declaredKeys, [{keyId: key.keyId, materialId: key.materialId, roleId: key.roleId}]), 'Reconciliation key/role differs from saved deployment configuration')
   requireValue(['beta', 'gamma', 'prod'].includes(input.environment) && typeof input.organization === 'string' && input.organization.trim().length > 0, 'Explicit CubeSigner environment and organization are required')
   requireValue(typeof releaseInput.requiresLiveEvidence === 'boolean', 'release.requiresLiveEvidence must explicitly describe the reviewed release requirement')
-  requireValue(isCubesignerPolicyIdentifier(releaseInput.policyIdentifier), 'Explicit immutable name/vN policy identifier is required; name must use 3-30 ASCII letters, digits or underscores')
+  requireValue(isCubesignerPolicyIdentifier(releaseInput.policyIdentifier), 'Explicit immutable name/vN policy identifier is required; name must use 3-30 lowercase ASCII letters, digits or underscores, starting with a letter or digit and excluding latest')
   requireValue(typeof releaseInput.proofResolverAuthority === 'string', 'Missing HTTPS proof resolver authority')
   const resolver = new URL(releaseInput.proofResolverAuthority)
   requireValue(resolver.protocol === 'https:' && resolver.origin === releaseInput.proofResolverAuthority, 'Proof resolver must be an HTTPS origin without a path')
@@ -105,7 +105,11 @@ export async function reconcileCubesignerPolicy(options: {
     requireValue(archived.organization === input.organization, 'Prepared organization differs from current management session')
     const [name, version] = releaseInput.policyIdentifier.split('/')
     const policy = object(await client.policy(name, version), 'published policy')
-    requireValue(policy.name === name && policy.version === Number(version.slice(1)) && policy.policy_type === 'Wasm' && policy.rules?.length === 1 && policy.rules[0].hash === resolved.policy?.policyArtifactDigest.replace('sha256:', '0x'), 'Published version changed during preparation recovery')
+    const published = json(read(archived.publishedVersion, 'published version', 1024 * 1024))
+    requireValue(typeof policy.policy_id === 'string' && /^NamedPolicy#[\da-f-]{36}$/.test(policy.policy_id)
+      && `${policy.policy_id}/${version}` === published.providerPolicyIdentifier
+      && policy.name === name && policy.version === Number(version.slice(1)) && policy.policy_type === 'Wasm'
+      && policy.rules?.length === 1 && policy.rules[0].hash === resolved.policy?.policyArtifactDigest.replace('sha256:', '0x'), 'Published version changed during preparation recovery')
     const selectionPath = localPath(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
     requireValue(!fs.existsSync(selectionPath) || isDeepStrictEqual(json(proofRegularFile(selectionPath)), archived), 'Expected selection changed; refusing replacement')
     requireValue(!selection.expectedPolicy || isDeepStrictEqual(selection.expectedPolicy, archived), 'Managed expected selection differs from preparation archive')

@@ -37,7 +37,7 @@ export default class PrepareInput extends Command {
     const {flags} = await this.parse(PrepareInput)
     const output = new JsonOutputContext('setup cubesigner-policy prepare-input', flags.json)
     if (!isCubesignerPolicyIdentifier(flags.policy, 1)) {
-      output.error('E747_POLICY_INPUT_INVALID', 'Select a concrete published name/vN, v1 or later; name must use 3-30 ASCII letters, digits or underscores (for example regtest_policy/v1).', 'VALIDATION', true)
+      output.error('E747_POLICY_INPUT_INVALID', 'Select a concrete published name/vN, v1 or later; name must use 3-30 lowercase ASCII letters, digits or underscores, starting with a letter or digit and excluding latest (for example regtest_policy/v1).', 'VALIDATION', true)
     }
 
     try {

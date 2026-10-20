@@ -830,7 +830,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       !isCubesignerPolicyIdentifier(cubesignerPolicy.policyIdentifier, 1)) {
       errors.push({
         code: 'E601_INVALID_VALUE',
-        message: `${policyPath}.policyIdentifier must be an immutable name/vN identifier (v1 or later) with a 3-30 character alphanumeric/underscore name and must not use latest`,
+        message: `${policyPath}.policyIdentifier must be an immutable name/vN identifier (v1 or later) with a 3-30 character lowercase ASCII letter/digit/underscore name, starting with a letter or digit and excluding latest`,
         path: `${policyPath}.policyIdentifier`,
       })
     }

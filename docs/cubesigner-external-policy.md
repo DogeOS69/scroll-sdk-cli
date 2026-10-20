@@ -40,8 +40,11 @@ Do not keep the only copy under `/tmp`.
 
 ## 2. Publish, propose, approve, and verify
 
-Policy names must contain 3–30 ASCII letters, digits or underscores, for example
-`regtest_policy`. Hyphens, dots and spaces are not accepted by CubeSigner. Use a
+Policy names must contain 3–30 lowercase ASCII letters, digits or underscores,
+start with a letter or digit, and exclude `latest`, for example `regtest_policy`.
+These constraints satisfy both CubeSigner and the supported native signer:
+CubeSigner rejects hyphens, dots and spaces; the signer also rejects uppercase
+letters, a leading underscore and names containing `latest`. Use a
 concrete `name/vN` identifier in reviewed inputs; expected-policy preparation
 requires `v1` or later.
 
@@ -49,7 +52,8 @@ The preparation input accepts an organization ID or alias. `prepare` and
 `reconcile` verify the organization against the management session's provider
 readback and save its canonical `Org#...` ID in generated evidence. They do not
 rewrite the management session file. Retries must still match the previously
-prepared organization. Runtime sessions may retain the SDK's organization alias;
+prepared organization and the archived canonical policy ID, version and Wasm digest.
+Runtime sessions may retain the SDK's organization alias;
 activation accepts it only when provider readback binds it to that same organization.
 
 Prefer Core's governance tool with the Council-reviewed `gov.json`. It supports

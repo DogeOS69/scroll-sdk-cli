@@ -30,7 +30,7 @@ describe('CubeSigner policy preparation input validation', () => {
       expect(result.status, result.stderr).equal(1)
       const response = JSON.parse(result.stdout)
       expect(response.error.code).equal('E747_POLICY_INPUT_INVALID')
-      expect(response.error.message).include('3-30 ASCII letters, digits or underscores')
+      expect(response.error.message).include('3-30 lowercase ASCII letters, digits or underscores, starting with a letter or digit and excluding latest')
       expect(fs.readdirSync(root)).empty
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })

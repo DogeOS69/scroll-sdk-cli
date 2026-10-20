@@ -134,7 +134,7 @@ export function resolveCubesignerPolicy(input: {
   const r = release.value
   string(r.coreRevision, 'policy core revision', /^[\da-f]{40}$/)
   const identifier = string(r.policyIdentifier, 'immutable policy identifier')
-  if (!isCubesignerPolicyIdentifier(identifier)) throw new Error('Invalid immutable policy identifier: use a 3-30 character alphanumeric/underscore name and concrete version')
+  if (!isCubesignerPolicyIdentifier(identifier)) throw new Error('Invalid immutable policy identifier: use a 3-30 character lowercase ASCII letter/digit/underscore name, starting with a letter or digit and excluding latest, and a concrete version')
   if (r.sdkVersion !== SDK_VERSION || r.requestContract !== REQUEST_CONTRACT) throw new Error('Policy SDK/request contract mismatch')
   const authority = string(r.proofResolverAuthority, 'proof resolver authority')
   const url = new URL(authority)

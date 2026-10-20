@@ -124,7 +124,7 @@ describe('reconcile an externally governed policy into preparation receipts', ()
       await reconcileCubesignerPolicy({async connect() {connected = true; return client()}, directory: root, input: 'input.json', output: '.data/reconciled'})
       expect.fail('Expected invalid policy name')
     } catch (error) {
-      expect((error as Error).message).include('3-30 ASCII letters')
+      expect((error as Error).message).include('3-30 lowercase ASCII letters')
     }
 
     expect(connected).equal(false)

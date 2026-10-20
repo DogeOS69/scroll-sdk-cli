@@ -1,6 +1,6 @@
-/** CubeSigner aliases contain 3–30 ASCII letters, digits or underscores. */
+/** Use the intersection of CubeSigner alias rules and the supported native signer contract. */
 export function isCubesignerPolicyName(value: unknown): value is string {
-  return typeof value === 'string' && value === value.trim() && /^\w{3,30}$/.test(value)
+  return typeof value === 'string' && value === value.trim() && /^[\da-z][\d_a-z]{2,29}$/.test(value) && !value.includes('latest')
 }
 
 /** Keep concrete version checks separate from the provider's alias constraints. */
