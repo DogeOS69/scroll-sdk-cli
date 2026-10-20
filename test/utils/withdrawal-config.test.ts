@@ -68,6 +68,41 @@ enabled = true
     expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).to.equal(merged)
   })
 
+  it('keeps post-marker table fields in their original table when adopting proof settings', () => {
+    const source = `${WITHDRAWAL_DEPLOYMENT_BEGIN}
+[managed]
+value = 1
+${WITHDRAWAL_DEPLOYMENT_END}
+operator_tuning = 7
+
+[proof_system]
+mode = "active"
+`
+    const facts = {managed: {value: 1}, proof_system: {correctness_policy_transport: 'bridge_proof_ref_v1'}}
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts)
+    expect(toml.parse(merged)).deep.equal({
+      managed: {operator_tuning: 7, value: 1},
+      proof_system: {correctness_policy_transport: 'bridge_proof_ref_v1', mode: 'active'},
+    })
+    expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).equal(merged)
+  })
+
+  it('parses the tail in its original table context even when it is not valid standalone TOML', () => {
+    const source = `${WITHDRAWAL_DEPLOYMENT_BEGIN}
+[managed]
+value = 1
+${WITHDRAWAL_DEPLOYMENT_END}
+mode = "active"
+
+[mode]
+enabled = true
+`
+    const facts = {managed: {value: 2}}
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts)
+    expect(toml.parse(merged)).deep.equal({managed: {mode: 'active', value: 2}, mode: {enabled: true}})
+    expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).equal(merged)
+  })
+
   it('requires explicit fresh initialization and rejects snapshot continuation', () => {
     const fresh = {...FACTS_INPUT, l2BootstrapNextStartingBlockHeight: undefined}
     expect(buildWithdrawalDeploymentFacts(fresh).facts.fresh_genesis_init).to.equal(false)
