@@ -84,13 +84,23 @@ describe('setup capacity-manager credentials', () => {
       const log = path.join(root, 'calls.jsonl')
       fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), JSON.stringify({dstack: {auth: {existingSecret: 'dstack-auth', key: 'admin-token'}, deployment: 'dstack-controller', namespace: 'chain'}, fleets: {action: 'create', files: [{path: '.scrollsdk/capacity-manager/fleet.yaml', sha256: createHash('sha256').update(fleetYaml).digest('hex')}]}, kubeContext: 'saved-context', namespace: 'chain', project: 'test-project', proofSecret: 'proof-secrets', schema: 'scrollsdk/capacity-manager/v1', valuesFile: 'values/capacity-manager-production.yaml', workerCredentialMaster: {existingSecret: 'proof-secrets', key: 'prover-worker-token'}}))
       fs.writeFileSync(path.join(root, 'values/capacity-manager-production.yaml'), 'dstackAuth:\n  existingSecret: dstack-auth\n  key: admin-token\nworkerCredentialMaster:\n  existingSecret: proof-secrets\n  key: prover-worker-token\nmanager:\n  dstack:\n    project: test-project\n    fleets: [test-fleet]\n')
+      const managerValuesPath = path.join(root, 'values/capacity-manager-production.yaml')
+      fs.appendFileSync(managerValuesPath, 'wpAuth: {existingSecret: proof-secrets, key: proof-work-token}\n')
+      const planPath = path.join(root, '.scrollsdk/capacity-manager/plan.json')
+      const prepared = JSON.parse(fs.readFileSync(planPath, 'utf8'))
+      prepared.provider = 'vastai'
+      prepared.valuesSha256 = createHash('sha256').update(fs.readFileSync(managerValuesPath)).digest('hex')
+      fs.writeFileSync(planPath, JSON.stringify(prepared))
       fs.writeFileSync(path.join(root, 'kubectl'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-const input = args.includes('exec') || args.includes('apply') ? fs.readFileSync(0, 'utf8') : '';
+const input = args.includes('exec') || args.includes('apply') || args.includes('create') ? fs.readFileSync(0, 'utf8') : '';
 fs.appendFileSync(process.env.CM_TEST_LOG, JSON.stringify({args, input}) + '\\n');
 if (process.env.CM_FAIL_WAIT && args.includes('rollout')) { console.error('NONFUNCTIONAL_PRIVATE_RESPONSE'); process.exit(1); }
+if (process.env.CM_FAIL_PROBE && args.includes('wait')) { console.error('NONFUNCTIONAL_PRIVATE_RESPONSE'); process.exit(1); }
 if(args.includes('get') && args.includes('dstack-auth')) console.log(JSON.stringify({data:{'admin-token':Buffer.from('NONFUNCTIONAL_DSTACK_TOKEN').toString('base64')}}));
+else if(args.includes('get') && args.includes('dstack-controller')) console.log(JSON.stringify({metadata:{uid:'00000000-0000-0000-0000-000000000000'},spec:{template:{spec:{containers:[{name:'controller',image:'example.invalid/controller:nonfunctional'}]}}}}));
+else if(args.includes('logs')) console.log(JSON.stringify({dns:'passed',dstackTlsAuthProjectBackend:'passed',wpCapacityApi:'passed',secretReferences:'passed'}));
 else if(args.includes('get')) process.stdout.write('');
 else console.log('{"updated":true}');
 `, {mode: 0o755})
@@ -108,6 +118,8 @@ else console.log('{"updated":true}');
       expect(JSON.parse(exec.input).fleets[0]).to.deep.include({name: 'test-fleet', nodes: {max: 2, min: 0, target: 0}})
       expect(exec.args.join(' ')).not.to.include('NONFUNCTIONAL_')
       expect(calls.filter(call => call.args.includes('apply'))).to.have.length(0)
+      expect(calls.filter(call => call.args.includes('create'))).to.have.length(1)
+      expect(calls.findIndex(call => call.args.includes('logs'))).to.be.lessThan(calls.indexOf(exec))
       expect(calls.some(call => call.args.includes('dstack-auth'))).to.equal(false)
       const wait = calls.findIndex(call => call.args.includes('rollout'))
       expect(wait).to.be.greaterThan(-1)
@@ -118,6 +130,12 @@ else console.log('{"updated":true}');
       expect(failed.stdout + failed.stderr).not.to.include('NONFUNCTIONAL_PRIVATE_RESPONSE')
       expect(failed.stdout + failed.stderr).to.include('retry make install-capacity-manager')
       expect(fs.readFileSync(log, 'utf8').trim().split('\n')).to.have.length(1)
+      fs.writeFileSync(log, '')
+      const probeFailed = spawnSync(process.execPath, [cli, 'setup', 'capacity-manager', 'credentials', '--dir', root, '--json'], {encoding: 'utf8', env: {...process.env, CM_FAIL_PROBE: '1', CM_TEST_LOG: log, PATH: `${root}:${process.env.PATH}`}})
+      expect(probeFailed.status).not.to.equal(0)
+      const probeCalls = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+      expect(probeCalls.some(call => call.args.includes('exec'))).to.equal(false)
+      expect(probeCalls.at(-1).args).to.include('delete')
       fs.writeFileSync(log, '')
       const status = spawnSync(process.execPath, [cli, 'setup', 'capacity-manager', 'status', '--dir', root, '--json'], {encoding: 'utf8', env: {...process.env, CM_TEST_LOG: log, PATH: `${root}:${process.env.PATH}`}})
       expect(status.status, status.stderr + status.stdout).to.equal(0)

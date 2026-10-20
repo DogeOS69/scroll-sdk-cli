@@ -125,7 +125,9 @@ describe('setup prep-charts generated frontend config', () => {
     const values: Record<string, string> = {
       'frontend.ADMIN_SYSTEM_DASHBOARD_URI': 'https://admin.testnet.example',
       'frontend.BRIDGE_API_URI': 'https://bridge.testnet.example/api',
+      'frontend.EXTERNAL_EXPLORER_URI_L1': '',
       'frontend.EXTERNAL_EXPLORER_URI_L2': 'https://explorer.testnet.example',
+      'frontend.EXTERNAL_RPC_URI_L1': 'https://l1.example',
       'frontend.EXTERNAL_RPC_URI_L2': 'https://rpc.testnet.example',
       'frontend.GRAFANA_URI': 'https://grafana.testnet.example',
       'frontend.ROLLUPSCAN_API_URI': 'https://rollup.testnet.example/api',
@@ -133,9 +135,23 @@ describe('setup prep-charts generated frontend config', () => {
 
     expect(buildFrontendExternalUrlUpdates(key => values[key])).to.deep.equal({
       GRAFANA_URI: 'https://grafana.testnet.example',
+      REACT_APP_EXTERNAL_EXPLORER_URI_L1: '',
       REACT_APP_EXTERNAL_EXPLORER_URI_L2: 'https://explorer.testnet.example',
+      REACT_APP_EXTERNAL_RPC_URI_L1: 'https://l1.example',
       REACT_APP_EXTERNAL_RPC_URI_L2: 'https://rpc.testnet.example',
     })
+  })
+
+  it('retains explicit Dogecoin URL overrides, including an empty explorer', () => {
+    const values: Record<string, string> = {
+      'frontend.DOGE_EXTERNAL_EXPLORER_URI_L1': '',
+      'frontend.DOGE_EXTERNAL_RPC_URI_L1': 'https://dogecoin.example',
+      'frontend.EXTERNAL_EXPLORER_URI_L1': 'https://other-explorer.example',
+      'frontend.EXTERNAL_RPC_URI_L1': 'https://other-rpc.example',
+    }
+    const updates = buildFrontendExternalUrlUpdates(key => values[key])
+    expect(updates.REACT_APP_EXTERNAL_EXPLORER_URI_L1).to.equal('')
+    expect(updates.REACT_APP_EXTERNAL_RPC_URI_L1).to.equal('https://dogecoin.example')
   })
 })
 

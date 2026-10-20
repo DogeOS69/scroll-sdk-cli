@@ -6,11 +6,14 @@ dstack `0.21.5`). This manages the controller's deployment configuration;
 Worker fleet/task generation and GPU provisioning are separate operations.
 
 For spec-driven GPU lifecycle after service installation, use `setup proof-workers
-plan`, `apply`, `status` and `destroy` from the generated runtime directory. This
+plan`, `apply`, `status`, `drain` and `destroy` from the generated runtime directory. This
 reuses the controller and its Vast.ai backend; the operator does not need a local
 dstack login. See the SDK's `examples/proof-workers.md` for resource defaults,
 pricing admission, persistent cleanup watchdog and explicit outage boundaries.
 This adapter is pinned to dstack 0.21.5 and uses its native fleet/run API.
+
+For continuous capacity and private controller HTTPS, see
+[Prepare and activate Capacity Manager](capacity-manager-activation.md).
 
 ## Choose AWS or Vast.ai workers
 

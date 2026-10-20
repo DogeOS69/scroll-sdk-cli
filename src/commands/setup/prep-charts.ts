@@ -167,7 +167,9 @@ export function buildFrontendExternalUrlUpdates(
 ): Record<string, unknown> {
   return {
     GRAFANA_URI: getConfigValue('frontend.GRAFANA_URI'),
+    REACT_APP_EXTERNAL_EXPLORER_URI_L1: getConfigValue('frontend.DOGE_EXTERNAL_EXPLORER_URI_L1') ?? getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L1'),
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L2'),
+    REACT_APP_EXTERNAL_RPC_URI_L1: getConfigValue('frontend.DOGE_EXTERNAL_RPC_URI_L1') ?? getConfigValue('frontend.EXTERNAL_RPC_URI_L1'),
     REACT_APP_EXTERNAL_RPC_URI_L2: getConfigValue('frontend.EXTERNAL_RPC_URI_L2'),
   }
 }
@@ -2042,8 +2044,6 @@ export default class SetupPrepCharts extends Command {
           REACT_APP_DOGE_NETWORK: this.dogeConfig.network,
           REACT_APP_ETH_SYMBOL: this.getConfigValue("frontend.ETH_SYMBOL"),
           REACT_APP_EXTERNAL_DOCS_URI: this.formatUrl("https://docs." + sharedHost, "/en/home"),
-          REACT_APP_EXTERNAL_EXPLORER_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_EXPLORER_URI_L1"),
-          REACT_APP_EXTERNAL_RPC_URI_L1: this.getConfigValue("frontend.DOGE_EXTERNAL_RPC_URI_L1"),
           REACT_APP_FAUCET_URI: this.formatUrl("https://faucet." + sharedHost),
           REACT_APP_L1_CUSTOM_ERC20_GATEWAY_PROXY_ADDR: "",
           REACT_APP_L1_GAS_PRICE_ORACLE: this.getConfigValue("contractsFile.L1_GAS_PRICE_ORACLE_ADDR"),

@@ -158,6 +158,17 @@ class Lifecycle(unittest.TestCase):
         self.assertIn(('stop', ['test-worker'], True), self.client.calls)
         self.assertIn(('delete', ['test-gpu']), self.client.calls)
 
+    def test_explicit_drain_waits_for_terminal_run_before_deleting_fleet(self):
+        self.apply()
+        self.payload['action'] = 'drain'
+        self.apply()
+        self.assertIn(('stop', ['test-worker'], False), self.client.calls)
+        self.assertNotIn(('stop', ['test-worker'], True), self.client.calls)
+        self.assertNotIn(('delete', ['test-gpu']), self.client.calls)
+        self.client.run.status = RunStatus.DONE
+        self.apply()
+        self.assertIn(('delete', ['test-gpu']), self.client.calls)
+
     def test_failed_run_deletes_fleet(self):
         self.apply()
         self.client.run.status = RunStatus.FAILED

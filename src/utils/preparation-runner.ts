@@ -13,13 +13,14 @@ import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {prepareCapacityManager} from './capacity-manager.js'
 import {writeContractsHelmValues} from './contracts-helm-values.js'
 import {parseDatabaseUrl} from './dstack-database.js'
+import {resolveEnvValue} from './non-interactive.js'
 import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {prepareLocalGenesis} from './preparation-genesis.js'
 import {prepareGrafanaAdmin} from './preparation-grafana.js'
-import {assertHelperFundingImage, prepareManagedHelper, prepareManagedHelperFunding, verifyManagedHelperFunding} from './preparation-helper.js'
+import {assertHelperFundingImage, checkHelperRecoveryTimelock, prepareManagedHelper, prepareManagedHelperFunding, verifyManagedHelperFunding} from './preparation-helper.js'
 import {helperFeeWalletWif, usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {importPreparationPolicyReceipts} from './preparation-policy-receipts.js'
@@ -29,6 +30,7 @@ import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
 import {buildProofTopology} from './proof-topology-init.js'
+import {writeHelmValues} from './spec-helm-values.js'
 import {specKubernetesTarget} from './spec-kubernetes-target.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
@@ -135,7 +137,28 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'dstack-db': case 'blockscout-db': {
-        await command(['db-init', '-N', '--databases', step.id === 'dstack-db' ? 'dstack' : 'blockscout']); break
+        const {admin} = spec.database
+        if (!admin) throw new Error('Database preparation requires database.admin')
+        const password = resolveEnvValue(admin.password)
+        if (!password) throw new AwaitingInput({message: 'Supply the database administrator password through its configured environment reference'})
+        const file = localPath(root, 'config.toml')
+        const config = toml.parse(fs.readFileSync(file, 'utf8')) as any
+        config.db ??= {}
+        const previous = config.db.admin
+        config.db.admin = {DATABASE: admin.database, PASSWORD: '$ENV:SCROLLSDK_DB_ADMIN_PASSWORD', PUBLIC_HOST: admin.host, PUBLIC_PORT: String(admin.port), USERNAME: admin.username, VPC_HOST: admin.vpcHost ?? admin.host, VPC_PORT: String(admin.vpcPort ?? admin.port)}
+        privateWrite(file, toml.stringify(config))
+        try {
+          await command(['db-init', '-N', '--databases', step.id === 'dstack-db' ? 'dstack' : 'blockscout'], {SCROLLSDK_DB_ADMIN_PASSWORD: password})
+        } finally {
+          // Preserve newly created application DSNs while removing temporary admin input.
+          const latest = toml.parse(fs.readFileSync(file, 'utf8')) as any
+          latest.db ??= {}
+          if (previous === undefined) delete latest.db.admin
+          else latest.db.admin = previous
+          privateWrite(file, toml.stringify(latest))
+        }
+
+        break
       }
 
       case 'genesis': {
@@ -151,6 +174,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'managed-helper-funding': {await prepareManagedHelperFunding(root, spec, dogecoinRpc(root)); break}
       case 'managed-helper-setup':
       case 'managed-helper-fund': {
+        if (step.id === 'managed-helper-setup') await checkHelperRecoveryTimelock(spec, dogecoinRpc(root))
         await command(['bridge-init', '--step', step.id === 'managed-helper-setup' ? '2-setup' : '4-fund', ...bridgeArgs.filter(arg => arg !== '--production'), '--managed-helper-wallets'])
         break
       }
@@ -256,6 +280,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         if (p.proofPublication && step.id !== 'charts') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
         await command(args)
         if (step.id === 'render-final') writeContractsHelmValues(root)
+        writeHelmValues(root, spec)
         break
       }
 

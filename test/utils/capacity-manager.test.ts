@@ -173,6 +173,19 @@ describe('Core capacity manager', () => {
     expect(() => buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)).to.throw('GPU/image')
   })
 
+  it('binds AWS A10G fleets to sm86 workers without weakening the image check', () => {
+    const input = fixture()
+    Object.assign(input.spec.capacityManager!, {gpu: 'A10G', instanceTypes: ['g5.4xlarge']})
+    input.imageCheck.cudaArchitectures = ['86']
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    expect((toml.parse(values.manager.policy) as any).pool).to.include({gpu_class: 'A10G', vram_gib: 22})
+    const {configurations} = capacityManagerFleets(input.spec)
+    expect(configurations[0].resources.gpu.name).to.deep.equal(['A10G'])
+    expect(configurations[0].instance_types).to.deep.equal(['g5.4xlarge'])
+    input.imageCheck.cudaArchitectures = ['89']
+    expect(() => buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)).to.throw('GPU/image')
+  })
+
 
   for (const managedTls of [false, true]) it(`prepares reproducible values and a WP-only peer without allocating (managed TLS: ${managedTls})`, () => {
     const input = fixture()
@@ -228,7 +241,11 @@ describe('Core capacity manager', () => {
         } finally {fs.writeFileSync(file, saved)}
       }
 
+      fs.writeFileSync(path.join(root, 'Makefile'), '# operator note\ninstall-capacity-manager:\n\thelm upgrade --install capacity-manager example/chart\n')
       const result = prepareCapacityManager(root, () => contract)
+      const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8')
+      expect(makefile).to.include('# operator note')
+      expect(makefile.indexOf('setup capacity-manager credentials')).to.be.lessThan(makefile.indexOf('helm upgrade'))
       const first = fs.readFileSync(result.valuesFile, 'utf8')
       const fleet = yaml.load(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/fleets/aws-l4.yaml'), 'utf8')) as any
       expect(fleet.nodes).to.deep.equal({max: 2, min: 0, target: 0})
@@ -276,17 +293,16 @@ describe('Core capacity manager', () => {
         // Only the capacity selection is consumed, never unrelated edits to the new spec.
         fs.writeFileSync(specFile, yaml.dump({...input.spec, infrastructure: {namespace: 'must-not-be-used'}}))
         const options = {dstackUrl: managedTls ? `https://${internalTls.hostname}` : 'https://new-controller.example.invalid', specFile}
-        expect(() => prepareCapacityManager(root, () => contract, options)).to.throw('Retire')
-        expect(fs.existsSync(managerPath)).to.equal(false)
-        expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/config.json'))).to.equal(false)
-        writeJson(path.join(root, '.scrollsdk/proof-workers/state.json'), {status: 'destroyed'})
+        // Preparation may proceed while the old bounded worker is running.
+        // Activation is still blocked until a graceful drain is complete.
+        expect(() => assertSdkWorkersRetired(root)).to.throw('Retire')
         const before = ['.scrollsdk/intent.json', '.scrollsdk/plan.json', '.scrollsdk/state.json', '.data/worker.json', '.data/publication.json'].map(file => fs.readFileSync(path.join(root, file), 'utf8'))
         expect(() => prepareCapacityManager(root, () => contract, {...options, dstackUrl: 'http://not-loopback.invalid'})).to.throw()
         expect(fs.existsSync(managerPath)).to.equal(false)
         const handoff = prepareCapacityManager(root, () => contract, options)
         expect(handoff.namespace).to.equal('chain')
         expect((yaml.load(fs.readFileSync(managerPath, 'utf8')) as any).manager.dstack.serverUrl).to.equal(options.dstackUrl)
-        expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/config.json'), 'utf8'))).to.deep.equal({capacityManager: input.spec.capacityManager})
+        expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/config.json'), 'utf8'))).to.deep.equal({capacityManager: {...input.spec.capacityManager, ...(managedTls ? {} : {connection: {mode: 'existing-https', serverUrl: options.dstackUrl}})}})
         expect(['.scrollsdk/intent.json', '.scrollsdk/plan.json', '.scrollsdk/state.json', '.data/worker.json', '.data/publication.json'].map(file => fs.readFileSync(path.join(root, file), 'utf8'))).to.deep.equal(before)
         const generated = fs.readFileSync(managerPath, 'utf8')
         prepareCapacityManager(root, () => contract)
@@ -295,6 +311,20 @@ describe('Core capacity manager', () => {
         expect(generated).to.include('4Gi')
       } finally {fs.rmSync(sdk, {force: true, recursive: true})}
     } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  it('projects configurable per-family runtime estimates and rejects invalid durations', () => {
+    const input = fixture()
+    input.spec.capacityManager!.runtimeEstimates = {scrollChunkSeconds: 900}
+    expect(() => assertDeploymentSpecFields({capacityManager: input.spec.capacityManager})).not.to.throw()
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    const policy = toml.parse(values.manager.policy) as any
+    expect(policy.families.scroll_chunk.runtime_seconds).to.equal(900)
+    expect(policy.families.scroll_batch.runtime_seconds).to.equal(300)
+    for (const seconds of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      input.spec.capacityManager!.runtimeEstimates.scrollChunkSeconds = seconds
+      expect(() => resolveCapacityManager(input.spec)).to.throw('positive integer seconds')
+    }
   })
 
   it('generates a bounded AWS policy and preserves the compiler worker contract', () => {

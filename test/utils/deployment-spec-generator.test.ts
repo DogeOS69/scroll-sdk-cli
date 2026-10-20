@@ -266,6 +266,22 @@ describe('deployment-spec-generator', () => {
     });
   });
 
+  it('retains the database administrator password reference when freezing a plan', () => {
+    const spec = createMinimalSpec()
+    const name = 'SCROLLSDK_TEST_DATABASE_ADMIN_PASSWORD'
+    const previous = process.env[name]
+    spec.database.admin!.password = `$ENV:${name}`
+    process.env[name] = 'fake-test-database-password'
+    try {
+      const frozen = resolveDeploymentSpecEnvRefs(spec)
+      expect(frozen.database.admin!.password).to.equal(`$ENV:${name}`)
+      expect(JSON.stringify(frozen)).not.to.include('fake-test-database-password')
+    } finally {
+      if (previous === undefined) delete process.env[name]
+      else process.env[name] = previous
+    }
+  })
+
   it('freezes Ethereum references without credentials and retains refreshable references in private config', () => {
     const spec = createMinimalSpec()
     spec.ethereumDa!.l1RpcUrl = '$ENV:ETHEREUM_RPC_URL'

@@ -7,6 +7,12 @@ Scope update (2026-10-20): compatibility with older preparation-plan layouts is
 not required. Resume applies to the current workflow only; historical migration
 behavior recorded in the audit below is not an implementation requirement.
 
+Integration note (2026-10-20): the current implementation keeps session preparation
+in the explicit `setup signer-session` stage after `setup render`. Production
+sessions use `cubesigner-policy prepare-session`; rendering creates no remote
+session. See [the current operator guide](cubesigner-preparation.md) for commands.
+The audit observations below describe the inspected revisions.
+
 ## Decision
 
 **Prepare configuration before Council approval; do not install the CubeSigner

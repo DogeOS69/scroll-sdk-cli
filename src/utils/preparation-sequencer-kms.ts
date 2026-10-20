@@ -23,7 +23,7 @@ interface SequencerKmsRecord {
   schema: 'dogeos/bridge-sequencer-kms/v1'
   serviceAccount?: string
 }
-const intentHash = (spec: DeploymentSpec) => digest(JSON.stringify({aws: spec.infrastructure.aws, kms: spec.preparation!.bridge.production!.sequencerKms, name: spec.metadata.name, namespace: spec.infrastructure.namespace, serviceAccount: spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name ?? 'withdrawal-processor'}))
+const intentHash = (spec: DeploymentSpec) => digest(JSON.stringify({aws: {accountId: spec.infrastructure.aws?.accountId, eksClusterName: spec.infrastructure.aws?.eksClusterName, region: spec.infrastructure.aws?.region}, kms: spec.preparation!.bridge.production!.sequencerKms, name: spec.metadata.name, namespace: spec.infrastructure.namespace, serviceAccount: spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name ?? 'withdrawal-processor'}))
 
 export function readPreparedSequencerKms(root: string): SequencerKmsRecord | undefined {
   const file = localPath(root, RECORD)

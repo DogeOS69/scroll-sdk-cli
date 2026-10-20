@@ -146,6 +146,7 @@ export function resolveDeploymentSpecEnvRefs(spec: DeploymentSpec): DeploymentSp
   }
 
   if (spec.feeOracle?.ethereumRpcUrl?.includes('$ENV:') && resolved.feeOracle) resolved.feeOracle.ethereumRpcUrl = spec.feeOracle.ethereumRpcUrl
+  if (spec.database?.admin?.password?.includes('$ENV:') && resolved.database.admin) resolved.database.admin.password = spec.database.admin.password
   return resolved
 }
 

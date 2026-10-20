@@ -235,7 +235,7 @@ function fingerprint(root: string): Record<string, string> {
   const files: Record<string, string> = {}
   const visit = (relative: string): void => {
     const file = localPath(root, relative)
-    if (!fs.existsSync(file) || relative === '.data/contracts-build' || operatorEditableArtifact(relative)) return
+    if (!fs.existsSync(file) || relative === '.data/contracts-build') return
     const stat = fs.lstatSync(file)
     if (stat.isDirectory()) for (const name of fs.readdirSync(file).sort()) visit(`${relative}/${name}`)
     else if (stat.isFile()) files[relative] = digest(fs.readFileSync(file))
@@ -327,7 +327,7 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   state.warnings = warnings
   if (state.planId !== id) throw new Error('Workflow state does not match plan')
   if (options.stage && !staged) throw new Error('Stage commands require a new staged plan; resume this legacy plan with setup apply')
-  if (staged && !options.stage && state.status !== 'prepared') throw new Error(`Select a preparation stage: ${stageCommand(plan.steps.find(step => state.steps[step.id] !== 'completed' && !state.deferred?.includes(step.id))?.stage ?? 'genesis', root)}`)
+  if (staged && !options.stage && plan.steps.some(step => state.steps[step.id] !== 'completed')) throw new Error(`Select a preparation stage: ${stageCommand(plan.steps.find(step => state.steps[step.id] !== 'completed' && !state.deferred?.includes(step.id))?.stage ?? 'genesis', root)}`)
   if (staged && options.refreshRuntime) throw new Error('Runtime refresh is a legacy apply operation; it is not a staged deployment operation')
   if (options.stage) {
     const index = PREPARATION_STAGES.indexOf(options.stage)
@@ -343,12 +343,20 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
   try {fd = fs.openSync(lock, 'wx', 0o600)} catch {throw new Error('Another apply owns .scrollsdk/apply.lock; if interrupted, verify its recorded host/PID is no longer running before removing that lock')}
   fs.writeFileSync(fd, JSON.stringify({host: os.hostname(), pid: process.pid})); fs.closeSync(fd)
   try {
+    const missingArtifacts: string[] = []
     for (const [file, hash] of Object.entries(state.files)) {
-      // Also release hashes recorded by older CLI versions.
-      if (operatorEditableArtifact(file)) {delete state.files[file]; continue}
       const current = localPath(root, file)
-      if (!fs.existsSync(current)) warn(`Prepared artifact is missing: ${file}. Continuing; steps that require it will report their missing input.`)
-      else if (digest(fs.readFileSync(current)) !== hash) warn(`Prepared artifact changed: ${file}. Continuing with the current file; completed steps will not be regenerated.`)
+      if (!fs.existsSync(current)) missingArtifacts.push(file)
+      else if (!operatorEditableArtifact(file) && digest(fs.readFileSync(current)) !== hash) warn(`Prepared artifact changed: ${file}. Continuing with the current file; completed steps will not be regenerated.`)
+    }
+
+    if (missingArtifacts.length > 0) {
+      state.status = 'recovery-required'
+      state.waiting = {message: `Prepared artifacts are missing: ${missingArtifacts.join(', ')}. Restore these files from the deployment backup, then retry. Completed steps, credentials and transactions will not be replayed automatically.`}
+      delete state.completedStage
+      // Keep the missing entries so a second attempt cannot silently accept the loss.
+      writeJson(statePath, state)
+      return state
     }
 
     if (options.refreshRuntime) {

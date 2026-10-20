@@ -159,7 +159,7 @@ the L2 RPC; its fee sampling RPC is independent of that balance check and of DA.
 The complete bridge-operator sequence (inputs, funding, external Secrets,
 installation order, partner handoff, GPU startup and runtime acceptance) is in
 [`scroll-sdk/examples/bridge-operator-deployment.md`](https://github.com/DogeOS69/scroll-sdk/blob/feat/spec-preparation-examples/examples/bridge-operator-deployment.md).
-`plan` and the eleven stage commands are preparation entrypoints; they do not replace Helm installation
+`plan` and the twelve stage commands are preparation entrypoints; they do not replace Helm installation
 or automatically rent a GPU.
 
 
@@ -182,6 +182,7 @@ scrollsdk setup signer-kit
 # Separate explicit publication/handoff; this does not block unrelated render.
 scrollsdk setup signer-kit-publish
 scrollsdk setup render
+scrollsdk setup signer-session  # only when CubeSigner is configured
 scrollsdk setup upload-secrets
 # Review deployment/Makefile and install releases manually.
 ```
@@ -229,16 +230,24 @@ generation so a retry uses the same identity.
 | `setup proof-publish` | Compile expected configuration and publish the selected proof bundle. | Explicit cloud boundary; requires complete material identities and concrete published policy. |
 | `setup signer-kit` | Export the canonical signer deployment kit. | Local export only. |
 | `setup signer-kit-publish` | Publish the kit or consume its reviewed publication record. | Separate cloud/human handoff; unrelated render/upload can proceed while pending. |
-| `setup render` | Render production values, generate private Secrets and validate/reuse or create the role session. | New sessions are provider mutations. `--defer-cubesigner` omits only signer credential work. No Helm installation. |
+| `setup render` | Render production values and generate private Secrets. | No remote session creation or Helm installation. |
+| `setup signer-session` | Validate/reuse or create the role session using the selected mode. | Explicit provider mutation when absent. `--defer-cubesigner` records this work as deferred. |
 | `setup upload-secrets` | Upload using the saved destination. Signer Secrets have a separate checkpoint. | `--defer-cubesigner` excludes signer files even if stale files exist locally. |
 
 Follow [CubeSigner preparation and activation](cubesigner-preparation.md) for the
 complete workflow. Expected policy preparation does not require attachment approval.
 The session step uses role authorization independently of the new attachment;
 valid scoped sessions are reused and invalid sessions require explicit recovery.
-Use `render --defer-cubesigner` and `upload-secrets --defer-cubesigner` to proceed
+Production mode delegates to `cubesigner-policy prepare-session`, preserving its
+reviewed lifetime limits, remote validation and interrupted-creation journal.
+Non-mainnet transport mode reuses existing local role/key/expiry-matching files
+or calls `cubesigner-refresh` when both files are absent; activation verifies
+remote session state before installation. Completed session steps are skipped
+on retry. An ambiguous transport-mode creation failure requires provider
+inspection before retrying.
+Use `signer-session --defer-cubesigner` and `upload-secrets --defer-cubesigner` to proceed
 with unrelated services. Deferred steps are recorded as deferred, never completed.
-Rerun render and upload without the flag to finish only those steps.
+Rerun signer-session and upload without the flag to finish only those steps.
 
 `proof-materials --generation ...` or `--preparation-receipt ...` explicitly selects
 the standalone utility. `--non-interactive` alone still resumes the saved stage;
@@ -648,16 +657,17 @@ and optional `waiting` instructions; the response's `warnings` lists detected
 local file changes. Exit codes: `0` for `stage-complete` or
 `prepared`, `2` for `waiting`, and `1` for failure or `recovery-required`.
 `stage-complete` means only the selected stage is complete. `prepared` means all
-all selected stages are complete; running-service acceptance remains separate. A wait or
+selected stages are complete; running-service acceptance remains separate. A wait or
 failure reports the same stage as the next command. A successfully printed JSON result with
 `status: waiting` is not a completed deployment.
 
 Each completed step and artifact fingerprints are saved before proceeding.
-Fingerprints are diagnostic only: edited or missing files produce warnings,
-and the next step runs using the files currently on disk. These checks apply
-to saved plans whose steps match the current workflow. Warnings name
-files without printing their contents. Operator-owned `values/*.yaml` (including
-nested YAML files) and `Makefile` remain excluded from fingerprint tracking.
+Missing recorded artifacts stop the workflow with `recovery-required`; restore
+them from a backup before retrying. Completed steps are not replayed to recreate
+lost credentials, transactions or generated files. Content changes remain advisory:
+warnings name files without printing their contents. Operator-owned
+`values/*.yaml` (including nested YAML files) and `Makefile` are tracked for
+existence, while edits to their content remain permitted.
 External funding and governance inputs remain editable under `.scrollsdk/inputs/`.
 
 Changes to the saved `plan.json` or `intent.json` content hashes also produce
@@ -1003,6 +1013,10 @@ These prices are example ceilings, not provider quotations. `L40S` is also
 supported with a compatible checked Worker image (CUDA architecture 89); select
 its fleet, instance type and price ceilings explicitly using the SDK's qualified
 AWS profile guidance. SDK DevNet profiles are not copied into a new deployment.
+For a checked Worker image built for CUDA architecture 86, AWS `A10G` is
+supported (for example, `g5.4xlarge`). Select `gpu: A10G` and the instance type
+explicitly; fleet selectors retain the AWS/dstack name `A10G`, and the planner
+uses 22 GiB of usable VRAM. Verify the regional price and capacity before rental.
 The manager image must be a compatible, separately published immutable image;
 this workflow neither builds nor publishes it.
 
@@ -1253,3 +1267,91 @@ are preserved, including an operator CIDR overlapping an ALB subnet. Values and
 the receipt participate in the same generation transaction. Discovery uses only
 AWS describe calls and Kubernetes reads. Applying the rendered NetworkPolicy and
 verifying CNI enforcement remain deployment acceptance steps.
+
+## Reproducible Helm tuning and runtime checks
+
+Optional `helmValues` maps a generated values filename to a YAML overlay. The
+plan freezes the overlay text. Bootstrap and each chart-preparation pass merge
+it into the standard `values/*.yaml` files consumed by the normal Make targets;
+no private helper script or extra Helm arguments are needed. Existing operator
+Makefiles are preserved. Use externally managed Secret references in overlays;
+never place passwords, tokens or keys in this field. Arrays replace except
+named `env` entries, which merge by name. Unknown filenames and invalid mappings
+fail rather than silently producing unused files. Removing an override does not
+undo existing operator edits; review/reset those fields explicitly.
+
+```yaml
+helmValues:
+  l2-reth-rpc-production.yaml: |
+    resources:
+      requests: {cpu: 500m, memory: 2Gi}
+      limits: {cpu: "2", memory: 4Gi}
+  scroll-monitor-production.yaml: |
+    loki:
+      persistence: {size: 20Gi}
+```
+
+Missing recorded artifacts, including values and the Makefile, now stop preparation
+with `recovery-required`. Restore the files from the deployment backup and retry;
+completed funding or identity steps are never replayed to repair a missing file.
+Edits to values/Makefile remain operator-owned. Other changed files remain advisory.
+The sequencer KMS fingerprint binds AWS account, EKS cluster, region, namespace,
+deployment name, service account and explicit KMS intent, not ALB/Secret routing.
+Old KMS fingerprints or changed stage layouts are not automatically reinterpreted:
+use the original CLI for those saved plans or perform a separately reviewed migration.
+
+The generated SDK `install-cubesigner-signer` target invokes
+`setup cubesigner-policy verify-activation` before Helm. This branch supports
+explicit non-mainnet `transport_only` and governed production selection.
+The check renders the selected chart, verifies singleton session mounts, reads
+current remote key/role/policy/session state and compares delivered Kubernetes
+Secrets and protocol context. Unknown attached policies fail closed even in
+transport mode. The result does not claim real-proof acceptance, inspection of
+an existing Pod's refresh cache, or completion of installation. Production
+expected material bindings, executed attachment, fresh Council/role evidence and
+reviewed session lifetimes remain mandatory; release-required acceptance evidence
+is also checked. `--policy-only` leaves activation pending and cannot authorize
+installation. No governance action is performed by this check.
+
+`setup deployment-preflight` keeps network/container probes explicit:
+
+```bash
+scrollsdk setup deployment-preflight --deployment-dir deployment --json \
+  --kube-context example-context --rendered-manifest rendered/reth.yaml \
+  --rendered-manifest rendered/ingress.yaml \
+  --ethereum-rpc-env SEPOLIA_RPC_A --ethereum-rpc-env SEPOLIA_RPC_B \
+  --ethereum-rpc-quorum 2 --ethereum-chain-id 11155111 \
+  --signer-container local-attestation-signer --dogecoin-rpc-env DOGECOIN_RPC_URL \
+  --reth-image example.invalid/approved-rollup-node:reviewed-tag
+```
+
+Prepare the manifest files with `helm template` using the same chart/version,
+namespace and values as installation. The cluster check reads ready nodes and,
+when ALB resources are present, the Load Balancer Controller and TargetGroupBinding
+CRD. Per-Pod CPU/memory fit is a necessary condition only; it excludes existing
+utilization, affinity, taints, storage topology and aggregate capacity.
+The Ethereum probe sends `eth_chainId` and `latest`/`safe`/`finalized` block lookups
+in one four-call batch, then checks quorum at a shared finalized height. It does
+not establish Beacon availability or long-term provider reliability.
+The signer probe runs disposable curl in the existing container's network
+namespace and calls `getblockchaininfo`; credentials travel on stdin, not argv.
+The Reth probe uses two disposable containers sharing a network-disabled namespace, with a readable temporary copy of public
+genesis mounted read-only, a disposable public consensus signer address, a local deterministic L1 fixture
+(`node:22-alpine`), mock blob input, bounded resources and ephemeral storage. It confirms
+startup through the HTTP-server startup event and a three-second stability window; it does not establish sync or
+full application acceptance. Both probes create only local disposable containers.
+Omitted checks are explicitly `not-checked`, never implied to have passed.
+
+Contract source submission and final verification are separate:
+
+```bash
+scrollsdk setup verify-contracts --config-dir deployment --preinstalls --require-verified --wait-seconds 120
+scrollsdk setup verify-contracts --config-dir deployment --preinstalls --status-only
+```
+
+Without a status flag, the runner reports final status as `not-checked`.
+`--status-only` performs no Docker invocation or submission. Blockscout results
+are reported per target as `verified`, `partial`, `pending`, or `unavailable`;
+only full verification of every selected target exits successfully. Block-hash
+history has no Solidity source and remains a bytecode check. Optional preinstalls
+are outside the required source-verification set.

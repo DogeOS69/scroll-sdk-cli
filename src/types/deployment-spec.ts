@@ -75,6 +75,9 @@ export interface DeploymentSpec {
   /** Genesis configuration */
   genesis: GenesisConfig
 
+  /** YAML overlays keyed by generated values filename. Frozen in the plan and reapplied after chart preparation; never place credentials here. */
+  helmValues?: Record<string, string>
+
   /** Explicit identity operations, executed separately by setup gen-keystore. */
   identities?: DeploymentIdentityIntent
 

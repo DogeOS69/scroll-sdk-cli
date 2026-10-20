@@ -68,6 +68,16 @@ export async function verifyCubesignerActivation(options: {
   const configFile = proofRegularFile(path.join(root, '.data/doge-config.toml'))
   const configHash = proofFileHash(configFile)
   const config = toml.parse(fs.readFileSync(configFile, 'utf8')) as unknown as DogeConfig
+  if (!options.policyOnly) requirePolicy(options.kubeContext?.trim(), 'An explicit nonempty Kubernetes context is required for runtime activation')
+  if (config.cubesigner?.mode === 'transport_only') {
+    requirePolicy(!options.policyOnly, 'transport_only requires runtime checks; policy-only cannot authorize activation')
+    const transport = await verifyTransportActivation({...options, chart: options.chart ?? 'oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer', chartVersion: options.chartVersion ?? '0.1.9',
+      kubeContext: options.kubeContext!, namespace: options.namespace ?? 'default', values: options.values ?? 'values/cubesigner-signer-production.yaml'})
+    const result = {...transport, acceptance: 'not-verified', governance: undefined, schema: 'scrollsdk/cubesigner-activation/v1'}
+    writeJson(localPath(root, ACTIVATION_REPORT), result)
+    return result
+  }
+
   const keys = (config.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id})))
   requirePolicy(config.cubesigner?.mode === 'production_verifier_key_policy' && keys.length === 1, 'Activation requires explicit production mode and one key/role')
   requirePolicy(config.cubesigner.expectedPolicy, 'Import complete expected material bindings with prepare-input and prepare; existing verified receipts remain intact and publication/approval must not be repeated')
@@ -89,6 +99,7 @@ export async function verifyCubesignerActivation(options: {
     && !documents.some(doc => doc?.kind === 'HorizontalPodAutoscaler'), 'One signer instance per runtime session is required')
   const {containers} = workloads[0].spec.template.spec
   requirePolicy(containers?.length === 1 && !containers[0].envFrom?.length, 'Unexpected signer containers/environment sources')
+  requirePolicy(!containers[0].command?.length && !containers[0].args?.length, 'Unreviewed signer command overrides are not allowed')
   validateSignerEnvironment(containers[0].env, expected)
   validateSignerRuntimeManifest(workloads[0])
   const wp: any = toml.parse(fs.readFileSync(proofRegularFile(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')), 'utf8'))
@@ -185,4 +196,71 @@ export function validateSignerRuntimeManifest(workload: any): void {
   const claim = (workload.spec.volumeClaimTemplates ?? []).find((entry: any) => entry.metadata?.name === cache[0].name)
   requirePolicy(cacheVolume?.emptyDir || (workload.kind === 'StatefulSet' && isDeepStrictEqual(claim?.spec.accessModes, ['ReadWriteOnce'])), 'Shared or external session caches require a separately reviewed deployment; automatic activation refuses them')
   requirePolicy(!mounts.some((mount: any) => ['/', '/app', '/etc'].includes(mount.mountPath) || mount.mountPath.startsWith('/etc/cubesigner/') || mount.mountPath.startsWith('/app/.sessions/')), 'Overlapping mounts can replace verified runtime inputs')
+}
+
+async function verifyTransportActivation(options: {
+  chart: string; chartVersion: string; connect: () => Promise<ActivationClient>; directory: string;
+  kubeContext: string; namespace: string; readConfigMap?: (name: string) => any;
+  readSecret?: (name: string) => any; render?: (args: string[], root: string) => string; values: string;
+}) {
+  const root = fs.realpathSync(options.directory)
+  const configFile = proofRegularFile(path.join(root, '.data/doge-config.toml'))
+  const configHash = proofFileHash(configFile)
+  const config = toml.parse(fs.readFileSync(configFile, 'utf8')) as unknown as DogeConfig
+  const selection = config.cubesigner
+  const keys = (selection?.roles ?? []).flatMap(role => role.keys.map(key => ({...key, keyId: key.key_id, materialId: key.material_id, roleId: role.role_id})))
+  requirePolicy(selection?.mode === 'transport_only' && config.network !== 'mainnet' && keys.length === 1, 'Transport activation requires an explicit non-mainnet mode and one key/role')
+  const resolved = resolveCubesignerPolicy({deploymentDir: root, keys, network: config.network, selection})
+  // Non-mainnet transport mode still verifies any explicitly selected policy receipts.
+  const policy = selection.policyReceipts ? resolveCubesignerPolicy({deploymentDir: root, keys, network: config.network, selection: {...selection, mode: 'production_verifier_key_policy'}}).policy : resolved.policy
+  const valuesFile = proofRegularFile(path.resolve(root, options.values))
+  const valuesHash = proofFileHash(valuesFile)
+  const expected = {...cubesignerPolicyEnvironment(resolved), DOGEOS_CUBESIGNER_SIGNER_NETWORK: config.network}
+  const render = options.render ?? ((args, cwd) => execFileSync('helm', args, {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000}))
+  const documents: any[] = yaml.loadAll(render(['template', 'cubesigner-signer', options.chart, '--version', options.chartVersion, '--namespace', options.namespace, '--values', valuesFile], root))
+  const workloads = documents.filter(doc => ['CronJob', 'DaemonSet', 'Deployment', 'Job', 'StatefulSet'].includes(doc?.kind))
+  requirePolicy(workloads.length === 1 && ['Deployment', 'StatefulSet'].includes(workloads[0].kind) && (workloads[0].spec.replicas ?? 1) === 1 && !documents.some(doc => doc?.kind === 'HorizontalPodAutoscaler'), 'One signer instance per runtime session is required')
+  const pod = workloads[0].spec.template.spec
+  requirePolicy(pod.containers?.length === 1 && !pod.containers[0].envFrom?.length, 'Unexpected signer containers or envFrom')
+  requirePolicy(!pod.containers[0].command?.length && !pod.containers[0].args?.length, 'Unreviewed signer command overrides are not allowed')
+  validateSignerEnvironment(pod.containers[0].env, expected)
+  validateSignerRuntimeManifest(workloads[0])
+  const key = keys[0]
+  const client = await options.connect()
+  const observed: any = await client.key(key.roleId, key.keyId)
+  const role: any = await client.role(key.roleId)
+  requirePolicy(observed.key_id === key.keyId && observed.material_id === key.materialId && observed.enabled === true && role.role_id === key.roleId && role.enabled === true, 'Remote key/role is disabled or mismatched')
+  requirePolicy(observed.key_type === 'SecpDogeTestAddr', 'Remote key type does not match the non-mainnet Dogecoin network')
+  requirePolicy(key.public_key_compressed && normalizeCompressedSecp256k1PublicKey(observed.public_key, 'provider key') === key.public_key_compressed, 'Remote public key differs from the prepared Bridge key')
+  const expectedPolicy: any[] = [{RequireRoleSession: [key.roleId]}]
+  if (policy) {
+    const refs = selection.policyReceipts!
+    requirePolicy(client.organization === refs.organization && client.environment === refs.environment, 'Policy environment/organization mismatch')
+    const [name, version] = policy.policyIdentifier.split('/')
+    const remote: any = await client.policy(name, version)
+    requirePolicy(remote.name === name && remote.version === Number(version.slice(1)) && remote.policy_type === 'Wasm' && /^NamedPolicy#[\da-f-]{36}$/.test(remote.policy_id) && remote.rules?.length === 1 && remote.rules[0].hash === policy.policyArtifactDigest.replace('sha256:', '0x'), 'Remote immutable policy differs from the approved release')
+    requirePolicy(remote.attached_to?.some((entry: any) => entry.key_id === key.keyId), 'Policy does not confirm the key attachment')
+    requirePolicy((await client.authorities()).includes(new URL(policy.proofResolverAuthority).host), 'Proof resolver is not allowed')
+    expectedPolicy.push(`${remote.policy_id}/${version}`)
+  }
+
+  requirePolicy(Array.isArray(observed.policy) && observed.policy.length === expectedPolicy.length && expectedPolicy.every(entry => observed.policy.some((actual: any) => isDeepStrictEqual(entry, actual))), 'Remote policy drift: transport_only cannot bypass an attached policy; import matching receipts')
+  const seedFile = proofRegularFile(path.join(root, 'secrets/cubesigner-signer-session.json'), 1024 * 1024)
+  const seedBytes = fs.readFileSync(seedFile)
+  const seed = JSON.parse(seedBytes.toString())
+  const now = Date.now() / 1000
+  requirePolicy(seed.org_id === client.organization && seed.role_id === key.roleId && seed.env?.['Dev-CubeSignerStack']?.SignerApiRoot === client.apiRoot, 'Runtime session environment/org/role mismatch')
+  requirePolicy(typeof seed.token === 'string' && seed.token && seed.session_exp > now && seed.session_info?.refresh_token_exp > now, 'Runtime session is expired or incomplete; rotate it explicitly')
+  const sessions = (await client.sessions(key.roleId)).filter(entry => entry.session_id === seed.session_info?.session_id)
+  requirePolicy(sessions.length === 1 && sessions[0].exp > now, 'Runtime session is revoked, absent or expired')
+  requirePolicy(Array.isArray(sessions[0].scopes) && sessions[0].scopes.length > 0 && sessions[0].scopes.every((scope: string) => ['sign:*', 'sign:btc:psbt:doge'].includes(scope)), 'Runtime session has unsupported scopes')
+  const readSecret = options.readSecret ?? (name => JSON.parse(execFileSync('kubectl', ['--context', options.kubeContext, '-n', options.namespace, 'get', 'secret', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
+  const readConfigMap = options.readConfigMap ?? (name => JSON.parse(execFileSync('kubectl', ['--context', options.kubeContext, '-n', options.namespace, 'get', 'configmap', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
+  const context = fs.readFileSync(proofRegularFile(path.join(root, '.data/protocol_context.json')), 'utf8')
+  requirePolicy(readConfigMap('protocol-context-config').data?.['protocol_context.json'] === context, 'Delivered protocol context differs from the prepared Bridge')
+  for (const document of documents.filter(doc => doc.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(document.data?.['protocol_context.json'] === context, 'Helm would replace the verified protocol context')
+  requirePolicy(Buffer.from(readSecret('cubesigner-signer-env').data?.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID ?? '', 'base64').toString() === key.keyId, 'Delivered key Secret differs from the selected key')
+  requirePolicy(Buffer.from(readSecret('cubesigner-signer-session').data?.['session.json'] ?? '', 'base64').equals(seedBytes), 'Delivered runtime session differs from the prepared seed')
+  requirePolicy(proofFileHash(configFile) === configHash && proofFileHash(valuesFile) === valuesHash && fs.readFileSync(seedFile).equals(seedBytes), 'Activation inputs changed during verification')
+  return {activation: 'verified', checkedAt: new Date().toISOString(), installed: 'not-verified', mode: resolved.mode, proofAcceptance: 'not-checked', runtimeCache: 'not-inspected'}
 }

@@ -3,7 +3,7 @@ import {Command} from '@oclif/core'
 import {preparationStageFlags, runPreparationStage} from '../../utils/preparation-stage-command.js'
 
 export default class Render extends Command {
-  static description = 'Render configuration and private Secrets; validate/reuse or create signer credentials (provider mutation), optionally --defer-cubesigner'
+  static description = 'Render configuration and private Secrets without creating remote signer sessions; run signer-session separately'
   static flags = preparationStageFlags
 
   async run(): Promise<void> {

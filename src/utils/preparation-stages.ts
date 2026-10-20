@@ -1,6 +1,6 @@
 import type {PreparationStep} from './preparation-plan.js'
 
-export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'protocol-context', 'proof-materials', 'policy-prepare', 'proof-publish', 'signer-kit', 'signer-kit-publish', 'render', 'upload-secrets'] as const
+export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'protocol-context', 'proof-materials', 'policy-prepare', 'proof-publish', 'signer-kit', 'signer-kit-publish', 'render', 'signer-session', 'upload-secrets'] as const
 export type PreparationStage = typeof PREPARATION_STAGES[number]
 
 /** Stage boundaries are explicit; prerequisites are checked, never executed implicitly. */
@@ -13,9 +13,10 @@ export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationSt
     'proof-materials': ['external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials'],
     'proof-publish': ['charts', 'proof-publish', 'charts-published'],
     'protocol-context': ['protocol-context'],
-    render: ['render-final', 'secrets', 'cubesigner-session', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
+    render: ['render-final', 'secrets', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
     'signer-kit': ['deployment-kit'],
     'signer-kit-publish': ['deployment-kit-published'],
+    'signer-session': ['cubesigner-session'],
     'upload-secrets': ['secret-upload', 'cubesigner-secret-upload'],
   }
   const steps = new Map(legacy.map(step => [step.id, step]))
@@ -39,5 +40,5 @@ export function prerequisiteStages(stage: PreparationStage): PreparationStage[] 
   if (stage === 'policy-prepare') return PREPARATION_STAGES.slice(0, PREPARATION_STAGES.indexOf('proof-materials'))
   const earlier = PREPARATION_STAGES.slice(0, PREPARATION_STAGES.indexOf(stage))
   // Kit publication is an explicit handoff; it cannot prevent preparing unrelated services.
-  return ['render', 'upload-secrets'].includes(stage) ? earlier.filter(item => item !== 'signer-kit-publish') : earlier
+  return ['render', 'signer-session', 'upload-secrets'].includes(stage) ? earlier.filter(item => item !== 'signer-kit-publish') : earlier
 }

@@ -60,7 +60,7 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
 
   const prepare = () => {write('input.json', input); return reconcileCubesignerPolicy({connect: async () => client, directory: root, input: 'input.json', output: 'prepared-policy', prepareOnly: true})}
   const mounts = [{mountPath: '/app/protocol_context.json', name: 'context', readOnly: true, subPath: 'protocol_context.json'}, {mountPath: '/etc/cubesigner', name: 'session', readOnly: true}, {mountPath: '/app/.sessions', name: 'cache'}]
-  const activate = (extra = {}) => verifyCubesignerActivation({async connect() {calls.push('provider'); return client}, directory: root, readConfigMap: () => ({data: {'protocol_context.json': fs.readFileSync(path.join(root, '.data/protocol_context.json'), 'utf8')}}), readSecret: name => ({data: name === 'cubesigner-signer-env' ? {DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID: Buffer.from(key.keyId).toString('base64')} : {'session.json': fs.readFileSync(path.join(root, 'secrets/cubesigner-signer-session.json')).toString('base64')}}), render() {
+  const activate = (extra = {}) => verifyCubesignerActivation({async connect() {calls.push('provider'); return client}, directory: root, kubeContext: 'fixture-context', readConfigMap: () => ({data: {'protocol_context.json': fs.readFileSync(path.join(root, '.data/protocol_context.json'), 'utf8')}}), readSecret: name => ({data: name === 'cubesigner-signer-env' ? {DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID: Buffer.from(key.keyId).toString('base64')} : {'session.json': fs.readFileSync(path.join(root, 'secrets/cubesigner-signer-session.json')).toString('base64')}}), render() {
     calls.push('helm template')
     return yaml.dump({kind: 'Deployment', spec: {replicas: 1, template: {spec: {containers: [{env, name: 'signer', volumeMounts: mounts}], volumes: [{configMap: {name: 'protocol-context-config'}, name: 'context'}, {name: 'session', secret: {secretName: 'cubesigner-signer-session'}}, {emptyDir: {}, name: 'cache'}]}}}})
   }, ...extra})
@@ -140,8 +140,12 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
   })
   it('does not authorize installation in policy-only mode', async () => {
     fs.rmSync(path.join(root, 'secrets'), {recursive: true})
-    expect((await activate({policyOnly: true})).activation).equal('pending-runtime-session')
+    expect((await activate({kubeContext: undefined, policyOnly: true})).activation).equal('pending-runtime-session')
     await rejects(() => activate(), 'ENOENT')
+  })
+  it('requires an explicit context before checking runtime delivery', async () => {
+    await rejects(() => activate({kubeContext: undefined}), 'explicit nonempty Kubernetes context')
+    expect(calls).empty
   })
   for (const [name, mutate, message] of [
     ['old attachment', () => {remote.key.policy = [{RequireRoleSession: [key.roleId]}, `${policyId}/v1`]}, 'Attachment pending'],
@@ -215,7 +219,7 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     handoff.operations = write('initial-operations.json', [executed])
     handoff.provisioning = write('provisioning.json', {keyId: key.keyId, schema: 'scrollsdk/cubesigner-initial-provisioning/v1', sealedBeforeBridgeRegistration: true, unregisteredAndUnfunded: true})
     write(GOVERNANCE_INPUT, handoff)
-    expect((await activate()).governance.approvals).equal('not-required-initial-provisioning')
+    expect((await activate()).governance?.approvals).equal('not-required-initial-provisioning')
     handoff.provisioning = write('unsealed.json', {keyId: key.keyId, schema: 'scrollsdk/cubesigner-initial-provisioning/v1', unregisteredAndUnfunded: true})
     write(GOVERNANCE_INPUT, handoff)
     await rejects(() => activate(), 'seal-last')

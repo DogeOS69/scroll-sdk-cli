@@ -148,10 +148,12 @@ scrollsdk setup cubesigner-policy handoff --dir . --kind sealed-upgrade \
   --config "$GOV_CONFIG" --state "$GOV_STATE" --operations "$GOV_LOG" \
   --session-lifetime "$REVIEWED_SESSION_LIFETIME_SECONDS" --json
 scrollsdk setup render --dir .
+scrollsdk setup signer-session --dir .
 scrollsdk setup upload-secrets --dir .
 ```
 
-The runtime step validates the expected material and role access independently
+The explicit `signer-session` stage calls `cubesigner-policy prepare-session`;
+rendering alone creates no remote session. The runtime step validates the expected material and role access independently
 of the attachment. It reuses a valid local seed after checking remote session
 metadata; otherwise it explicitly creates a session with exactly
 `sign:btc:psbt:doge`, auth 300 seconds, refresh 86400 seconds and the reviewed
@@ -161,12 +163,13 @@ key policy, vote, upload the seed or restart pods.
 To defer only the signer credentials:
 
 ```bash
-scrollsdk setup render --dir . --defer-cubesigner
+scrollsdk setup render --dir .
+scrollsdk setup signer-session --dir . --defer-cubesigner
 scrollsdk setup upload-secrets --dir . --defer-cubesigner
 ```
 
 Deferred steps stay incomplete. Stale signer files are excluded from unrelated
-upload. Later, rerun render and upload without the flag; completed unrelated
+upload. Later, rerun signer-session and upload without the flag; completed unrelated
 steps are not repeated. A valid seed is reused, never automatically rotated.
 
 An interrupted creation leaves `.scrollsdk/cubesigner-session-creation.json`.
@@ -267,7 +270,7 @@ external acceptance checks; a boolean declaration does not independently verify 
 
 ## 5. Deliver Secrets and use the guarded installation target
 
-Finish any deferred render/upload first. If ExternalSecrets has not yet been
+Finish any deferred signer-session/upload first. If ExternalSecrets has not yet been
 installed for the signer, apply **only** its SecretStore/ExternalSecret resources
 so the controller can deliver the uploaded seed before any signer pod exists.
 For example, with Helm and `yq` v4, from the deployment directory:
