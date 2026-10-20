@@ -43,6 +43,66 @@ describe('withdrawal-config deployment block', () => {
     expect(buildWithdrawalDeploymentFacts(FACTS_INPUT).facts).not.to.have.property('proof_system')
   })
 
+  it('adopts proof settings outside an existing deployment block when enabling production policy', () => {
+    const source = `[proof_system]
+correctness_policy_transport = "plain"
+mode = "active"
+
+[proof_system.remote_verifier]
+timeout_ms = 12345
+
+[operator_settings]
+enabled = true
+`
+    const initial = mergeWithdrawalManagedDeploymentBlock(source, buildWithdrawalDeploymentFacts(FACTS_INPUT).facts)
+    const {facts} = buildWithdrawalDeploymentFacts({...FACTS_INPUT, productionVerifierKeyPolicy: true})
+    const merged = mergeWithdrawalManagedDeploymentBlock(initial, facts)
+    const parsed = toml.parse(merged)
+    expect(parsed.proof_system).to.deep.equal({
+      correctness_policy_transport: 'bridge_proof_ref_v1',
+      mode: 'active',
+      remote_verifier: {timeout_ms: 12_345},
+    })
+    expect(parsed.operator_settings).to.deep.equal({enabled: true})
+    expect((merged.match(/^\[proof_system]$/gm) || [])).to.have.length(1)
+    expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).to.equal(merged)
+  })
+
+  it('keeps post-marker table fields in their original table when adopting proof settings', () => {
+    const source = `${WITHDRAWAL_DEPLOYMENT_BEGIN}
+[managed]
+value = 1
+${WITHDRAWAL_DEPLOYMENT_END}
+operator_tuning = 7
+
+[proof_system]
+mode = "active"
+`
+    const facts = {managed: {value: 1}, proof_system: {correctness_policy_transport: 'bridge_proof_ref_v1'}}
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts)
+    expect(toml.parse(merged)).deep.equal({
+      managed: {operator_tuning: 7, value: 1},
+      proof_system: {correctness_policy_transport: 'bridge_proof_ref_v1', mode: 'active'},
+    })
+    expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).equal(merged)
+  })
+
+  it('parses the tail in its original table context even when it is not valid standalone TOML', () => {
+    const source = `${WITHDRAWAL_DEPLOYMENT_BEGIN}
+[managed]
+value = 1
+${WITHDRAWAL_DEPLOYMENT_END}
+mode = "active"
+
+[mode]
+enabled = true
+`
+    const facts = {managed: {value: 2}}
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts)
+    expect(toml.parse(merged)).deep.equal({managed: {mode: 'active', value: 2}, mode: {enabled: true}})
+    expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).equal(merged)
+  })
+
   it('requires explicit fresh initialization and rejects snapshot continuation', () => {
     const fresh = {...FACTS_INPUT, l2BootstrapNextStartingBlockHeight: undefined}
     expect(buildWithdrawalDeploymentFacts(fresh).facts.fresh_genesis_init).to.equal(false)

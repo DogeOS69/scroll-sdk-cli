@@ -11,6 +11,7 @@ import type {ActivationClient} from './cubesigner-activation-client.js'
 
 import {validateLiveAcceptance} from './cubesigner-acceptance.js'
 import {GOVERNANCE_INPUT, requirePolicy, verifyGovernanceEvidence, verifyRoleAttestation} from './cubesigner-governance.js'
+import {matchesCubesignerOrganization} from './cubesigner-organization.js'
 import {cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {localPath, writeJson} from './preparation-io.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
@@ -21,7 +22,7 @@ const SESSION_SCOPE = 'sign:btc:psbt:doge'
 export function validateRuntimeSession(root: string, client: ActivationClient, key: {keyId: string; roleId: string}, handoff: any, sessions: any[], now = Date.now() / 1000): void {
   const file = proofRegularFile(path.join(root, 'secrets/cubesigner-signer-session.json'), 1024 * 1024)
   const session = JSON.parse(fs.readFileSync(file, 'utf8'))
-  requirePolicy(session.org_id === client.organization && session.role_id === key.roleId
+  requirePolicy(matchesCubesignerOrganization(session.org_id, client) && session.role_id === key.roleId
     && session.env?.['Dev-CubeSignerStack']?.SignerApiRoot === client.apiRoot, 'Runtime session environment/org/role mismatch')
   requirePolicy(typeof session.token === 'string' && session.token.length > 0 && session.session_exp > now && session.session_info?.refresh_token_exp > now, 'Runtime session expired or incomplete; explicit rotation is required')
   const remote = sessions.filter(entry => entry.session_id === session.session_info?.session_id)
@@ -249,7 +250,7 @@ async function verifyTransportActivation(options: {
   const seedBytes = fs.readFileSync(seedFile)
   const seed = JSON.parse(seedBytes.toString())
   const now = Date.now() / 1000
-  requirePolicy(seed.org_id === client.organization && seed.role_id === key.roleId && seed.env?.['Dev-CubeSignerStack']?.SignerApiRoot === client.apiRoot, 'Runtime session environment/org/role mismatch')
+  requirePolicy(matchesCubesignerOrganization(seed.org_id, client) && seed.role_id === key.roleId && seed.env?.['Dev-CubeSignerStack']?.SignerApiRoot === client.apiRoot, 'Runtime session environment/org/role mismatch')
   requirePolicy(typeof seed.token === 'string' && seed.token && seed.session_exp > now && seed.session_info?.refresh_token_exp > now, 'Runtime session is expired or incomplete; rotate it explicitly')
   const sessions = (await client.sessions(key.roleId)).filter(entry => entry.session_id === seed.session_info?.session_id)
   requirePolicy(sessions.length === 1 && sessions[0].exp > now, 'Runtime session is revoked, absent or expired')

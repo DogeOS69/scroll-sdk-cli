@@ -5,6 +5,7 @@ import {isDeepStrictEqual} from 'node:util'
 
 import {POLICY_BUILD_RECEIPT_SCHEMA} from './cubesigner-policy-build.js'
 import {EXTERNAL_POLICY_SCHEMA} from './cubesigner-policy-import.js'
+import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {type CubesignerExpectedPolicyInputs, type CubesignerPolicyReceiptInputs, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {localPath, writeJson} from './preparation-io.js'
 import {POLICY_RECEIPTS_INPUT} from './preparation-policy-receipts.js'
@@ -16,6 +17,8 @@ export interface PolicyReadbackClient {
   environment: string
   key(role: string, key: string): Promise<unknown>
   organization: string
+  /** Provider-verified alias for the canonical organization above. */
+  organizationName?: string
   policy(name: string, version: string): Promise<unknown>
   role(id: string): Promise<unknown>
 }
@@ -27,6 +30,12 @@ function requireValue(condition: unknown, message: string): asserts condition {
 function object(value: unknown, label: string): ObjectValue {
   requireValue(value && typeof value === 'object' && !Array.isArray(value), `${label} must be an object`)
   return value as ObjectValue
+}
+
+function bindOrganization(client: PolicyReadbackClient, input: ObjectValue): void {
+  requireValue(client.environment === input.environment && client.organization.startsWith('Org#')
+    && (input.organization === client.organization || input.organization === client.organizationName), 'Management session environment/organization mismatch')
+  input.organization = client.organization
 }
 
 const json = (file: string) => object(JSON.parse(fs.readFileSync(file, 'utf8')), 'JSON input')
@@ -53,9 +62,9 @@ export async function reconcileCubesignerPolicy(options: {
     'Deployment must select explicit production mode without an existing receipt selection or manually transcribed policy')
   const declaredKeys = (selection.roles ?? []).flatMap((role: ObjectValue) => (role.keys ?? []).map((entry: ObjectValue) => ({keyId: entry.key_id, materialId: entry.material_id, roleId: role.role_id})))
   requireValue(isDeepStrictEqual(declaredKeys, [{keyId: key.keyId, materialId: key.materialId, roleId: key.roleId}]), 'Reconciliation key/role differs from saved deployment configuration')
-  requireValue(['beta', 'gamma', 'prod'].includes(input.environment) && typeof input.organization === 'string' && input.organization.startsWith('Org#'), 'Explicit CubeSigner environment and organization are required')
+  requireValue(['beta', 'gamma', 'prod'].includes(input.environment) && typeof input.organization === 'string' && input.organization.trim().length > 0, 'Explicit CubeSigner environment and organization are required')
   requireValue(typeof releaseInput.requiresLiveEvidence === 'boolean', 'release.requiresLiveEvidence must explicitly describe the reviewed release requirement')
-  requireValue(typeof releaseInput.policyIdentifier === 'string' && /^[\da-z][\d._a-z-]{2,63}\/v(?:0|[1-9]\d{0,8})$/.test(releaseInput.policyIdentifier), 'Explicit immutable name/vN policy identifier is required')
+  requireValue(isCubesignerPolicyIdentifier(releaseInput.policyIdentifier), 'Explicit immutable name/vN policy identifier is required; name must use 3-30 lowercase ASCII letters, digits or underscores, starting with a letter or digit and excluding latest')
   requireValue(typeof releaseInput.proofResolverAuthority === 'string', 'Missing HTTPS proof resolver authority')
   const resolver = new URL(releaseInput.proofResolverAuthority)
   requireValue(resolver.protocol === 'https:' && resolver.origin === releaseInput.proofResolverAuthority, 'Proof resolver must be an HTTPS origin without a path')
@@ -92,10 +101,15 @@ export async function reconcileCubesignerPolicy(options: {
     requireValue(json(proofRegularFile(path.join(output, 'preparation-request.json'))).inputSha256 === hash(proofRegularFile(localPath(root, options.input))), 'Existing preparation belongs to different inputs; review a new output explicitly')
     const resolved = resolveCubesignerPolicy({deploymentDir: root, keys: declaredKeys, network: config.network, scope: 'preparation', selection: {expectedPolicy: archived as CubesignerExpectedPolicyInputs, mode: 'production_verifier_key_policy'}})
     const client = await options.connect()
-    requireValue(client.environment === input.environment && client.organization === input.organization, 'Management session environment/organization mismatch')
+    bindOrganization(client, input)
+    requireValue(archived.organization === input.organization, 'Prepared organization differs from current management session')
     const [name, version] = releaseInput.policyIdentifier.split('/')
     const policy = object(await client.policy(name, version), 'published policy')
-    requireValue(policy.name === name && policy.version === Number(version.slice(1)) && policy.policy_type === 'Wasm' && policy.rules?.length === 1 && policy.rules[0].hash === resolved.policy?.policyArtifactDigest.replace('sha256:', '0x'), 'Published version changed during preparation recovery')
+    const published = json(read(archived.publishedVersion, 'published version', 1024 * 1024))
+    requireValue(typeof policy.policy_id === 'string' && /^NamedPolicy#[\da-f-]{36}$/.test(policy.policy_id)
+      && `${policy.policy_id}/${version}` === published.providerPolicyIdentifier
+      && policy.name === name && policy.version === Number(version.slice(1)) && policy.policy_type === 'Wasm'
+      && policy.rules?.length === 1 && policy.rules[0].hash === resolved.policy?.policyArtifactDigest.replace('sha256:', '0x'), 'Published version changed during preparation recovery')
     const selectionPath = localPath(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
     requireValue(!fs.existsSync(selectionPath) || isDeepStrictEqual(json(proofRegularFile(selectionPath)), archived), 'Expected selection changed; refusing replacement')
     requireValue(!selection.expectedPolicy || isDeepStrictEqual(selection.expectedPolicy, archived), 'Managed expected selection differs from preparation archive')
@@ -131,6 +145,8 @@ export async function reconcileCubesignerPolicy(options: {
     requireValue(protocol.sha256 === releaseInput.protocolContextSha256 && wasm.sha256 === `sha256:${build.wasm.sha256}`
       && testsRef.sha256 === `sha256:${releaseInput.tests.sha256.replace(/^sha256:/, '')}`
       && (!liveRef || liveRef.sha256 === `sha256:${input.liveEvidence.sha256.replace(/^sha256:/, '')}`), 'Evidence changed while copying')
+    const client = await options.connect()
+    bindOrganization(client, input)
     const createdAt = new Date().toISOString()
     const release: ObjectValue = {...releaseInput, createdAt, schema: 'dogeos/cubesigner-policy-release/v1',
       tests: {...testsRef, result: 'passed'}, wasm: {...wasm, sizeBytes: fs.statSync(wasmFile).size}}
@@ -146,8 +162,6 @@ export async function reconcileCubesignerPolicy(options: {
       release: {path: 'release.json', sha256: attachment.releaseSha256},
       ...(liveRef ? {liveEvidence: liveRef} : {}),
     }
-    const client = await options.connect()
-    requireValue(client.environment === input.environment && client.organization === input.organization, 'Management session environment/organization mismatch')
     const [name, version] = release.policyIdentifier.split('/')
     const policy = object(await client.policy(name, version), 'policy readback')
     requireValue(policy.name === name && policy.version === Number(version.slice(1)) && policy.policy_type === 'Wasm'
