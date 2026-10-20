@@ -148,6 +148,10 @@ describe('status-page generation and explicit Instatus apply', () => {
   for (const filename of ['scroll-monitor-production.yaml', 'scroll-monitor-production-0.yaml']) {
     it(`prep-charts generates ${filename} after the deployment source pass`, async () => {
       values.balanceMonitoring = {enabled: false}
+      values.statusPage.sources = {frontendsConfig: 'frontends-config.yaml'}
+      values.statusPage.publication = {components: {...observeComponents(), 'bridge-portal': {mode: 'observe', rule: {builtin: true}}}}
+      write('frontends-config.yaml', {scrollConfig: 'REACT_APP_CHAIN_ID_L2 = "291"\n'
+        + (filename.includes('-0.') ? 'REACT_APP_HISTORY_API_URI = "https://previous-history.example/api/history/v1"\n' : '')})
       write(filename, values)
       const command: any = Object.create(PrepCharts.prototype)
       Object.assign(command, {
@@ -159,18 +163,21 @@ describe('status-page generation and explicit Instatus apply', () => {
         },
         configMapping: {},
         contractsConfig: {},
-        dogeConfig: {network: 'testnet'},
+        dogeConfig: {bridgeHistory: {enabled: true}, network: 'testnet'},
         flags: {},
         jsonCtx: {addWarning() {}, info() {}, logSuccess() {}},
         jsonMode: false,
         log() {},
         nonInteractive: true,
       })
-      await command.processProductionYaml(directory)
+      await command.generateCharts(directory)
       const monitor: any = yaml.load(fs.readFileSync(path.join(directory, filename), 'utf8'))
       expect(monitor.statusPage.catalog.components[6].endpoints).to.deep.equal(['https://new-portal.example/bridge'])
+      expect(monitor.statusPage.generated.probeConfig.bridgeChecks).to.deep.equal([
+        {equals: true, path: ['ready'], url: 'https://new-portal.example/api/history/v1/health'},
+      ])
       const first = fs.readFileSync(path.join(directory, filename), 'utf8')
-      await command.processProductionYaml(directory)
+      await command.generateCharts(directory)
       expect(fs.readFileSync(path.join(directory, filename), 'utf8')).to.equal(first)
     })
   }

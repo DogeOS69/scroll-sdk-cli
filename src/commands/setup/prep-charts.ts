@@ -1603,11 +1603,13 @@ export default class SetupPrepCharts extends Command {
     } = await this.processBootnodeRethInstanceFiles(valuesDir)
     const {skipped: skippedRethInstances, updated: updatedRethInstances} =
       await this.processSequencerRethInstanceFiles(valuesDir)
+    // Monitoring reads frontend API configuration during the production pass.
+    // Publish those inputs first so a single preparation uses the current API.
+    const {skipped: skippedConfig, updated: updatedConfig} =
+      await this.processConfigYaml(valuesDir)
     const {skipped: skippedProduction, updated: updatedProduction} =
       await this.processProductionYaml(valuesDir)
     const dstack = await this.processDstackControllerValues(valuesDir)
-    const {skipped: skippedConfig, updated: updatedConfig} =
-      await this.processConfigYaml(valuesDir)
     const proof = this.proofIntent
       ? this.reconcileProofKubernetes(valuesDir)
       : undefined
