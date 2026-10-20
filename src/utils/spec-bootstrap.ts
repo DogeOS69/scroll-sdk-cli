@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
+import {HISTORY_VALUES, validateBridgeHistory} from './bridge-history.js'
 import {bindMakefileTarget} from './spec-kubernetes-target.js'
 
 const REQUIRED_TEMPLATES = [
@@ -78,6 +79,7 @@ export function resolveSdkRevision(sdkDirectory: string, override?: string): str
 
 /** Build a reviewable file plan from committed templates, never a mutable working tree. */
 export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): Record<string, string> {
+  validateBridgeHistory(spec)
   const errors: string[] = []
   if (!sdkDirectory) errors.push('--sdk-dir must point to a local SDK checkout containing that commit')
   if (!spec.identities) errors.push('identities must explicitly declare service and node identity operations')
@@ -89,6 +91,12 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
 
   if (errors.length > 0) throw new Error(`Bootstrap inputs are incomplete:\n- ${errors.join('\n- ')}`)
   const {files, hashes, revision} = loadSdkTemplateFiles(sdkDirectory!, spec.templates?.sdkRevision)
+  if (spec.bridgeHistory?.enabled && !files[`values/${HISTORY_VALUES}`]) throw new Error('Selected SDK revision lacks dogeos-bridge-history templates; select SDK PR #189 or a release containing it')
+  if (!spec.bridgeHistory?.enabled) {
+    delete files[`values/${HISTORY_VALUES}`]
+    delete hashes[`values/${HISTORY_VALUES}`]
+  }
+
   if (spec.ethereumDa?.chain !== 'devnet') {
     delete files['values/l1-devnet-production.yaml']
     delete hashes['values/l1-devnet-production.yaml']

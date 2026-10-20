@@ -15,6 +15,7 @@ import {readDstackControllerConfig, usesDstackPostgres, writeDstackDatabaseSecre
 import {ethereumRpcSecretLines, ethereumRpcSecretName, proofCoordinatorRpcKeys} from '../../utils/ethereum-rpc-secrets.js'
 import {writeGrafanaAdminSecret} from '../../utils/grafana-admin.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
+import {resolveDogecoinKubernetesEndpoints} from '../../utils/kubernetes-endpoints.js'
 import {writeMonitoringSlackSecret} from '../../utils/monitoring-slack.js'
 import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {
@@ -200,6 +201,7 @@ export default class SetupGenSecrets extends Command {
       'dogecoin',
       'testnet-activity-helper',
       'l1-interface',
+      ...(this.dogeConfig.bridgeHistory?.enabled ? ['dogeos-bridge-history'] : []),
       'withdrawal-processor',
       'metrics-exporter',
       'eth-da-submitter',
@@ -319,6 +321,16 @@ export default class SetupGenSecrets extends Command {
       let content = this.envLine('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER', this.dogeConfig.dogecoinClusterRpc?.username || '', 'dogeConfig.dogecoinClusterRpc.username')
       content += this.envLine('DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS', this.dogeConfig.dogecoinClusterRpc?.password || '', 'dogeConfig.dogecoinClusterRpc.password')
       envFiles['l1-interface-secret.env'] = content
+    }
+
+    if (service === 'dogeos-bridge-history' && this.dogeConfig.bridgeHistory?.enabled) {
+      const source = 'dogeConfig.dogecoinClusterRpc'
+      const user = this.requireConfigValue(this.dogeConfig.dogecoinClusterRpc?.username, `${source}.username`)
+      const pass = this.requireConfigValue(this.dogeConfig.dogecoinClusterRpc?.password, `${source}.password`)
+      let content = this.envLine('DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__URL', resolveDogecoinKubernetesEndpoints(this.dogeConfig).rpcUrl, 'dogeConfig.kubernetes.rpcUrl')
+      content += this.envLine('DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__USER', user, `${source}.username`)
+      content += this.envLine('DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__PASS', pass, `${source}.password`)
+      envFiles['dogeos-bridge-history-secret.env'] = content
     }
 
     if (service === 'dogecoin') {

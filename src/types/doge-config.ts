@@ -101,6 +101,7 @@ export interface DogeConfig {
       }
     }>
   }
+  bridgeHistory?: {enabled: boolean}
   cubesigner?: {
     expectedPolicy?: CubesignerExpectedPolicyInputs
     mode?: CubesignerPolicyMode
@@ -130,6 +131,7 @@ export interface DogeConfig {
   }
   /** Public Helm deployment inputs; credentials remain in referenced Kubernetes Secrets. */
   dstackController?: DstackControllerConfig
+
   ethereumDa?: {
     batch?: {
       compression?: 'auto' | 'none'
@@ -190,7 +192,6 @@ export interface DogeConfig {
     }
     submitterRpcUrl?: string
   } & EthereumDaRuntimeConfig
-
   ethereumRpcSecretStore?: {awsRegion?: string; gcpProject?: string; prefix: string; provider: string}
   feeOracle?: {contractWriteMode?: 'dry_run' | 'live'; ethereumRpcUrl?: string}
   frontend?: {

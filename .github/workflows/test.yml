@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SDK_ALB_CHARTS: ${{ github.workspace }}/.test-sdk/charts
+      SDK_HISTORY_CHARTS: ${{ github.workspace }}/.test-sdk-history/charts
       SCROLLSDK_TEST_DEPLOYMENT_SPECS: ${{ github.workspace }}/.test-sdk-specs/examples
       SCROLLSDK_TEST_SDK_CHART: ${{ github.workspace }}/.test-sdk-nlb/charts/l2-reth
     steps:
@@ -33,6 +34,12 @@ jobs:
       - uses: azure/setup-helm@v4.3.0
         with:
           version: v3.17.3
+      - uses: actions/checkout@v4
+        with:
+          repository: DogeOS69/scroll-sdk
+          ref: 700dd377819d01a83464f8e8dbd0072b145ffc1d
+          path: .test-sdk-history
+      - run: helm dependency build .test-sdk-history/charts/dogeos-bridge-history --skip-refresh
       - run: helm dependency build .test-sdk/charts/tso-service --skip-refresh
       - run: helm dependency build .test-sdk/charts/l2-reth --skip-refresh
       - run: helm dependency build .test-sdk-nlb/charts/l2-reth --skip-refresh

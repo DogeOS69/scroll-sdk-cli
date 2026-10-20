@@ -4,6 +4,10 @@ For supported public applications on AWS, select [existing ALB references](exist
 `infrastructure.aws.alb`. Final preparation requires bindings for exposed
 endpoints; Helm installs bindings without owning the ALB lifecycle.
 
+The optional [DogeOS bridge history service](bridge-history.md) uses the Portal's
+shared ALB group and requires explicit history and Activity-enabled Portal images.
+Enable it with `bridgeHistory.enabled` before generating values and Secrets.
+
 `setup plan` saves a fresh deployment plan. Eleven stage commands execute only their
 selected stage, persist completed steps and stop for external inputs. Run the
 commands from the private working directory containing your spec and environment

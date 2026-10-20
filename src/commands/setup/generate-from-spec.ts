@@ -243,6 +243,7 @@ export default class GenerateFromSpec extends Command {
 
     let configs: GeneratedConfigs | null = null
     if (spec.capacityManager && generateValues && !templateFiles['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use the paired capacity-manager SDK branch')
+    if (spec.bridgeHistory?.enabled && generateValues && !templateFiles['values/dogeos-bridge-history-production.yaml']) throw new Error('Selected SDK revision lacks dogeos-bridge-history templates; select SDK PR #189 or a release containing it')
     let valuesFiles: GeneratedValuesFiles | null = null
 
     if (generateConfigs) {

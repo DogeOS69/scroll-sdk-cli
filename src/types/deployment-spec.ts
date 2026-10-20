@@ -46,6 +46,8 @@ export interface DeploymentSpec {
 
   /** Bridge configuration */
   bridge: BridgeConfig
+  /** Opt-in history read API. Requires explicit history and Activity-enabled Portal images. */
+  bridgeHistory?: {enabled: boolean}
   /** Core-managed capacity, prepared locally and installed separately with Helm. */
   capacityManager?: CapacityManagerConfig
   /** Deprecated Celestia DA configuration retained for legacy specs only. */
@@ -880,6 +882,7 @@ export interface ImagesConfig {
     cubesignerSigner?: ImageConfig
     /** Deprecated Celestia DA publisher image override. */
     daPublisher?: ImageConfig
+    dogeosBridgeHistory?: ImageConfig
     ethDaSubmitter?: ImageConfig
     ethereumGenesisGenerator?: ImageConfig
     ethereumGeth?: ImageConfig

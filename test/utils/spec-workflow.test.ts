@@ -205,6 +205,20 @@ describe('spec identity and template workflow', () => {
     expect(plan.Makefile).not.to.include('values/l2-reth-bootnode-production-1.yaml')
     expect(plan).not.to.have.property('values/genesis.yaml')
     expect(JSON.parse(plan['.data/spec-bootstrap.json']).sdkRevision).to.equal(revision)
+    spec.bridgeHistory = {enabled: true}
+    spec.images!.services!.dogeosBridgeHistory = {tag: 'test-history-release'}
+    spec.images!.services!.frontends = {tag: 'test-activity-release'}
+    spec.infrastructure.aws!.sharedAlb = {
+      certificateArn: 'arn:aws:acm:us-west-2:123456789012:certificate/00000000-0000-0000-0000-000000000000',
+      groupName: 'history-test', services: ['dogeos-bridge-history', 'frontends'],
+    }
+    expect(() => planSpecBootstrap(spec, sdk)).to.throw('lacks dogeos-bridge-history templates')
+    fs.writeFileSync(path.join(sdk, 'examples/values/dogeos-bridge-history-production.yaml'), '# history fixture\n')
+    git('add', 'examples/values/dogeos-bridge-history-production.yaml')
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'History fixture')
+    expect(planSpecBootstrap(spec, sdk)['values/dogeos-bridge-history-production.yaml']).to.equal('# history fixture\n')
+    spec.bridgeHistory.enabled = false
+    expect(planSpecBootstrap(spec, sdk)).not.to.have.property('values/dogeos-bridge-history-production.yaml')
     const main = generateAllConfigs(fixture())
     expect(main['doge-config.toml']).to.include('[identityIntent.feeOracle]')
   })

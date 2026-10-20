@@ -17,5 +17,5 @@ export interface ExistingAlbConfig {
 export interface SharedAlbConfig {
   certificateArn: string
   groupName: string
-  services: Array<'blockscout-api' | 'blockscout-frontend' | 'frontends' | 'l2-reth-rpc-public' | 'l2-reth-rpc-public-ws'>
+  services: Array<'blockscout-api' | 'blockscout-frontend' | 'dogeos-bridge-history' | 'frontends' | 'l2-reth-rpc-public' | 'l2-reth-rpc-public-ws'>
 }

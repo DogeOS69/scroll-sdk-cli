@@ -28,6 +28,7 @@ import {
 } from '../config/constants.js'
 import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, CORE_DOCKER_DEFAULT_TAG, GENESIS_PREDEPLOYS, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
+import {HISTORY_API, HISTORY_SERVICE, HISTORY_VALUES, frontendHistoryEnv, historyConfig, validateBridgeHistory} from './bridge-history.js'
 import {contractsDeploymentGasPrice} from './contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {
@@ -408,6 +409,8 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   // Frontend and explorers
   files['frontends-production.yaml'] = generateFrontendsValues(normalizedSpec)
   files['frontends-config.yaml'] = generateFrontendsConfigValues(normalizedSpec)
+  validateBridgeHistory(normalizedSpec)
+  if (normalizedSpec.bridgeHistory?.enabled) files[HISTORY_VALUES] = generateBridgeHistoryValues(normalizedSpec)
   files['blockscout-production.yaml'] = generateBlockscoutValues(normalizedSpec)
 
   // Standard EVM preinstalls run before the DogeOS contracts deployment.
@@ -1438,6 +1441,7 @@ function generateFrontendsValues(spec: DeploymentSpec): string {
 function generateFrontendsConfigValues(spec: DeploymentSpec): string {
   const values = {}
   reconcileFrontendConfig(values, {
+    ...(spec.bridgeHistory?.enabled ? frontendHistoryEnv() : {}),
     ...frontendDepositEnv(),
     REACT_APP_BASE_CHAIN: spec.network.l1ChainName,
     REACT_APP_CHAIN_ID_L1: resolveDogecoinChainId(spec.dogecoin.network),
@@ -1454,6 +1458,31 @@ function generateFrontendsConfigValues(spec: DeploymentSpec): string {
   })
   return yaml.dump(values)
 
+}
+
+function generateBridgeHistoryValues(spec: DeploymentSpec): string {
+  const secret = `${HISTORY_SERVICE}-secret-env`
+  const externalSecrets = generateExternalSecrets(secret, getSecretProviderConfig(spec),
+    ['URL', 'USER', 'PASS'].map(field => ({
+      property: `DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__${field}`,
+      remoteKey: secret,
+      secretKey: `DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__${field}`,
+    })))
+  return yaml.dump({
+    config: historyConfig(spec.dogecoin.network, getDogecoinIndexerStartHeight(spec)),
+    enableServiceLinks: false,
+    envFrom: [{secretRef: {name: secret}}],
+    externalSecrets,
+    image: resolveImage(spec, 'dogeosBridgeHistory', {
+      pullPolicy: 'IfNotPresent', repository: `dogeos69/${HISTORY_SERVICE}`,
+      tag: spec.images!.services!.dogeosBridgeHistory!.tag!,
+    }),
+    ingress: {main: {
+      enabled: spec.infrastructure.aws?.sharedAlb?.services.includes(HISTORY_SERVICE) ?? false,
+      hosts: [{host: spec.frontend.hosts.frontend, paths: [{path: HISTORY_API, pathType: 'Prefix'}]}],
+      ingressClassName: 'alb',
+    }},
+  })
 }
 
 /**

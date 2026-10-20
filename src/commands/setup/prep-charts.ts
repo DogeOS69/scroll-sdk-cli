@@ -23,6 +23,7 @@ import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validati
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
+import {HISTORY_SERVICE, frontendHistoryEnv, historyConfig} from '../../utils/bridge-history.js'
 import {CAPACITY_MANAGER_STATE_PATHS, prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
@@ -1675,6 +1676,7 @@ export default class SetupPrepCharts extends Command {
     const alternativeMappings: Record<string, string> = {
       blockscout: 'BLOCKSCOUT_HOST',
       dogecoin: 'DOGECOIN_HOST',
+      'dogeos-bridge-history': 'FRONTEND_HOST',
       frontends: 'FRONTEND_HOST',
       'l1-devnet': 'L1_DEVNET_HOST',
       'l2-reth-rpc': 'RPC_GATEWAY_HOST',
@@ -2035,6 +2037,7 @@ export default class SetupPrepCharts extends Command {
         }
 
         const configUpdates = {
+          ...(this.dogeConfig.bridgeHistory?.enabled ? frontendHistoryEnv() : {}),
           ...buildFrontendExternalUrlUpdates(key => this.getConfigValue(key)),
           REACT_APP_BASE_CHAIN: this.getConfigValue("general.CHAIN_NAME_L1"),
           REACT_APP_CHAIN_ID_L1: this.getConfigValue('general.CHAIN_ID_L1'),
@@ -2212,6 +2215,11 @@ export default class SetupPrepCharts extends Command {
 
       const yamlPath = path.join(valuesDir, file)
       const chartName = getProductionChartName(file)
+      if (chartName === HISTORY_SERVICE && !this.dogeConfig.bridgeHistory?.enabled) {
+        skippedCharts++
+        continue
+      }
+
       if (chartName === 'l1-devnet' && this.dogeConfig.ethereumDa?.chain !== 'devnet') {
         this.jsonCtx.info(`Skipping development-only chart ${file}; Ethereum DA is not a private devnet.`)
         skippedCharts++
@@ -2761,6 +2769,20 @@ export default class SetupPrepCharts extends Command {
         }
       }
 
+      else if (chartName === HISTORY_SERVICE) {
+        const before = JSON.stringify(productionYaml)
+        const config = historyConfig(this.dogeConfig.network, Number(this.dogeConfig.defaults?.dogecoinIndexerStartHeight))
+        productionYaml.config = {
+          ...productionYaml.config, dogecoin_indexer: {...productionYaml.config?.dogecoin_indexer, ...config.dogecoin_indexer},
+          network: config.network,
+        }
+        productionYaml.enableServiceLinks = false
+        ensureNamedSecretRef(productionYaml, `${HISTORY_SERVICE}-secret-env`, changes)
+        if (before !== JSON.stringify(productionYaml)) {
+          updated = true
+          changes.push({key: 'history config', newValue: 'deployment network and indexer boundary', oldValue: 'previous configuration'})
+        }
+      }
       else if (chartName === 'l1-interface') {
         if (!productionYaml.configMaps?.env?.data) {
           this.error(`${chartName}: configMaps.env.data not found in config`);

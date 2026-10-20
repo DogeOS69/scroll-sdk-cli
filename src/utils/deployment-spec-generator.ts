@@ -1,4 +1,5 @@
 import {validateBootnodePublicP2p} from './bootnode-public-p2p.js'
+import {validateBridgeHistory} from './bridge-history.js'
 import {validateExistingAlb} from './existing-alb.js'
 import {existingNlbEntries} from './existing-nlb.js'
 import {validateMonitoring} from './monitoring-slack.js'
@@ -581,6 +582,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   if (spec.feeOracle?.contractWriteMode !== undefined && !['dry_run', 'live'].includes(spec.feeOracle.contractWriteMode)) {
     errors.push({code: 'E015_INVALID_ROLLUP_CONFIG', message: 'feeOracle.contractWriteMode must be dry_run or live', path: 'feeOracle.contractWriteMode'})
+  }
+
+  try {validateBridgeHistory(spec)} catch (error) {
+    errors.push({code: 'E015_INVALID_ROLLUP_CONFIG', message: (error as Error).message, path: 'bridgeHistory'})
   }
 
   const pushInvalidEthereumDaConfigError = (path: string, message: string): void => {
@@ -1576,6 +1581,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
     ...(spec.infrastructure.provider === 'gcp' ? {gcpProject: spec.infrastructure.gcp?.project} : {}),
   }
   config.feeOracle = {contractWriteMode: spec.feeOracle?.contractWriteMode ?? 'live', ethereumRpcUrl: spec.feeOracle?.ethereumRpcUrl ?? 'https://ethereum-rpc.publicnode.com'}
+  if (spec.bridgeHistory !== undefined) config.bridgeHistory = spec.bridgeHistory
 
   validateDstackControllerConfig(specDstackController(spec))
   if (spec.dstackController !== undefined) config.dstackController = specDstackController(spec)
