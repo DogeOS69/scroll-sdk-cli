@@ -119,6 +119,20 @@ export function mergeWithdrawalManagedDeploymentBlock(
 
     head = source.slice(0, begin)
     tail = source.slice(end + WITHDRAWAL_DEPLOYMENT_END.length)
+    // Newly introduced facts can take ownership of a table that was previously
+    // outside the block (for example proof_system when enabling policy checks).
+    // Move its complete contents, including operator tuning and subtables, before
+    // applying facts so the generated TOML never declares that table twice.
+    const remainder = toml.parse(tail) as Record<string, any>
+    const adopted = Object.keys(facts).filter(key => isPlainObject(facts[key]) && key in remainder)
+    if (adopted.length > 0) {
+      for (const key of adopted) {
+        existing[key] = deepMergeToml(existing[key], remainder[key])
+        delete remainder[key]
+      }
+
+      tail = `\n\n${toml.stringify(remainder as toml.JsonMap).trimEnd()}\n`
+    }
   } else {
     // dogeos-proof-topology parses and reserializes the native config, so the
     // next prep-charts run sees a valid but markerless rendered file. Merely
