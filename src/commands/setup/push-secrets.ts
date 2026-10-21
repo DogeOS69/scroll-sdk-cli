@@ -27,9 +27,13 @@ const DEFAULT_VAULT_TOKEN_SECRET_KEY = 'token'
 const DEFAULT_VAULT_TOKEN_SECRET_NAME = 'vault-token'
 const DEFAULT_VAULT_VERSION = 'v2'
 
-/** Keep only the AWS error code; provider messages are never echoed with Secret uploads. */
+/** Report an AWS error code or a known local failure; provider messages are never echoed with Secret uploads. */
 function awsFailure(action: string, secretName: string, error: unknown): Error {
-  const code = /An error occurred \((\w+)\)/.exec(error instanceof Error ? error.message : '')?.[1] ?? 'no AWS error code'
+  const message = error instanceof Error ? error.message : ''
+  const code = /An error occurred \((\w+)\)/.exec(message)?.[1]
+    ?? (/Unable to locate credentials/.test(message) ? 'no AWS credentials found'
+      : /Could not connect to the endpoint URL/.test(message) ? 'AWS endpoint unreachable'
+        : /^aws \S+ \S+ failed \(exit unknown\)$/.test(message) ? 'aws CLI could not be started' : 'no AWS error code')
   return new Error(`${action} AWS Secret ${secretName} failed (${code}); check the selected credentials and destination (contents omitted)`)
 }
 

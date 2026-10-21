@@ -5,6 +5,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+// oclif wraps long error lines with a '›' prefix; compare normalized text.
+const output = (result: {stderr: string; stdout: string}) => (result.stdout + result.stderr).replaceAll(/\s*›\s*/g, ' ').replaceAll(/\s+/g, ' ')
+// Absence checks also strip whitespace, so a wrapped value cannot evade them.
+const compact = (result: {stderr: string; stdout: string}) => (result.stdout + result.stderr).replaceAll(/[\s›]/g, '')
+
 // Exercise the actual command with a fake aws executable, including --debug.
 describe('setup push-secrets AWS CLI invocation', () => {
   for (const exists of [false, true]) it(`${exists ? 'updates' : 'creates'} a Secret without a shell or logging its value`, () => {
@@ -30,7 +35,7 @@ console.log('{}');
 
       const result = spawnSync(process.execPath, [path.resolve('bin/run.js'), 'setup', 'push-secrets', '-N', '--provider', 'aws', '--aws-prefix', prefix, '--aws-region', region, '--debug'], {cwd: root, encoding: 'utf8', env: {...process.env, FIXTURE_AWS_LOG: log, FIXTURE_SECRET_EXISTS: String(exists), PATH: `${path.join(root, 'bin')}:${process.env.PATH}`}})
       expect(result.status, result.stderr).equal(0)
-      expect(result.stdout + result.stderr).not.include('NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED')
+      expect(compact(result)).not.include('NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED')
       expect(fs.existsSync(path.join(root, 'pwned'))).equal(false)
       const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[])
       const write = calls.find(args => args[0] === 'secretsmanager' && args[1] !== 'describe-secret')!
@@ -55,7 +60,27 @@ process.exit(254);
       const result = spawnSync(process.execPath, [path.resolve('bin/run.js'), 'setup', 'push-secrets', '-N', '--provider', 'aws', '--aws-prefix', 'fixture', '--aws-region', 'us-east-1', '--debug'], {cwd: root, encoding: 'utf8', env: {...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`}})
       expect(result.status).not.equal(0)
       // The Secret name and AWS error code identify the failure; the value and provider message stay hidden.
-      expect(result.stdout + result.stderr).include('fixture/fee-oracle-secret-env failed (AccessDeniedException)').not.include('NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED').not.include('PROVIDER_DETAIL_MUST_NOT_BE_LOGGED')
+      expect(output(result)).include('Updating AWS Secret fixture/fee-oracle-secret-env failed (AccessDeniedException)')
+      expect(compact(result)).not.include('NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED').not.include('PROVIDER_DETAIL_MUST_NOT_BE_LOGGED')
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  for (const [label, stderr, expected] of [
+    ['missing credentials', 'Unable to locate credentials. You can configure credentials by running "aws configure".', 'no AWS credentials found'],
+    ['an unreachable endpoint', 'Could not connect to the endpoint URL: "https://secretsmanager.us-east-1.amazonaws.com/"', 'AWS endpoint unreachable'],
+    ['a missing aws CLI', undefined, 'aws CLI could not be started'],
+  ] as const) it(`identifies ${label} before any upload`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'push-secrets-aws-'))
+    try {
+      for (const name of ['bin', 'secrets', 'values']) fs.mkdirSync(path.join(root, name))
+      fs.writeFileSync(path.join(root, 'secrets/fee-oracle-secret.env'), 'FIXTURE=NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED\n')
+      fs.writeFileSync(path.join(root, 'values/fee-oracle-production.yaml'), yaml.dump({externalSecrets: {'fee-oracle-secret-env': {data: [{remoteRef: {key: 'fixture/fee-oracle-secret-env', property: 'FIXTURE'}, secretKey: 'FIXTURE'}], provider: 'aws', secretRegion: 'us-east-1', serviceAccount: 'external-secrets'}}}))
+      // Without a fake executable, PATH holds only node's directory, so aws cannot start.
+      if (stderr) fs.writeFileSync(path.join(root, 'bin/aws'), `#!/usr/bin/env node\nconsole.error(${JSON.stringify(stderr)}); process.exit(255);\n`, {mode: 0o700})
+      const result = spawnSync(process.execPath, [path.resolve('bin/run.js'), 'setup', 'push-secrets', '-N', '--provider', 'aws', '--aws-prefix', 'fixture', '--aws-region', 'us-east-1'], {cwd: root, encoding: 'utf8', env: {...process.env, PATH: `${path.join(root, 'bin')}:${path.dirname(process.execPath)}`}})
+      expect(result.status).not.equal(0)
+      expect(output(result)).include(`Inspecting AWS Secret fixture/fee-oracle-secret-env failed (${expected})`)
+      expect(compact(result)).not.include('NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED')
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 })
