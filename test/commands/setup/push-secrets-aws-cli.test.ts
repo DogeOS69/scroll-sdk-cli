@@ -41,7 +41,7 @@ console.log('{}');
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 
-  it('reports AWS failures without the Secret value or provider output', () => {
+  it('reports the Secret name and AWS error code without the value or provider message', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'push-secrets-aws-'))
     try {
       for (const name of ['bin', 'secrets', 'values']) fs.mkdirSync(path.join(root, name))
@@ -49,12 +49,13 @@ console.log('{}');
       fs.writeFileSync(path.join(root, 'values/fee-oracle-production.yaml'), yaml.dump({externalSecrets: {'fee-oracle-secret-env': {data: [{remoteRef: {key: 'fixture/fee-oracle-secret-env', property: 'FIXTURE'}, secretKey: 'FIXTURE'}], provider: 'aws', secretRegion: 'us-east-1', serviceAccount: 'external-secrets'}}}))
       fs.writeFileSync(path.join(root, 'bin/aws'), `#!/usr/bin/env node
 if (process.argv[3] === 'describe-secret') {console.log('{}'); process.exit(0)}
-console.error('PROVIDER_DETAIL_MUST_NOT_BE_LOGGED ' + process.argv.join(' '));
+console.error('An error occurred (AccessDeniedException) when calling the PutSecretValue operation: PROVIDER_DETAIL_MUST_NOT_BE_LOGGED ' + process.argv.join(' '));
 process.exit(254);
 `, {mode: 0o700})
       const result = spawnSync(process.execPath, [path.resolve('bin/run.js'), 'setup', 'push-secrets', '-N', '--provider', 'aws', '--aws-prefix', 'fixture', '--aws-region', 'us-east-1', '--debug'], {cwd: root, encoding: 'utf8', env: {...process.env, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`}})
       expect(result.status).not.equal(0)
-      expect(result.stdout + result.stderr).include('contents omitted').not.include('NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED').not.include('PROVIDER_DETAIL_MUST_NOT_BE_LOGGED')
+      // The Secret name and AWS error code identify the failure; the value and provider message stay hidden.
+      expect(result.stdout + result.stderr).include('fixture/fee-oracle-secret-env failed (AccessDeniedException)').not.include('NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED').not.include('PROVIDER_DETAIL_MUST_NOT_BE_LOGGED')
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 })

@@ -27,6 +27,12 @@ const DEFAULT_VAULT_TOKEN_SECRET_KEY = 'token'
 const DEFAULT_VAULT_TOKEN_SECRET_NAME = 'vault-token'
 const DEFAULT_VAULT_VERSION = 'v2'
 
+/** Keep only the AWS error code; provider messages are never echoed with Secret uploads. */
+function awsFailure(action: string, secretName: string, error: unknown): Error {
+  const code = /An error occurred \((\w+)\)/.exec(error instanceof Error ? error.message : '')?.[1] ?? 'no AWS error code'
+  return new Error(`${action} AWS Secret ${secretName} failed (${code}); check the selected credentials and destination (contents omitted)`)
+}
+
 interface SecretService {
   pushSecrets(cubesignerOnly?: boolean, secretFile?: string, excludeCubesigner?: boolean): Promise<PushedSecret[]>
 }
@@ -273,13 +279,13 @@ class AWSSecretService implements SecretService {
         new AwsCliRunner().json(['secretsmanager', 'put-secret-value', '--secret-id', fullSecretName, '--secret-string', jsonContent], {region: this.region})
         this.log(chalk.green(`Successfully updated secret: ${fullSecretName}`))
         return true
-      } catch {throw new Error('Failed to update AWS Secret; check the selected credentials and destination (contents omitted)')}
+      } catch (error) {throw awsFailure('Updating', fullSecretName, error)}
     } else {
       try {
         new AwsCliRunner().json(['secretsmanager', 'create-secret', '--name', fullSecretName, '--secret-string', jsonContent], {region: this.region})
         this.log(chalk.green(`Successfully created secret: ${fullSecretName}`))
         return true
-      } catch {throw new Error('Failed to create AWS Secret; check the selected credentials and destination (contents omitted)')}
+      } catch (error) {throw awsFailure('Creating', fullSecretName, error)}
     }
   }
 
@@ -293,7 +299,7 @@ class AWSSecretService implements SecretService {
         return false
       }
 
-      throw new Error('Cannot inspect AWS Secret destination (provider details omitted)')
+      throw awsFailure('Inspecting', fullSecretName, error)
     }
   }
 
