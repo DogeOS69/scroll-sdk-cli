@@ -73,7 +73,7 @@ export function capacityManagerDstackUrl(value: unknown): string {
   return value
 }
 
-export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<NonNullable<CapacityManagerConfig['fleet']>>} & {runtimeEstimates: Required<NonNullable<CapacityManagerConfig['runtimeEstimates']>>} & Pick<CapacityManagerConfig, 'connection'> & Required<Omit<CapacityManagerConfig, 'connection' | 'fleet' | 'runtimeEstimates'>> {
+export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<NonNullable<CapacityManagerConfig['fleet']>>} & {runtimeEstimates: Required<NonNullable<CapacityManagerConfig['runtimeEstimates']>>} & Pick<CapacityManagerConfig, 'connection' | 'fallback'> & Required<Omit<CapacityManagerConfig, 'connection' | 'fallback' | 'fleet' | 'runtimeEstimates'>> {
   const input = spec.capacityManager
   if (!input) throw new Error('Declare capacityManager in the deployment spec')
   if (spec.proofWorkers) throw new Error('capacityManager and proofWorkers are mutually exclusive; retire the SDK session before switching')
@@ -116,13 +116,30 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
   if (config.maxWorkers > 1016 || config.minWorkers > config.maxWorkers) throw new Error('capacityManager worker bounds exceed Core capacity or minWorkers exceeds maxWorkers')
   for (const key of ['maxPricePerHourUsd', 'maxHourlyCostUsd'] as const) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`capacityManager.${key} must be positive and finite`)
   if (config.maxHourlyCostUsd < config.maxPricePerHourUsd * config.minWorkers) throw new Error('capacityManager hourly budget cannot fund its minimum workers at the selected price ceiling')
+  if (config.fallback) {
+    const {fallback} = config
+    if (config.provider !== 'aws' || fallback.provider !== 'vastai') throw new Error('capacityManager.fallback requires AWS primary and Vast fallback')
+    if (config.fleets.includes(fallback.fleet)) throw new Error('Fallback fleet must be distinct from primary fleets')
+    if (!Number.isFinite(fallback.maxPricePerHourUsd) || fallback.maxPricePerHourUsd <= 0 || fallback.maxPricePerHourUsd > config.maxPricePerHourUsd) throw new Error('Fallback price must be positive and no greater than the primary per-worker budget estimate')
+    resolveCapacityManager(fallbackSpec(spec))
+    const vram = {A10G: 22, A100: 40, A6000: 48, L4: 22, L40S: 44, RTX3090: 24, RTX4090: 24}
+    const required = ['A10G', 'L4'].includes(config.gpu) ? 22 : config.gpu === 'L40S' ? 44 : 24
+    if (vram[fallback.gpu] < required) throw new Error('Fallback GPU does not meet the primary policy VRAM requirement')
+  }
+
   return config
+}
+
+function fallbackSpec(spec: DeploymentSpec): DeploymentSpec {
+  const primary = spec.capacityManager!
+  const fallback = primary.fallback!
+  return {...spec, capacityManager: {...primary, fallback: undefined, fleet: {...primary.fleet, memoryGiB: primary.fleet?.memoryGiB ?? (primary.gpu === 'L40S' ? 128 : 64)}, fleets: [fallback.fleet], gpu: fallback.gpu, instanceTypes: [], maxHourlyCostUsd: primary.maxHourlyCostUsd ?? 3, maxPricePerHourUsd: fallback.maxPricePerHourUsd, minReliability: fallback.minReliability ?? primary.minReliability, provider: fallback.provider, regions: fallback.regions}}
 }
 
 /** Reviewable dstack 0.21.5 fleet intent; preparation never requests initial instances. */
 export function capacityManagerFleets(spec: DeploymentSpec): {action: 'create' | 'reuse'; configurations: Record<string, any>[]} {
   const config = resolveCapacityManager(spec)
-  return {action: config.fleet.action, configurations: config.fleets.map(name => ({
+  const configurations = config.fleets.map(name => ({
     ...(config.provider === 'vastai' ? {backend_options: [{min_reliability: config.minReliability, offer_order: 'price', type: 'vastai'}]} : {}),
     backends: [config.provider],
     idle_duration: `${config.fleet.idleDurationSeconds}s`,
@@ -134,7 +151,9 @@ export function capacityManagerFleets(spec: DeploymentSpec): {action: 'create' |
     resources: {cpu: `${config.fleet.cpus}..`, disk: {size: `${config.fleet.diskSizeGiB}GB..`}, gpu: {count: 1, name: [config.gpu], vendor: 'nvidia'}, memory: `${config.fleet.memoryGiB}GB..`},
     spot_policy: 'on-demand',
     type: 'fleet',
-  }))}
+  }))
+  if (config.fallback) configurations.push(...capacityManagerFleets(fallbackSpec(spec)).configurations as typeof configurations)
+  return {action: config.fleet.action, configurations}
 }
 
 export function assertSdkWorkersRetired(root: string): void {
@@ -149,8 +168,10 @@ export function buildCapacityManagerValues(spec: DeploymentSpec, worker: ProverW
   if (publication.verification.anonymousHttpReadback !== 'passed' || publication.verification.authenticatedS3Readback !== 'passed') throw new Error('Publish and verify Worker artifacts before preparing capacity-manager')
   const families = Object.fromEntries([['scroll_chunk', config.runtimeEstimates.scrollChunkSeconds], ['scroll_batch', config.runtimeEstimates.scrollBatchSeconds], ['l2_range_aggregation', config.runtimeEstimates.l2RangeAggregationSeconds], ['bridge_state', config.runtimeEstimates.bridgeStateSeconds]].map(([name, seconds]) => [name, {max_workers: config.maxWorkers, min_vram_gib: 16, min_workers: 0, runtime_seconds: seconds}]))
   const policy = {families, global: {liveness_floor: config.minWorkers, max_workers: config.maxWorkers, scale_down_ttl_seconds: config.scaleDownTtlSeconds, steady_state_floor: 1, target_drain_seconds: config.targetDrainSeconds}, pool: {gpu_class: config.gpu, hourly_cost_usd_per_worker: config.maxPricePerHourUsd, max_hourly_cost_usd: config.maxHourlyCostUsd, max_workers: config.maxWorkers, provider: config.provider, provider_diversity_min: 1, vram_gib: ['A10G', 'L4'].includes(config.gpu) ? 22 : config.gpu === 'L40S' ? 44 : 24}}
-  const launch = workerLaunch(worker, publication, '{worker_id}', architectures[config.gpu])
-  return {image: config.image, manager: {dstack: {fleets: config.fleets, instanceTypes: config.instanceTypes, maxPricePerHourUsd: config.maxPricePerHourUsd, project: config.project, regions: config.regions}, policy: toml.stringify(policy as any), proofWorkBaseUrl: spec.proofTopology!.deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300', workerCommand: launch.command, workerEnv: launch.env, workerIdPrefix: config.workerIdPrefix, workerImage: `${worker.image.repository}@${worker.image.digest}`}, prepared: true}
+  const selectedArchitectures = [architectures[config.gpu], ...(config.fallback ? [architectures[config.fallback.gpu]] : [])]
+  if (selectedArchitectures.some(architecture => !imageCheck.cudaArchitectures.includes(architecture))) throw new Error('Fallback GPU/image does not match the checked production Worker')
+  const launch = workerLaunch(worker, publication, '{worker_id}', selectedArchitectures)
+  return {image: config.image, manager: {dstack: {fallbackFleet: config.fallback?.fleet ?? '', fleets: config.fleets, instanceTypes: config.instanceTypes, maxPricePerHourUsd: config.maxPricePerHourUsd, project: config.project, regions: config.regions}, policy: toml.stringify(policy as any), proofWorkBaseUrl: spec.proofTopology!.deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300', workerCommand: launch.command, workerEnv: launch.env, workerIdPrefix: config.workerIdPrefix, workerImage: `${worker.image.repository}@${worker.image.digest}`}, prepared: true}
 }
 
 export function prepareCapacityManager(root: string, readContract = validateProofDeploymentContract, options: CapacityPreparationOptions = {}): {namespace: string; project: string; valuesFile: string} {
@@ -212,17 +233,15 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
     // Custom install flows without this variable must select a compatible chart.
     const pin = fs.readFileSync(makefile, 'utf8').match(/^CAPACITY_MANAGER_CHART_VERSION\s*(?:\?=|:=|=)\s*([^\s#]+)/m)?.[1]
     const version = pin?.match(/^(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/)
-    if (pin && (!version || Number(version[1]) === 0 && (Number(version[2]) < 1 || Number(version[2]) === 1 && Number(version[3]) < 4))) throw new Error('Worker artifact environment requires capacity-manager chart >= 0.1.4; update the SDK templates.sdkRevision and CAPACITY_MANAGER_CHART_VERSION before preparing')
+    if (pin && (!version || Number(version[1]) === 0 && (Number(version[2]) < 1 || Number(version[2]) === 1 && Number(version[3]) < (spec.capacityManager?.fallback ? 5 : 4)))) throw new Error(`Worker artifact environment requires capacity-manager chart >= 0.1.4; fallback requires >= 0.1.5. Update the SDK templates.sdkRevision and CAPACITY_MANAGER_CHART_VERSION before preparing`)
   }
 
   const content = mergeBootstrapValues(template, yaml.dump(projected))
   const values = yaml.load(content) as any
   // Fixed, separately named manager: deployment/selector and Secret destination are a shared contract.
   if (values.fullnameOverride !== 'capacity-manager') throw new Error('Keep capacity-manager fullnameOverride at its template name')
-  const previousFile = localPath(root, CAPACITY_MANAGER_PLAN)
+  const planFile = localPath(root, CAPACITY_MANAGER_PLAN)
   const fleetIntent = capacityManagerFleets(spec)
-  const fingerprint = digest(JSON.stringify({fleetIntent, projected}))
-  if (fs.existsSync(previousFile) && read(CAPACITY_MANAGER_PLAN).fingerprint !== fingerprint) throw new Error('Capacity configuration changed; drain the old manager and archive its local plan before preparing the replacement')
   const wpFile = localPath(root, contract.components.withdrawalProcessor.valuesFile)
   const wp = readValues(contract.components.withdrawalProcessor.valuesFile)
   if (!wp.networkPolicy?.enabled) throw new Error('Enable WP NetworkPolicy before preparing capacity-manager')
@@ -238,9 +257,9 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
     const content = yaml.dump(configuration, {lineWidth: -1, noRefs: true})
     fs.mkdirSync(localPath(root, '.scrollsdk/capacity-manager/fleets'), {recursive: true})
     fs.writeFileSync(localPath(root, relative), content)
-    return {path: relative, sha256: digest(content)}
+    return {path: relative}
   })
-  writeJson(previousFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace, serverUrl: projected.manager.dstack.serverUrl}, fingerprint, fleets: {action: fleetIntent.action, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', privateDns: spec.capacityManager?.connection?.mode === 'internal-alb' || Boolean(spec.dstackController?.internalTls), project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, provider: spec.capacityManager!.provider, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, valuesSha256: digest(content), workerCredentialMaster: projected.workerCredentialMaster})
+  writeJson(planFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace, serverUrl: projected.manager.dstack.serverUrl}, fleets: {action: fleetIntent.action, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', privateDns: spec.capacityManager?.connection?.mode === 'internal-alb' || Boolean(spec.dstackController?.internalTls), project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, ...(spec.capacityManager!.fallback ? {fallbackProvider: spec.capacityManager!.fallback.provider} : {}), provider: spec.capacityManager!.provider, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerCredentialMaster: projected.workerCredentialMaster})
   return {namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, valuesFile: file}
 }
 

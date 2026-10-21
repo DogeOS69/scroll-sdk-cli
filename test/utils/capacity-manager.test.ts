@@ -34,6 +34,76 @@ function fixture() {
 }
 
 describe('Core capacity manager', () => {
+  it('prepares a separate priced Vast fallback fleet without widening primary selectors', () => {
+    const input = fixture()
+    input.spec.capacityManager!.fallback = {fleet: 'vast-rtx3090', gpu: 'RTX3090', maxPricePerHourUsd: 0.8, provider: 'vastai', regions: ['us-east']}
+    assertDeploymentSpecFields({capacityManager: input.spec.capacityManager})
+    input.imageCheck.cudaArchitectures = ['89', '86']
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    expect(values.manager.dstack.fallbackFleet).equal('vast-rtx3090')
+    expect(values.manager.dstack.fleets).deep.equal(['aws-l4'])
+    expect(values.manager.workerCommand).include("'89'|'86'")
+    const fleets = capacityManagerFleets(input.spec).configurations
+    expect(fleets).length(2)
+    expect(fleets[0].backends).deep.equal(['aws'])
+    expect(fleets[1]).include({max_price: 0.8, name: 'vast-rtx3090'})
+    expect(fleets[1].backends).deep.equal(['vastai'])
+    expect(fleets[1].regions).deep.equal(['us-east'])
+    expect(fleets[1].resources.gpu.name).deep.equal(['RTX3090'])
+    expect(fleets[1].nodes).deep.equal({max: 2, min: 0, target: 0})
+    expect(fleets[1]).not.have.property('instance_types')
+    expect(fleets[1].backend_options[0].min_reliability).equal(0.95)
+    input.imageCheck.cudaArchitectures = ['89']
+    expect(() => buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)).throw('Fallback GPU/image')
+  })
+
+  it('inherits resolved AWS resource and budget defaults for the Vast fleet', () => {
+    const input = fixture()
+    const config = input.spec.capacityManager!
+    config.gpu = 'L40S'
+    config.minWorkers = 2
+    delete config.fleet
+    delete config.maxHourlyCostUsd
+    delete config.maxPricePerHourUsd
+    config.fallback = {fleet: 'vast-a6000', gpu: 'A6000', maxPricePerHourUsd: 1.4, provider: 'vastai', regions: ['us-east']}
+    const fleets = capacityManagerFleets(input.spec).configurations
+    expect(fleets[0].resources.memory).equal('128GB..')
+    expect(fleets[1].resources.memory).equal('128GB..')
+    expect(fleets[1].nodes).deep.equal({max: 2, min: 0, target: 0})
+  })
+
+  for (const failure of ['duplicate-fleet', 'price', 'missing-price', 'region', 'gpu', 'vram', 'backend', 'reliability']) it(`rejects incompatible fallback ${failure}`, () => {
+    const input = fixture()
+    const config = input.spec.capacityManager!
+    config.fallback = {fleet: 'vast-fallback', gpu: 'RTX4090', maxPricePerHourUsd: 0.8, provider: 'vastai', regions: ['us-east']}
+    if (failure === 'duplicate-fleet') config.fallback.fleet = config.fleets[0]
+    if (failure === 'price') config.fallback.maxPricePerHourUsd = 10
+    if (failure === 'missing-price') delete (config.fallback as any).maxPricePerHourUsd
+    if (failure === 'region') config.fallback.regions = []
+    if (failure === 'gpu') (config.fallback as any).gpu = 'unknown'
+    if (failure === 'vram') config.gpu = 'L40S'
+    if (failure === 'reliability') config.fallback.minReliability = 0.5
+    if (failure === 'backend') {
+      config.provider = 'vastai'
+    }
+
+    expect(() => resolveCapacityManager(input.spec)).throw()
+  })
+
+  it('requires both imported backends for fallback and clears its generated binding when disabled', () => {
+    const input = fixture()
+    const config = input.spec.capacityManager!
+    config.fallback = {fleet: 'vast-fallback', gpu: 'RTX4090', maxPricePerHourUsd: 0.8, provider: 'vastai', regions: ['us-east']}
+    input.spec.dstackController!.defaultCredentialsEnabled = true
+    input.spec.dstackController!.serviceAccount = {annotations: {'eks.amazonaws.com/role-arn': 'arn:aws:iam::000000000000:role/fixture'}}
+    input.spec.preparation!.dstack = {aws: {vpcIds: {'us-east-1': 'vpc-0123456789abcdef0'}}, mode: 'import', providers: ['aws']}
+    expect(() => resolveCapacityManager(input.spec)).throw('providers must include')
+    input.spec.preparation!.dstack.providers!.push('vastai')
+    expect(resolveCapacityManager(input.spec).fallback!.fleet).equal('vast-fallback')
+    delete config.fallback
+    expect(buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck).manager.dstack.fallbackFleet).equal('')
+  })
+
   it('rejects empty explicit or saved capacity selections instead of reusing frozen intent', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-empty-selection-'))
     try {
@@ -197,9 +267,10 @@ describe('Core capacity manager', () => {
   })
 
 
-  for (const managedTls of [false, true]) it(`prepares reproducible values and a WP-only peer without allocating (managed TLS: ${managedTls})`, () => {
+  for (const [managedTls, fallback] of [[false, false], [true, false], [false, true]]) it(`prepares reproducible values and a WP-only peer without allocating (managed TLS: ${managedTls}, fallback: ${fallback})`, () => {
     const input = fixture()
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-prepare-'))
+    if (fallback) input.spec.capacityManager!.fallback = {fleet: 'vast-fallback', gpu: 'RTX4090', maxPricePerHourUsd: 0.8, provider: 'vastai', regions: ['us-east']}
     input.spec.infrastructure = {kubeContext: 'saved-cluster-context', namespace: 'chain'} as any
     if (managedTls) {
       input.spec.infrastructure.aws = {region: 'us-east-1'} as any
@@ -253,7 +324,7 @@ describe('Core capacity manager', () => {
 
       fs.writeFileSync(path.join(root, 'Makefile'), '# operator note\ninstall-capacity-manager:\n\thelm upgrade --install capacity-manager example/chart\n')
       const installMakefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8')
-      for (const version of ['0.1.3', '0.0.9', '0.1.4-rc.1']) {
+      for (const version of ['0.1.3', '0.0.9', '0.1.4-rc.1', ...(fallback ? ['0.1.4'] : [])]) {
         fs.writeFileSync(path.join(root, 'Makefile'), `CAPACITY_MANAGER_CHART_VERSION ?= ${version}\n${installMakefile}`)
         expect(() => prepareCapacityManager(root, () => contract)).to.throw('chart >= 0.1.4')
         expect(fs.readFileSync(managerPath, 'utf8')).to.equal(original)
@@ -261,7 +332,7 @@ describe('Core capacity manager', () => {
         expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
       }
 
-      fs.writeFileSync(path.join(root, 'Makefile'), `CAPACITY_MANAGER_CHART_VERSION ?= 0.1.4\n${installMakefile}`)
+      fs.writeFileSync(path.join(root, 'Makefile'), `CAPACITY_MANAGER_CHART_VERSION ?= ${fallback ? '0.1.5' : '0.1.4'}\n${installMakefile}`)
       const result = prepareCapacityManager(root, () => contract)
       const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8')
       expect(makefile).to.include('# operator note')
@@ -270,6 +341,12 @@ describe('Core capacity manager', () => {
       const fleet = yaml.load(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/fleets/aws-l4.yaml'), 'utf8')) as any
       expect(fleet.nodes).to.deep.equal({max: 2, min: 0, target: 0})
       const values = yaml.load(first) as any
+      expect(values.manager.dstack.fallbackFleet).equal(fallback ? 'vast-fallback' : '')
+      const savedPlan = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8'))
+      expect(savedPlan.fleets.files).length(fallback ? 2 : 1)
+      expect(savedPlan).not.have.any.keys('fingerprint', 'valuesSha256')
+      for (const file of savedPlan.fleets.files) expect(file).have.all.keys('path')
+      expect(savedPlan.fallbackProvider).equal(fallback ? 'vastai' : undefined)
       expect(result.namespace).to.equal('chain')
       expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8')).kubeContext).to.equal('saved-cluster-context')
       expect(values.persistence.size).to.equal('4Gi')
@@ -287,8 +364,11 @@ describe('Core capacity manager', () => {
       expect(fs.readFileSync(result.valuesFile, 'utf8')).to.equal(first)
       input.spec.capacityManager!.workerIdPrefix = 'replacement'
       writeJson(path.join(root, '.scrollsdk/intent.json'), input.spec)
-      expect(() => prepareCapacityManager(root, () => contract)).to.throw('drain the old manager')
-      expect(fs.readFileSync(result.valuesFile, 'utf8')).to.equal(first)
+      // Old local fingerprints do not prevent preparing an updated selection.
+      writeJson(path.join(root, '.scrollsdk/capacity-manager/plan.json'), {...savedPlan, fingerprint: 'legacy-fingerprint', valuesSha256: 'legacy-values-hash'})
+      prepareCapacityManager(root, () => contract)
+      expect((yaml.load(fs.readFileSync(result.valuesFile, 'utf8')) as any).manager.workerIdPrefix).equal('replacement')
+      expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8'))).not.have.any.keys('fingerprint', 'valuesSha256')
 
       const sdk = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-handoff-sdk-'))
       try {

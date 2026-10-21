@@ -42,7 +42,10 @@ def main():
     CHECK = 'dstack-tls-auth-project-backend'
     client = APIClient(base_url=p['url'], token=os.environ['DSTACK_TOKEN'])
     project = client.projects.get(p['project'])
-    if p['provider'] not in {b.config.type for b in project.backends}:
+    required = {p['provider']}
+    if p.get('fallbackProvider'):
+        required.add(p['fallbackProvider'])
+    if not required.issubset({b.config.type for b in project.backends}):
         raise RuntimeError('Required dstack backend is absent')
     CHECK = 'wp-capacity-api'
     opener = urllib.request.build_opener(NoRedirect())

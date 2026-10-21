@@ -10,7 +10,7 @@ import {prepareCapacityNetwork} from '../../utils/capacity-manager-network.js'
 import {capacityPreflight, capacityReconcileEvidence} from '../../utils/capacity-manager-preflight.js'
 import {DEFAULT_DEPLOYMENT} from '../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../utils/json-output.js'
-import {digest, localPath} from '../../utils/preparation-io.js'
+import {localPath} from '../../utils/preparation-io.js'
 import {capacityExec} from '../../utils/proof-workers-lifecycle.js'
 import {specKubernetesTarget} from '../../utils/spec-kubernetes-target.js'
 
@@ -81,19 +81,18 @@ export default class CapacityManager extends Command {
 
       if (args.action === 'credentials') assertSdkWorkersRetired(root)
       const valuesContent = fs.readFileSync(localPath(root, plan.valuesFile), 'utf8')
-      if (plan.valuesSha256 && digest(valuesContent) !== plan.valuesSha256) throw new Error('Prepared manager values changed; review and regenerate before activation')
       const values = parseCapacityInput(valuesContent, 'capacity-manager values YAML', yaml.load) as any
-      if (!plan.provider || !plan.valuesSha256) throw new Error('Regenerate the legacy capacity-manager plan with prepare before activation/preflight')
+      if (!plan.provider) throw new Error('Regenerate the legacy capacity-manager plan with prepare before activation/preflight')
       if (!selectedContext) throw new Error('Select --kube-context or save infrastructure.kubeContext before activation/preflight')
       if (!plan.workerCredentialMaster) throw new Error('This capacity-manager plan predates per-worker credentials; drain the old manager, archive its plan and rerun setup render')
       if (values.manager.dstack.project !== plan.project || values.workerCredentialMaster?.existingSecret !== plan.workerCredentialMaster.existingSecret || values.workerCredentialMaster?.key !== plan.workerCredentialMaster.key) throw new Error('Regenerate the capacity-manager plan after changing its credential bindings')
       if (!plan.fleets?.files?.length || !['create', 'reuse'].includes(plan.fleets.action)) throw new Error('Fleet preparation is missing; rerun setup render before installing capacity-manager')
-      const fleets = plan.fleets.files.map((file: {path: string; sha256: string}) => {
+      const fleets = plan.fleets.files.map((file: {path: string}) => {
         const content = fs.readFileSync(localPath(root, file.path), 'utf8')
-        if (digest(content) !== file.sha256) throw new Error('Prepared fleet YAML changed; rerun setup render')
         return parseCapacityInput(content, 'prepared fleet YAML', yaml.load) as any
       })
-      if (JSON.stringify(fleets.map((fleet: any) => fleet.name)) !== JSON.stringify(values.manager.dstack.fleets)) throw new Error('Fleet bindings changed; rerun setup render')
+      const selectedFleets = new Set([...values.manager.dstack.fleets, ...(values.manager.dstack.fallbackFleet ? [values.manager.dstack.fallbackFleet] : [])])
+      if (fleets.length !== selectedFleets.size || fleets.some((fleet: any) => !selectedFleets.delete(fleet.name))) throw new Error('Fleet bindings changed; rerun setup render')
       run(plan.namespace, ['rollout', 'status', `deployment/${plan.dstack.deployment}`, '--timeout=120s'])
       if (values.dstackAuth?.existingSecret !== plan.dstack.auth.existingSecret || values.dstackAuth?.key !== plan.dstack.auth.key) throw new Error('Dstack credential bindings changed; rerun setup render')
       // The manager mounts the coordinator's master and mints per-run

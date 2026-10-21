@@ -15,6 +15,15 @@ export interface CapacityManagerConfig {
     mode: 'existing-https' | 'internal-alb'
     serverUrl?: string
   }
+  /** Core #1612: a separately priced Vast fleet used after primary AWS capacity failures. */
+  fallback?: {
+    fleet: string
+    gpu: 'A10G' | 'A100' | 'A6000' | 'L4' | 'L40S' | 'RTX3090' | 'RTX4090'
+    maxPricePerHourUsd: number
+    minReliability?: number
+    provider: 'vastai'
+    regions: string[]
+  }
   /** Created empty by the install preflight, or checked without mutation when reusing. */
   fleet?: {
     action?: 'create' | 'reuse'

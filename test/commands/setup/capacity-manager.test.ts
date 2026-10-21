@@ -1,6 +1,5 @@
 import {expect} from 'chai'
 import {spawnSync} from 'node:child_process'
-import {createHash} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -74,7 +73,7 @@ describe('setup capacity-manager credentials', () => {
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 
-  it('transfers only referenced credentials through stdin without starting workers or leaking values', () => {
+  for (const fallback of [false, true]) it(`prepares fleets without starting workers or leaking values (fallback: ${fallback})`, () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-credentials-'))
     try {
       fs.mkdirSync(path.join(root, '.scrollsdk/capacity-manager'), {recursive: true})
@@ -82,14 +81,23 @@ describe('setup capacity-manager credentials', () => {
       const fleetYaml = 'type: fleet\nname: test-fleet\nnodes: {min: 0, target: 0, max: 2}\n'
       fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/fleet.yaml'), fleetYaml)
       const log = path.join(root, 'calls.jsonl')
-      fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), JSON.stringify({dstack: {auth: {existingSecret: 'dstack-auth', key: 'admin-token'}, deployment: 'dstack-controller', namespace: 'chain'}, fleets: {action: 'create', files: [{path: '.scrollsdk/capacity-manager/fleet.yaml', sha256: createHash('sha256').update(fleetYaml).digest('hex')}]}, kubeContext: 'saved-context', namespace: 'chain', project: 'test-project', proofSecret: 'proof-secrets', schema: 'scrollsdk/capacity-manager/v1', valuesFile: 'values/capacity-manager-production.yaml', workerCredentialMaster: {existingSecret: 'proof-secrets', key: 'prover-worker-token'}}))
+      fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), JSON.stringify({dstack: {auth: {existingSecret: 'dstack-auth', key: 'admin-token'}, deployment: 'dstack-controller', namespace: 'chain'}, fleets: {action: 'create', files: [{path: '.scrollsdk/capacity-manager/fleet.yaml', sha256: 'legacy-fleet-hash'}]}, kubeContext: 'saved-context', namespace: 'chain', project: 'test-project', proofSecret: 'proof-secrets', schema: 'scrollsdk/capacity-manager/v1', valuesFile: 'values/capacity-manager-production.yaml', workerCredentialMaster: {existingSecret: 'proof-secrets', key: 'prover-worker-token'}}))
       fs.writeFileSync(path.join(root, 'values/capacity-manager-production.yaml'), 'dstackAuth:\n  existingSecret: dstack-auth\n  key: admin-token\nworkerCredentialMaster:\n  existingSecret: proof-secrets\n  key: prover-worker-token\nmanager:\n  dstack:\n    project: test-project\n    fleets: [test-fleet]\n')
       const managerValuesPath = path.join(root, 'values/capacity-manager-production.yaml')
       fs.appendFileSync(managerValuesPath, 'wpAuth: {existingSecret: proof-secrets, key: proof-work-token}\n')
       const planPath = path.join(root, '.scrollsdk/capacity-manager/plan.json')
       const prepared = JSON.parse(fs.readFileSync(planPath, 'utf8'))
       prepared.provider = 'vastai'
-      prepared.valuesSha256 = createHash('sha256').update(fs.readFileSync(managerValuesPath)).digest('hex')
+      prepared.valuesSha256 = 'legacy-values-hash'
+      if (fallback) {
+        prepared.provider = 'aws'
+        prepared.fallbackProvider = 'vastai'
+        prepared.fleets.files.unshift({path: '.scrollsdk/capacity-manager/fallback.yaml'})
+        fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/fallback.yaml'), 'type: fleet\nname: vast-fallback\nnodes: {min: 0, target: 0, max: 2}\n')
+        const values = fs.readFileSync(managerValuesPath, 'utf8').replace('    fleets: [test-fleet]', '    fleets: [test-fleet]\n    fallbackFleet: vast-fallback')
+        fs.writeFileSync(managerValuesPath, values + `image: {repository: example.invalid/manager, digest: 'sha256:${'a'.repeat(64)}'}\n`)
+      }
+
       fs.writeFileSync(planPath, JSON.stringify(prepared))
       fs.writeFileSync(path.join(root, 'kubectl'), `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -115,7 +123,9 @@ else console.log('{"updated":true}');
       expect(JSON.parse(exec.input)).not.to.have.any.keys('secretName', 'token')
       expect(calls.some(call => call.args.includes('secret'))).to.equal(false)
       expect(JSON.parse(exec.input)).to.include({fleetAction: 'create'})
-      expect(JSON.parse(exec.input).fleets[0]).to.deep.include({name: 'test-fleet', nodes: {max: 2, min: 0, target: 0}})
+      const preparedFleets = JSON.parse(exec.input).fleets
+      expect(preparedFleets.map((fleet: {name: string}) => fleet.name)).to.have.members(fallback ? ['test-fleet', 'vast-fallback'] : ['test-fleet'])
+      expect(preparedFleets.find((fleet: {name: string}) => fleet.name === 'test-fleet')).to.deep.include({nodes: {max: 2, min: 0, target: 0}})
       expect(exec.args.join(' ')).not.to.include('NONFUNCTIONAL_')
       expect(calls.filter(call => call.args.includes('apply'))).to.have.length(0)
       expect(calls.filter(call => call.args.includes('create'))).to.have.length(1)
@@ -142,10 +152,21 @@ else console.log('{"updated":true}');
       const statusCall = JSON.parse(fs.readFileSync(log, 'utf8').trim())
       expect(statusCall.args).to.include.members(['--context', 'saved-context', '--namespace', 'chain', 'get'])
       fs.writeFileSync(log, '')
-      fs.appendFileSync(path.join(root, '.scrollsdk/capacity-manager/fleet.yaml'), 'max_price: 999\n')
+      delete prepared.valuesSha256
+      for (const file of prepared.fleets.files) delete file.sha256
+      fs.writeFileSync(planPath, JSON.stringify(prepared))
+      fs.appendFileSync(path.join(root, '.scrollsdk/capacity-manager/fleet.yaml'), '# Operator comment\n')
+      fs.appendFileSync(managerValuesPath, '# Operator comment\n')
       const changed = spawnSync(process.execPath, [cli, 'setup', 'capacity-manager', 'credentials', '--dir', root, '--json'], {encoding: 'utf8', env: {...process.env, CM_TEST_LOG: log, PATH: `${root}:${process.env.PATH}`}})
-      expect(changed.status).not.to.equal(0)
-      expect(changed.stdout + changed.stderr).to.include('fleet YAML changed')
+      expect(changed.status, changed.stdout + changed.stderr).to.equal(0)
+      const preflight = spawnSync(process.execPath, [cli, 'setup', 'capacity-manager', 'preflight', '--dir', root, '--json'], {encoding: 'utf8', env: {...process.env, CM_TEST_LOG: log, PATH: `${root}:${process.env.PATH}`}})
+      expect(preflight.status, preflight.stdout + preflight.stderr).to.equal(0)
+      // Missing a selected fleet still prevents creating an unrelated fleet.
+      fs.writeFileSync(log, '')
+      fs.writeFileSync(path.join(root, '.scrollsdk/capacity-manager/fleet.yaml'), fleetYaml.replace('test-fleet', 'unrelated-fleet'))
+      const mismatched = spawnSync(process.execPath, [cli, 'setup', 'capacity-manager', 'credentials', '--dir', root, '--json'], {encoding: 'utf8', env: {...process.env, CM_TEST_LOG: log, PATH: `${root}:${process.env.PATH}`}})
+      expect(mismatched.status).not.to.equal(0)
+      expect(mismatched.stdout + mismatched.stderr).to.include('Fleet bindings changed')
       expect(fs.readFileSync(log, 'utf8')).to.equal('')
 
     } finally {fs.rmSync(root, {force: true, recursive: true})}

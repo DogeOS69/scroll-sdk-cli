@@ -1119,6 +1119,15 @@ The generated Makefile passes its context and namespace explicitly. Namespace
 changes require regenerating the values, since service DNS and Secret references
 are bound to that namespace.
 
+### Optional AWS-to-Vast fallback
+
+`capacityManager.fallback` configures a separate Vast fleet while retaining
+`capacityManager.provider: aws` for primary runs. See
+[the fallback configuration and migration procedure](capacity-manager-activation.md#optional-aws-to-vast-fallback)
+for the complete example, required Core image/chart versions, price/VRAM/CUDA
+checks, backend preparation and failure triggers. Both fleet definitions are
+prepared with zero initial instances; installation remains the allocation step.
+
 ### Project, backend and empty fleet preparation
 
 With `preparation.dstack.mode: import`, the generated controller configuration
