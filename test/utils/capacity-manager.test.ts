@@ -16,7 +16,7 @@ import {writeJson} from '../../src/utils/preparation-io.js'
 import {preparationSteps} from '../../src/utils/preparation-plan.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 import {operateWorkerCapacity} from '../../src/utils/proof-workers-lifecycle.js'
-import {capacityPlan} from '../../src/utils/proof-workers-plan.js'
+import {capacityPlan, workerLaunch} from '../../src/utils/proof-workers-plan.js'
 import {planSpecBootstrap} from '../../src/utils/spec-bootstrap.js'
 import {createSdkFixture} from '../helpers/sdk-templates.js'
 import {internalTls} from './dstack-internal-tls.test.js'
@@ -51,6 +51,16 @@ describe('Core capacity manager', () => {
       expect(contractReads).to.equal(0)
       expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
     } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
+  it('projects the exact worker startup environment alongside its command', () => {
+    const input = fixture()
+    const launch = workerLaunch(input.worker, input.publication, '{worker_id}', '89')
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    expect(values.manager.workerEnv).to.deep.equal(launch.env)
+    expect(values.manager.workerCommand).to.equal(launch.command)
+    expect(values.manager.workerEnv).not.to.have.property('DOGEOS_PROVER_WORKER_TOKEN')
+    expect(Object.keys(values.manager.workerEnv)).to.have.length(22)
   })
 
   it('requires Core-compatible controller transport without disclosing rejected URLs', () => {
@@ -242,6 +252,16 @@ describe('Core capacity manager', () => {
       }
 
       fs.writeFileSync(path.join(root, 'Makefile'), '# operator note\ninstall-capacity-manager:\n\thelm upgrade --install capacity-manager example/chart\n')
+      const installMakefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8')
+      for (const version of ['0.1.3', '0.0.9', '0.1.4-rc.1']) {
+        fs.writeFileSync(path.join(root, 'Makefile'), `CAPACITY_MANAGER_CHART_VERSION ?= ${version}\n${installMakefile}`)
+        expect(() => prepareCapacityManager(root, () => contract)).to.throw('chart >= 0.1.4')
+        expect(fs.readFileSync(managerPath, 'utf8')).to.equal(original)
+        expect(fs.readFileSync(wpPath, 'utf8')).to.equal(originalWp)
+        expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
+      }
+
+      fs.writeFileSync(path.join(root, 'Makefile'), `CAPACITY_MANAGER_CHART_VERSION ?= 0.1.4\n${installMakefile}`)
       const result = prepareCapacityManager(root, () => contract)
       const makefile = fs.readFileSync(path.join(root, 'Makefile'), 'utf8')
       expect(makefile).to.include('# operator note')

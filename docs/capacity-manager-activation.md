@@ -136,6 +136,18 @@ is not a substitute for a full AWS drift audit.
 
 ## Prepare and check before takeover
 
+Generated values use `manager.workerEnv` for public artifact URLs and SHA-256
+digests, with quoted references in `manager.workerCommand`. Use capacity-manager
+chart **0.1.4 or newer** and a committed SDK `templates.sdkRevision` containing
+that interface and the matching Makefile pin. Templates are read from the pinned
+Git commit, so an updated SDK working tree alone is insufficient. Preparation
+rejects an older `CAPACITY_MANAGER_CHART_VERSION` in the deployment Makefile;
+custom install flows without that variable must select a compatible chart too.
+Older charts ignore the map and leave the worker without its artifact variables.
+The map is not a place for credentials: Core injects each worker token separately.
+Changing an existing command/environment changes the capacity fingerprint; drain
+the old manager and archive its local plan before preparing its replacement.
+
 ```bash
 scrollsdk setup capacity-manager prepare --dir deployment --spec capacity-selection.yaml
 ```
