@@ -146,6 +146,8 @@ export function prepareDstackAws(root: string, spec: DeploymentSpec, aws: Pick<A
   const expectedArn = role?.Arn ?? `arn:${partition}:iam::${account}:role/${intent.roleName}`
   if (!expectedArn.startsWith(`arn:${partition}:iam::${account}:role/`) || annotation && annotation !== expectedArn) throw new Error('Dstack role belongs to a different account or conflicts with the explicit annotation')
   if (input.action === 'create') {
+    // IAM rejects inline role policies above 10,240 characters; fail before any mutation.
+    if (JSON.stringify(policy).length > 10_240) throw new Error('Dstack worker policy exceeds the IAM inline policy size limit; select fewer regions or VPCs with fewer eligible subnets')
     if (role) {
       const actual = Object.fromEntries((role.Tags ?? []).map((tag: any) => [tag.Key, tag.Value]))
       if (Object.entries(tags).some(([key, value]) => actual[key] !== value)) throw new Error('Dstack role already exists without matching CLI ownership tags; use reuse for an operator-managed role')
