@@ -226,7 +226,7 @@ generation so a retry uses the same identity.
 | Command | Work performed | Boundary |
 | --- | --- | --- |
 | `setup genesis` | Bootstrap pinned templates; pin the deployer; generate local genesis and contract addresses. | No AWS calls, funding or service identity creation. |
-| `setup aws` | Prepare declared service identities, proof store/IAM/token, archive access, Bridge sequencer KMS, controller credentials and selected existing databases. | Resource facts are saved automatically; no copy back into the spec. No GPU allocation. |
+| `setup aws` | Prepare declared service identities, proof store/IAM/token, archive access, Bridge sequencer KMS, optional dstack IAM/IRSA, controller credentials and selected existing databases. | Resource facts are saved automatically; no copy back into the spec. No GPU allocation. |
 | `setup bridge-funding` | Bind genesis/DA anchor; verify helper funding; invoke Core setup and marked funding; verify all resulting outpoints. | One operator wallet handoff. Setup and Bridge funding broadcast transactions and require manual reconciliation after ambiguous failures. |
 | `setup protocol-context` | Generate canonical `.data/protocol_context.json` and its runtime YAML from completed Bridge funding. | Stops before CubeSigner policy builds, proof baking, publication and governance. No funding is replayed. |
 | `setup proof-materials` | Import, bake, export and check proof materials. | No policy attachment, artifact publication or session creation. |
@@ -1142,15 +1142,15 @@ For Vast, retain `providers: [vastai]` and `vastaiApiKeyEnv: VASTAI_API_KEY` in
 to `1`. It is projected to Vast fleet `backend_options.min_reliability`, with
 `offer_order: price`. Explicitly carry over any stricter reliability floor when
 switching from bounded Workers. AWS fleets do not receive Vast backend options.
-For AWS, use the controller's existing IRSA role and explicit existing VPCs:
+For AWS, import the provider with explicit existing VPCs; this prepares the controller IAM/IRSA role.
+See [AWS preparation and manual prerequisites](dstack-aws-preparation.md) for
+create/reuse behavior, operator permissions and network checks:
 
 ```yaml
 dstackController:
   enabled: true
-  defaultCredentialsEnabled: true
   serviceAccount:
-    annotations:
-      eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/REPLACE_WITH_DSTACK_ROLE
+    name: dstack-controller
 preparation:
   dstack:
     mode: import
@@ -1164,21 +1164,23 @@ preparation:
 Merge these into the existing blocks rather than duplicating YAML keys. Every
 selected AWS region needs a VPC mapping. Private networking requires suitable
 private subnets, outbound access and controller-to-worker reachability. Optional
-`iamInstanceProfile` is an existing worker instance profile name. The CLI does
-not create provisioning IAM roles, networks or quotas, and it does not fall back
-to a default VPC. AWS static access keys are not imported by this path.
+`iamInstanceProfile` is an existing worker instance profile name. The AWS stage
+prepares the controller role and automatically binds its ARN; networks, optional
+worker profiles and quotas remain operator-owned. To use an operator-managed role
+instead, set its ARN as the controller's `eks.amazonaws.com/role-arn` annotation;
+it is then verified without changes. There is no default-VPC fallback. AWS static
+access keys are not imported by this path.
 
 `setup render` saves reviewable definitions in
-`.scrollsdk/capacity-manager/fleets/*.yaml` and records their hashes in the local
-plan. Provider, GPU, regions, instance types, price ceiling and maximum node
-count come from `capacityManager`. Each fleet starts with `min: 0, target: 0`;
+`.scrollsdk/capacity-manager/fleets/*.yaml`. Provider, GPU, regions, instance types,
+price ceiling and maximum node count come from `capacityManager`. Each fleet starts with `min: 0, target: 0`;
 creating it does not rent an initial instance. Fleet defaults are 16 CPUs,
 64 GiB RAM (128 GiB for L40S), 200 GiB disk and 600 seconds of idle time, all
 configurable under `capacityManager.fleet`. The idle timer releases unused
 instances; it does not limit worker runtime. Core's `minWorkers` independently
 controls warm workers after the manager starts. Existing fleets are reused only
 when their effective configuration matches, including limits and idle policy.
-Review and change spec before planning rather than editing locked fleet files.
+Use the capacity-manager configuration workflow when changing fleet intent.
 
 When upgrading an existing controller's server-config Secret, restart/redeploy
 that controller so it loads the new project/backend configuration before running
@@ -1374,3 +1376,9 @@ are reported per target as `verified`, `partial`, `pending`, or `unavailable`;
 only full verification of every selected target exits successfully. Block-hash
 history has no Solidity source and remains a bytecode check. Optional preinstalls
 are outside the required source-verification set.
+
+## AWS resource coverage
+
+See [the AWS resource preparation inventory](aws-resource-preparation.md) for
+service-level automation, manual prerequisites and remaining documentation gaps.
+NLB and ALB resources remain manually prepared.

@@ -33,6 +33,10 @@ export interface PreparationConfig {
   dstack?: {
     /** Existing AWS networking; controller uses its workload role, never static access keys. */
     aws?: {
+      /** Operator profile for controller role preparation; the controller itself uses IRSA. */
+      awsProfile?: string
+      /** Created role name; defaults to a deployment/cluster-derived name. An existing role is selected by its annotation. */
+      controllerRoleName?: string
       iamInstanceProfile?: string
       publicIps?: boolean
       vpcIds: Record<string, string>

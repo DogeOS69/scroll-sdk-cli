@@ -66,6 +66,19 @@ describe('resumable preparation plan', () => {
   afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
   const makePlan = () => createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml')})
 
+  it('plans dstack AWS role creation without requiring a prefilled role ARN', async () => {
+    const spec = fixture()
+    spec.infrastructure = {aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, bootnodeCount: 1, provider: 'aws', sequencerCount: 1}
+    spec.dstackController = {database: {type: 'sqlite'}, enabled: true}
+    spec.preparation!.dstack = {aws: {vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}
+    fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+    const plan = await makePlan()
+    expect(plan.steps.find(step => step.id === 'dstack-aws')).include({effect: 'cloud'})
+    expect(fs.existsSync(path.join(deployment, '.data/dstack-aws.json'))).false
+    spec.preparation!.inputs = [{destination: '.data/dstack-aws.json', source: 'operator-file.json'}]
+    expect(() => validatePreparation(spec)).throw('generates its own resource record')
+  })
+
   it('leaves no partial plan after an initial state write fails and allows retry', async () => {
     const rename = fs.renameSync
     const stub = sinon.stub(fs, 'renameSync').callsFake((from, to) => {
