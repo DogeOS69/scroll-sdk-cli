@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import type {CubesignerRole, DogeConfig} from '../types/doge-config.js'
 
+import {cubesignerSessionExpiration} from './cubesigner-session-format.js'
 import {dogeConfigToToml} from './doge-config.js'
 import {proofRegularFile} from './proof-software-release.js'
 import {normalizeCompressedSecp256k1PublicKey} from './secp256k1-public-key.js'
@@ -42,7 +43,7 @@ function checkSession(content: string, role: CubesignerRole, options: Options): 
   const api = new URL(options.signerApiRoot)
   if (api.protocol !== 'https:' || api.username || api.password || api.search || api.hash || api.pathname !== '/') throw new Error('signer-api-root must be a credential-free HTTPS origin')
   if (env?.['Dev-CubeSignerStack']?.SignerApiRoot?.replace(/\/$/, '') !== api.origin || session.org_id !== options.organization || session.role_id !== role.role_id) throw new Error('Session environment, organization or role does not match checkpoint selection')
-  const expiration = session.session_exp ?? session.expiration
+  const expiration = cubesignerSessionExpiration(session)
   const info = session.session_info as {refresh_token_exp?: number} | undefined
   if (typeof expiration !== 'number' || expiration <= Date.now() / 1000 || typeof info?.refresh_token_exp !== 'number' || info.refresh_token_exp <= Date.now() / 1000) throw new Error('CubeSigner signing session or refresh token is expired; run cubesigner-refresh with management login')
   if (typeof session.token !== 'string' || !session.token || typeof session.refresh_token !== 'string' || !session.refresh_token) throw new Error('CubeSigner signing session is incomplete')

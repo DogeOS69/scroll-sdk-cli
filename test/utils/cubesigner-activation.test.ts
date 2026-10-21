@@ -124,6 +124,20 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  for (const format of ['cs', 'legacy']) it(`verifies production activation and session reuse with ${format} expiration metadata`, async () => {
+    const file = path.join(root, 'secrets/cubesigner-signer-session.json')
+    const session = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (format === 'cs') session.expiration = session.session_exp
+    delete session.session_exp
+    write('secrets/cubesigner-signer-session.json', session)
+    const before = fs.readFileSync(file)
+    expect((await activate()).activation).equal('verified')
+    expect((await prepareRuntimeSession({client, async create() {throw new Error('Must reuse the existing session')}, directory: root})).status).equal('existing-session-reused')
+    expect(fs.readFileSync(file).equals(before)).equal(true)
+    client.sessions = async () => []
+    await rejects(() => activate(), 'Runtime session is absent, revoked or expired')
+  })
+
   it('prepares and recovers an organization alias while pinning its canonical identity', async () => {
     const configFile = path.join(root, '.data/doge-config.toml')
     const config: any = toml.parse(fs.readFileSync(configFile, 'utf8'))
