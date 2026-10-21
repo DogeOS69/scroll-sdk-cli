@@ -6,6 +6,7 @@ import chalk from 'chalk'
 import { randomBytes } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import {checkServerIdentity} from 'node:tls'
 import pg from 'pg'
 
 const { Client } = pg
@@ -86,6 +87,8 @@ export default class SetupDbInit extends Command {
       default: false,
       description: 'Run without prompts, using config.toml values. Requires [db.admin] section with PUBLIC_HOST, PUBLIC_PORT, USERNAME, PASSWORD (or $ENV: refs)',
     }),
+    'ssl-ca': Flags.string({description: 'PEM CA bundle for administrator connections; overrides [db.admin].SSL_CA'}),
+    'ssl-mode': Flags.string({description: 'Administrator TLS mode; overrides [db.admin].SSL_MODE (default: verify-full). Use disable only for explicit local development connections', options: ['verify-full', 'disable']}),
     'update-permissions': Flags.boolean({
       char: 'u',
       default: false,
@@ -101,6 +104,8 @@ export default class SetupDbInit extends Command {
   private outputContext?: JsonOutputContext
   private pgDatabase: string = "";
   private pgPassword: string = "";
+  private pgSslCa?: string
+  private pgSslMode = 'verify-full'
   private pgUser: string = "";
   private publicHost: string = "";
   private publicPort: string = "";
@@ -212,6 +217,7 @@ export default class SetupDbInit extends Command {
     const createdDatabases: string[] = []
 
     try {
+      this.configureConnectionTls(existingConfig, flags)
       // If updating permissions, we only need to connect once
       if (flags['update-permissions']) {
         [this.publicHost, this.publicPort, this.pgUser, this.pgPassword, this.pgDatabase] = await this.promptForPublicConnectionDetails(existingConfig, niCtx);
@@ -396,17 +402,42 @@ export default class SetupDbInit extends Command {
     }
   }
 
+  private configureConnectionTls(config: any, flags: {'ssl-ca'?: string; 'ssl-mode'?: string}): void {
+    const setting = (value: unknown, label: string): string | undefined => {
+      if (value === undefined) return undefined
+      if (typeof value !== 'string' || !value.trim()) throw new Error(`Administrator ${label} must be a nonempty string`)
+      const resolved = resolveEnvValue(value)
+      if (!resolved?.trim()) throw new Error(`Administrator ${label} environment reference is missing or empty`)
+      return resolved
+    }
+
+    const mode = setting(flags['ssl-mode'] ?? config.db?.admin?.SSL_MODE, 'SSL_MODE') ?? 'verify-full'
+    if (!['disable', 'verify-full'].includes(mode)) throw new Error('Administrator SSL_MODE must be verify-full or disable')
+    const caFile = setting(flags['ssl-ca'] ?? config.db?.admin?.SSL_CA, 'SSL_CA')
+    if (mode === 'disable' && caFile) throw new Error('Administrator SSL_CA cannot be used with SSL_MODE=disable')
+    this.pgSslMode = mode
+    this.pgSslCa = undefined
+    if (caFile !== undefined) {
+      try {
+        this.pgSslCa = fs.readFileSync(caFile, 'utf8')
+        if (!this.pgSslCa.includes('-----BEGIN CERTIFICATE-----')) throw new Error('Missing certificate')
+      } catch {throw new Error('Cannot read administrator SSL_CA PEM bundle; check --ssl-ca or [db.admin].SSL_CA')}
+    }
+  }
+
   private async createConnection(host: string, port: string, user: string, password: string, database: string): Promise<PgClient> {
     const portNum = Number.parseInt(port, 10)
 
-    // Try with SSL first (required for production databases)
+    // Verify the requested endpoint, including IP literals passed over pg's socket.
     const sslConn = new Client({
         database,
         host,
         password,
         port: portNum,
-        ssl: {
-          rejectUnauthorized: false // Note: This is not secure for production use
+        ssl: this.pgSslMode === 'disable' ? false : {
+          ...(this.pgSslCa ? {ca: this.pgSslCa} : {}),
+          checkServerIdentity: (_servername, cert) => checkServerIdentity(host, cert),
+          rejectUnauthorized: true,
         },
         user
       })
@@ -415,25 +446,7 @@ export default class SetupDbInit extends Command {
       return sslConn
     } catch (sslError) {
       await sslConn.end().catch(() => {})
-      // Check if the error is specifically about SSL not being supported
-      const errorMsg = sslError instanceof Error ? sslError.message : String(sslError)
-      if (errorMsg.includes('does not support SSL') || errorMsg.includes('SSL connection')) {
-        this.logMessage(chalk.yellow('SSL not supported by server, connecting without SSL...'))
-
-        // Retry without SSL (for local development databases)
-        const noSslConn = new Client({
-          database,
-          host,
-          password,
-          port: portNum,
-          ssl: false,
-          user
-        })
-        await noSslConn.connect()
-        return noSslConn
-      }
-
-      // Re-throw if it's a different error
+      // Never downgrade a failed TLS connection to plaintext.
       throw sslError
     }
   }

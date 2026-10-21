@@ -135,6 +135,23 @@ scrollsdk setup db-init --non-interactive --json
 their data. Running `db-init` is unnecessary when reusing valid databases and DSNs.
 See [dstack setup](dstack-controller.md) for its database and Secret workflow.
 
+Administrator connections default to `SSL_MODE = "verify-full"`: the CLI verifies
+the certificate chain and the `PUBLIC_HOST` identity and never retries without
+TLS after a connection failure. For RDS or another private CA, set
+`SSL_CA = "/path/to/ca-bundle.pem"` in `[db.admin]`, or pass
+`--ssl-ca /path/to/ca-bundle.pem`. Use the official RDS CA bundle for RDS and a
+hostname covered by the database certificate. A tunnel address such as
+`127.0.0.1` must also match the certificate; use an appropriate hostname routed
+through the tunnel instead of disabling verification.
+
+Only explicit development connections may use `[db.admin].SSL_MODE = "disable"`
+or `--ssl-mode disable`. The CLI accepts only `verify-full` and `disable`, and
+rejects a CA file combined with `disable`. Command flags override the matching
+configuration fields; both fields support `$ENV:VAR_NAME` references in config.
+Relative CA paths are resolved from the deployment working directory. These
+settings apply to all administrator connections, including `--update-permissions`,
+and do not change the generated application DSNs or their TLS settings.
+
 ## Frontend and deployment outputs
 
 Bridge History API/fetcher, Chain Monitor, L1 Explorer and Blockbook no longer

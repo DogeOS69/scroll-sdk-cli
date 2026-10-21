@@ -146,6 +146,8 @@ export class CommandPreparationRunner implements PreparationRunner {
         config.db ??= {}
         const previous = config.db.admin
         config.db.admin = {DATABASE: admin.database, PASSWORD: '$ENV:SCROLLSDK_DB_ADMIN_PASSWORD', PUBLIC_HOST: admin.host, PUBLIC_PORT: String(admin.port), USERNAME: admin.username, VPC_HOST: admin.vpcHost ?? admin.host, VPC_PORT: String(admin.vpcPort ?? admin.port)}
+        // Preserve the operator's explicit TLS policy while supplying temporary credentials.
+        for (const key of ['SSL_CA', 'SSL_MODE']) if (previous?.[key] !== undefined) config.db.admin[key] = previous[key]
         privateWrite(file, toml.stringify(config))
         try {
           await command(['db-init', '-N', '--databases', step.id === 'dstack-db' ? 'dstack' : 'blockscout'], {SCROLLSDK_DB_ADMIN_PASSWORD: password})
