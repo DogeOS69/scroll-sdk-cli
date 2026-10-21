@@ -16,12 +16,18 @@ export function capacityPreflight(plan: any, values: any, run: (args: string[], 
   if (!container?.image || !controller.metadata?.uid) throw new Error('Cannot identify deployed dstack controller probe image')
   const name = `cm-preflight-${randomUUID().slice(0, 12)}`
   const script = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../config/capacity-manager-preflight.py'), 'utf8')
+  // Probe the selected immutable manager binary before installing it or creating fleets.
+  // --help exits without starting reconciliation or accessing provider credentials.
+  const {fallbackFleet} = values.manager.dstack
+  if (Boolean(plan.fallbackProvider) !== Boolean(fallbackFleet)) throw new Error('Fallback plan and values differ; prepare capacity-manager again')
+  const initContainers = fallbackFleet ? [{args: ['--dstack-fallback-fleet', fallbackFleet, '--help'], command: ['/usr/local/bin/capacity-manager'],
+    image: `${values.image.repository}@${values.image.digest}`, name: 'manager-fallback-capability'}] : []
   const env = Object.entries({DSTACK_TOKEN: values.dstackAuth, WORKER_MASTER: values.workerCredentialMaster, WP_TOKEN: values.wpAuth}).map(([name, ref]: [string, any]) => {
     if (!ref?.existingSecret || !ref?.key) throw new Error('Capacity preflight requires all three Secret references')
     return {name, valueFrom: {secretKeyRef: {key: ref.key, name: ref.existingSecret}}}
   })
-  env.push({name: 'PROBE_INPUT', value: JSON.stringify({privateDns: plan.privateDns === true, project: plan.project, provider: plan.provider, url: values.manager.dstack.serverUrl, wpUrl: values.manager.proofWorkBaseUrl})} as any)
-  const pod = {apiVersion: 'v1', kind: 'Pod', metadata: {labels: {'app.kubernetes.io/instance': 'capacity-manager', 'app.kubernetes.io/name': 'capacity-manager'}, name, namespace: plan.namespace, ownerReferences: [{apiVersion: 'apps/v1', blockOwnerDeletion: false, controller: true, kind: 'Deployment', name: plan.dstack.deployment, uid: controller.metadata.uid}]}, spec: {activeDeadlineSeconds: 120, automountServiceAccountToken: false, containers: [{command: ['/root/.local/share/uv/tools/dstack/bin/python', '-c', script], env, image: container.image, name: 'probe', readinessProbe: {exec: {command: ['/root/.local/share/uv/tools/dstack/bin/python', '-c', 'raise SystemExit(1)']}, periodSeconds: 1}, resources: {limits: {cpu: '500m', memory: '512Mi'}, requests: {cpu: '50m', memory: '128Mi'}}}], restartPolicy: 'Never'}}
+  env.push({name: 'PROBE_INPUT', value: JSON.stringify({privateDns: plan.privateDns === true, project: plan.project, provider: plan.provider, ...(plan.fallbackProvider ? {fallbackProvider: plan.fallbackProvider} : {}), url: values.manager.dstack.serverUrl, wpUrl: values.manager.proofWorkBaseUrl})} as any)
+  const pod = {apiVersion: 'v1', kind: 'Pod', metadata: {labels: {'app.kubernetes.io/instance': 'capacity-manager', 'app.kubernetes.io/name': 'capacity-manager'}, name, namespace: plan.namespace, ownerReferences: [{apiVersion: 'apps/v1', blockOwnerDeletion: false, controller: true, kind: 'Deployment', name: plan.dstack.deployment, uid: controller.metadata.uid}]}, spec: {activeDeadlineSeconds: 120, ...(initContainers.length > 0 ? {initContainers} : {}), automountServiceAccountToken: false, containers: [{command: ['/root/.local/share/uv/tools/dstack/bin/python', '-c', script], env, image: container.image, name: 'probe', readinessProbe: {exec: {command: ['/root/.local/share/uv/tools/dstack/bin/python', '-c', 'raise SystemExit(1)']}, periodSeconds: 1}, resources: {limits: {cpu: '500m', memory: '512Mi'}, requests: {cpu: '50m', memory: '128Mi'}}}], restartPolicy: 'Never'}}
   // A controller reference prevents an existing manager ReplicaSet from adopting
   // this probe with the same labels. Keep it unready to exclude Service traffic.
   // Create (never apply) avoids taking over any existing Pod. Unique name and

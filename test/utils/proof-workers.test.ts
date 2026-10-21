@@ -188,6 +188,16 @@ describe('bounded proof-worker capacity', () => {
     delete input.publication.files['chunk/app.vmexe']
     expect(() => workerLaunch(input.worker, input.publication, 'worker', '86')).to.throw('resource missing')
   })
+  it('checks either qualified GPU architecture before starting fallback downloads', () => {
+    const {input} = fixturePlan()
+    const launch = workerLaunch(input.worker, input.publication, 'worker', ['89', '86'])
+    const prefix = launch.command.split('; printf %s')[0].replaceAll('/dogeos/artifacts', `${root}/artifacts`)
+    fs.writeFileSync(path.join(root, 'nvidia-smi'), '#!/bin/sh\nprintf "%s\\n" "$TEST_GPU_ARCH"\n', {mode: 0o755})
+    for (const arch of ['8.9', '8.6', '8.0', '']) {
+      const result = spawnSync('sh', ['-c', prefix], {env: {...process.env, PATH: `${root}:${process.env.PATH}`, TEST_GPU_ARCH: arch}})
+      expect(result.status === 0, arch).equal(['8.6', '8.9'].includes(arch))
+    }
+  })
   it('executes quoted artifact env as data and aborts on missing env, download or hash failure', () => {
     const {input} = fixturePlan()
     const payload = 'disposable artifact bytes\n'

@@ -59,7 +59,8 @@ with the existing defaults (60/300/1800/1800 seconds). A zero minimum permits an
 idle fleet; Core's backlog floor can still request capacity when work appears.
 The hourly budget is a planner admission limit, not an AWS/Vast account billing
 cap. Storage, traffic, taxes and delayed provider cleanup are additional costs.
-There is no automatic cross-provider or incompatible-GPU fallback.
+Automatic AWS-to-Vast fallback is opt-in as described below; incompatible GPUs
+are rejected during preparation.
 
 `existing-https` uses an operator-owned endpoint. It must have a publicly trusted,
 hostname-matching certificate that the released Core image accepts. A self-signed
@@ -95,6 +96,56 @@ certificate. The narrow private zone avoids shadowing unrelated public records.
 Cloudflare requires no change when the existing certificate is already validated;
 retain its existing public ACM validation record for renewal. Internal ALB and
 private hosted zone charges are separate from the GPU budget.
+
+## Optional AWS-to-Vast fallback
+
+Requires a published immutable manager image containing Core #1612 (commit
+`73b06275a0ef19b4a761319215522f6671d2a408`) and capacity-manager chart **0.1.5+**.
+The beta.8 manager used by older examples does not support the flag. Update the
+pinned SDK revision and Makefile version before preparing. Preflight runs the
+selected manager image with `--dstack-fallback-fleet ... --help`, without
+credentials or reconciliation, to reject binaries lacking the new option.
+
+Merge this under an AWS `capacityManager` selection:
+
+```yaml
+capacityManager:
+  # Keep primary provider, GPU, project, fleets, image and other required fields.
+  fallback:
+    provider: vastai
+    fleet: vast-fallback
+    gpu: RTX3090
+    regions: [us-east]
+    maxPricePerHourUsd: 0.80
+    minReliability: 0.95
+```
+
+For imported backends, configure `preparation.dstack.providers: [aws, vastai]`
+and `preparation.dstack.vastaiApiKeyEnv: VASTAI_API_KEY`; retain AWS VPC/IRSA
+settings. Store the API key in the private environment file. Existing deployments
+must provision both backends in their existing project first: a capacity-only
+`prepare --spec` overlay does not replace frozen backend credentials. Preflight
+checks both backends. Fleet names must differ from primary fleet names.
+
+Preparation generates a separate Vast fleet in the same project. It inherits
+primary fleet CPU/RAM/disk/idle settings, node maximum and create/reuse action;
+its initial minimum/target remain zero. Its GPU, regions, price and reliability
+come from `fallback`. Both GPU architectures must be in the checked Worker image,
+and the launch command accepts only those qualified architectures. Fallback VRAM
+must satisfy the primary policy's requirement. The explicit fallback price must
+not exceed primary `maxPricePerHourUsd`, which is the planner's per-worker cost
+estimate. The same global worker/budget limits apply across both providers.
+
+Core switches new workers to the fallback fleet for 30 minutes after primary
+no-capacity failures or provisioning timeouts, then tries AWS again. It does not
+balance workers across providers by percentage. A fallback run uses only its
+fleet's selectors, keeping AWS regions/types out of Vast runs. The window is in
+memory; restart tries AWS first while adopting existing workers. Other failures
+and scale-down do not trigger a switch. Core does not require draining solely
+for this option, but the CLI retains its existing configuration fingerprint
+rule: drain/archive the old capacity plan before preparing a changed selection.
+Removing `fallback` clears the rendered fallback argument; it does not delete
+an old fleet or terminate its instances.
 
 ## Prepare the private edge (internal-alb only)
 

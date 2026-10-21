@@ -11,7 +11,7 @@ describe('capacity-manager activation preflight', () => {
   it('uses the manager source selectors and Secret refs; removes only its probe', () => {
     const calls: string[][] = []
     let pod: any
-    const result = capacityPreflight(plan, values, (args, input) => {
+    const result = capacityPreflight({...plan, fallbackProvider: 'vastai'}, {...values, image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'example.invalid/manager'}, manager: {...values.manager, dstack: {...values.manager.dstack, fallbackFleet: 'vast-fallback'}}}, (args, input) => {
       calls.push(args)
       if (args[0] === 'get') return JSON.stringify({metadata: {uid: '00000000-0000-0000-0000-000000000000'}, spec: {template: {spec: {containers: [{image: 'example.invalid/controller:nonfunctional', name: 'controller'}]}}}})
       if (args[0] === 'create') pod = JSON.parse(input!)
@@ -19,6 +19,8 @@ describe('capacity-manager activation preflight', () => {
       return ''
     })
     expect(result.proofAcceptance).to.equal('not-tested')
+    expect(pod.spec.initContainers[0].args).deep.equal(['--dstack-fallback-fleet', 'vast-fallback', '--help'])
+    expect(JSON.parse(pod.spec.containers[0].env.find((e: any) => e.name === 'PROBE_INPUT').value).fallbackProvider).equal('vastai')
     expect(pod.metadata.labels['app.kubernetes.io/name']).to.equal('capacity-manager')
     expect(pod.metadata.namespace).to.equal('chain')
     expect(pod.metadata.ownerReferences[0]).to.include({controller: true, name: 'controller', uid: '00000000-0000-0000-0000-000000000000'})

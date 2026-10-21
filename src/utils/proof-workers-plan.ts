@@ -59,7 +59,9 @@ const artifactEnvPrefixes: Record<string, string> = {
 }
 
 /** Keep the startup command and its required public environment inseparable. */
-export function workerLaunch(worker: ProverWorkerContractV1, publication: ProofProgramPublicationV1, workerId: string, architecture: string): {command: string; env: Record<string, string>} {
+export function workerLaunch(worker: ProverWorkerContractV1, publication: ProofProgramPublicationV1, workerId: string, architecture: string | string[]): {command: string; env: Record<string, string>} {
+  const architectures = [...new Set(Array.isArray(architecture) ? architecture : [architecture])]
+  if (architectures.length === 0 || architectures.some(value => !/^\d{2,3}$/.test(value))) throw new Error('Invalid Worker CUDA architectures')
   const argv = [...worker.argv]
   const options = new Set(argv.filter(a => a.startsWith('--')))
   if (!options.has('--worker-id') || !options.has('--worker-token-file')) throw new Error('Compiler Worker is missing its identity/token arguments')
@@ -73,7 +75,9 @@ export function workerLaunch(worker: ProverWorkerContractV1, publication: ProofP
 
   for (const file of Object.values(paths)) if (!publication.files[file]) throw new Error(`Published Worker resource missing: ${file}`)
   const commands = ['set -eu', 'umask 077', 'install -d /dogeos/artifacts/chunk /dogeos/artifacts/batch /dogeos/artifacts/bridge',
-    `test "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '. ' | head -n 1)" = ${quote(architecture)}`,
+    architectures.length === 1
+      ? `test "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '. ' | head -n 1)" = ${quote(architectures[0])}`
+      : `case "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '. ' | head -n 1)" in ${architectures.map(value => quote(value)).join('|')}) ;; *) exit 1 ;; esac`,
     'printf %s "$DOGEOS_PROVER_WORKER_TOKEN" > /tmp/scrollsdk-worker.token', 'unset DOGEOS_PROVER_WORKER_TOKEN']
   const env: Record<string, string> = {}
   for (const relative of Object.keys(publication.files).sort()) {
