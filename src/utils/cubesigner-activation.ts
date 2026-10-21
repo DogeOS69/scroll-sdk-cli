@@ -259,7 +259,7 @@ async function verifyTransportActivation(options: {
   const readConfigMap = options.readConfigMap ?? (name => JSON.parse(execFileSync('kubectl', ['--context', options.kubeContext, '-n', options.namespace, 'get', 'configmap', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
   const context = fs.readFileSync(proofRegularFile(path.join(root, '.data/protocol_context.json')), 'utf8')
   requirePolicy(readConfigMap('protocol-context-config').data?.['protocol_context.json'] === context, 'Delivered protocol context differs from the prepared Bridge')
-  for (const document of documents.filter(doc => doc.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(document.data?.['protocol_context.json'] === context, 'Helm would replace the verified protocol context')
+  for (const document of documents.filter(doc => doc?.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(document.data?.['protocol_context.json'] === context, 'Helm would replace the verified protocol context')
   requirePolicy(Buffer.from(readSecret('cubesigner-signer-env').data?.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID ?? '', 'base64').toString() === key.keyId, 'Delivered key Secret differs from the selected key')
   requirePolicy(Buffer.from(readSecret('cubesigner-signer-session').data?.['session.json'] ?? '', 'base64').equals(seedBytes), 'Delivered runtime session differs from the prepared seed')
   requirePolicy(proofFileHash(configFile) === configHash && proofFileHash(valuesFile) === valuesHash && fs.readFileSync(seedFile).equals(seedBytes), 'Activation inputs changed during verification')

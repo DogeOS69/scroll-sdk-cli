@@ -21,8 +21,8 @@ describe('mode-aware CubeSigner installation check', () => {
   const keyId = 'Key#fixture'
   const roleId = 'Role#fixture'
   const writeConfig = () => fs.writeFileSync(path.join(root, '.data/doge-config.toml'), toml.stringify(config))
-  const run = () => verifyCubesignerActivation({chart: 'fixture', chartVersion: '0.0.0', connect: async () => client, directory: root, kubeContext: 'fixture', namespace: 'default',
-    readConfigMap: () => ({data: {'protocol_context.json': '{}'}}), readSecret: name => ({data: name.endsWith('-env') ? {DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID: Buffer.from(keyId).toString('base64')} : {'session.json': Buffer.from(delivered).toString('base64')}}), render: () => yaml.dump(workload), values: 'values/cubesigner-signer-production.yaml'})
+  const run = (manifest = yaml.dump(workload)) => verifyCubesignerActivation({chart: 'fixture', chartVersion: '0.0.0', connect: async () => client, directory: root, kubeContext: 'fixture', namespace: 'default',
+    readConfigMap: () => ({data: {'protocol_context.json': '{}'}}), readSecret: name => ({data: name.endsWith('-env') ? {DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID: Buffer.from(keyId).toString('base64')} : {'session.json': Buffer.from(delivered).toString('base64')}}), render: () => manifest, values: 'values/cubesigner-signer-production.yaml'})
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'activation-transport-'))
     for (const dir of ['.data', 'values', 'secrets']) fs.mkdirSync(path.join(root, dir))
@@ -44,6 +44,18 @@ describe('mode-aware CubeSigner installation check', () => {
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
   it('permits explicit regtest transport with fresh remote identity and delivered Secret checks', async () => {
     expect(await run()).include({activation: 'verified', installed: 'not-verified', mode: 'transport_only'})
+  })
+  it('accepts empty Helm documents without skipping rendered protocol context validation', async () => {
+    const context = {data: {'protocol_context.json': '{}'}, kind: 'ConfigMap', metadata: {name: 'protocol-context-config'}}
+    const manifest = () => `---\n# Source: optional disabled template\n---\n${yaml.dump(workload)}---\n${yaml.dump(context)}---\n`
+    expect((await run(manifest())).activation).equal('verified')
+    context.data['protocol_context.json'] = '{"different":true}'
+    try {
+      await run(manifest())
+      expect.fail('Expected rendered context mismatch')
+    } catch (error) {
+      expect((error as Error).message).include('Helm would replace the verified protocol context')
+    }
   })
   it('accepts a runtime session alias only when provider readback verifies the same organization', async () => {
     client.organizationName = 'fixture_org'
