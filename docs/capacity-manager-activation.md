@@ -142,8 +142,8 @@ balance workers across providers by percentage. A fallback run uses only its
 fleet's selectors, keeping AWS regions/types out of Vast runs. The window is in
 memory; restart tries AWS first while adopting existing workers. Other failures
 and scale-down do not trigger a switch. Core does not require draining solely
-for this option, but the CLI retains its existing configuration fingerprint
-rule: drain/archive the old capacity plan before preparing a changed selection.
+for this option. Rerun preparation to update the selected fleets and values;
+the CLI does not require draining or archiving the plan for configuration changes.
 Removing `fallback` clears the rendered fallback argument; it does not delete
 an old fleet or terminate its instances.
 
@@ -196,8 +196,9 @@ rejects an older `CAPACITY_MANAGER_CHART_VERSION` in the deployment Makefile;
 custom install flows without that variable must select a compatible chart too.
 Older charts ignore the map and leave the worker without its artifact variables.
 The map is not a place for credentials: Core injects each worker token separately.
-Changing an existing command/environment changes the capacity fingerprint; drain
-the old manager and archive its local plan before preparing its replacement.
+Rerunning preparation updates the local plan and generated values. The CLI does
+not hash these configuration files or require a drain when they change. Core
+continues to manage running workers using its own runtime configuration identity.
 
 ```bash
 scrollsdk setup capacity-manager prepare --dir deployment --spec capacity-selection.yaml

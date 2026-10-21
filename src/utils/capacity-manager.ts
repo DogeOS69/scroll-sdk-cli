@@ -240,10 +240,8 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   const values = yaml.load(content) as any
   // Fixed, separately named manager: deployment/selector and Secret destination are a shared contract.
   if (values.fullnameOverride !== 'capacity-manager') throw new Error('Keep capacity-manager fullnameOverride at its template name')
-  const previousFile = localPath(root, CAPACITY_MANAGER_PLAN)
+  const planFile = localPath(root, CAPACITY_MANAGER_PLAN)
   const fleetIntent = capacityManagerFleets(spec)
-  const fingerprint = digest(JSON.stringify({fleetIntent, projected}))
-  if (fs.existsSync(previousFile) && read(CAPACITY_MANAGER_PLAN).fingerprint !== fingerprint) throw new Error('Capacity configuration changed; drain the old manager and archive its local plan before preparing the replacement')
   const wpFile = localPath(root, contract.components.withdrawalProcessor.valuesFile)
   const wp = readValues(contract.components.withdrawalProcessor.valuesFile)
   if (!wp.networkPolicy?.enabled) throw new Error('Enable WP NetworkPolicy before preparing capacity-manager')
@@ -259,9 +257,9 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
     const content = yaml.dump(configuration, {lineWidth: -1, noRefs: true})
     fs.mkdirSync(localPath(root, '.scrollsdk/capacity-manager/fleets'), {recursive: true})
     fs.writeFileSync(localPath(root, relative), content)
-    return {path: relative, sha256: digest(content)}
+    return {path: relative}
   })
-  writeJson(previousFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace, serverUrl: projected.manager.dstack.serverUrl}, fingerprint, fleets: {action: fleetIntent.action, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', privateDns: spec.capacityManager?.connection?.mode === 'internal-alb' || Boolean(spec.dstackController?.internalTls), project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, ...(spec.capacityManager!.fallback ? {fallbackProvider: spec.capacityManager!.fallback.provider} : {}), provider: spec.capacityManager!.provider, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, valuesSha256: digest(content), workerCredentialMaster: projected.workerCredentialMaster})
+  writeJson(planFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace, serverUrl: projected.manager.dstack.serverUrl}, fleets: {action: fleetIntent.action, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', privateDns: spec.capacityManager?.connection?.mode === 'internal-alb' || Boolean(spec.dstackController?.internalTls), project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, ...(spec.capacityManager!.fallback ? {fallbackProvider: spec.capacityManager!.fallback.provider} : {}), provider: spec.capacityManager!.provider, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerCredentialMaster: projected.workerCredentialMaster})
   return {namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, valuesFile: file}
 }
 

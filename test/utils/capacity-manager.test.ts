@@ -344,6 +344,8 @@ describe('Core capacity manager', () => {
       expect(values.manager.dstack.fallbackFleet).equal(fallback ? 'vast-fallback' : '')
       const savedPlan = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8'))
       expect(savedPlan.fleets.files).length(fallback ? 2 : 1)
+      expect(savedPlan).not.have.any.keys('fingerprint', 'valuesSha256')
+      for (const file of savedPlan.fleets.files) expect(file).have.all.keys('path')
       expect(savedPlan.fallbackProvider).equal(fallback ? 'vastai' : undefined)
       expect(result.namespace).to.equal('chain')
       expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8')).kubeContext).to.equal('saved-cluster-context')
@@ -362,8 +364,11 @@ describe('Core capacity manager', () => {
       expect(fs.readFileSync(result.valuesFile, 'utf8')).to.equal(first)
       input.spec.capacityManager!.workerIdPrefix = 'replacement'
       writeJson(path.join(root, '.scrollsdk/intent.json'), input.spec)
-      expect(() => prepareCapacityManager(root, () => contract)).to.throw('drain the old manager')
-      expect(fs.readFileSync(result.valuesFile, 'utf8')).to.equal(first)
+      // Old local fingerprints do not prevent preparing an updated selection.
+      writeJson(path.join(root, '.scrollsdk/capacity-manager/plan.json'), {...savedPlan, fingerprint: 'legacy-fingerprint', valuesSha256: 'legacy-values-hash'})
+      prepareCapacityManager(root, () => contract)
+      expect((yaml.load(fs.readFileSync(result.valuesFile, 'utf8')) as any).manager.workerIdPrefix).equal('replacement')
+      expect(JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8'))).not.have.any.keys('fingerprint', 'valuesSha256')
 
       const sdk = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-handoff-sdk-'))
       try {
