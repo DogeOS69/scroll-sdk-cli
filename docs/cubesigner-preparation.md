@@ -160,6 +160,15 @@ metadata; otherwise it explicitly creates a session with exactly
 maximum lifetime. Session creation is a provider mutation. It does not change
 key policy, vote, upload the seed or restart pods.
 
+Runtime activation and session reuse accept both the `cs` CLI's `expiration`
+and the TypeScript SDK's `session_exp` fields (Unix seconds). Conflicting or
+nonnumeric values are rejected. Legacy SDK files without local expiration
+metadata require a live provider lookup confirming that the matching session
+exists and is unexpired. Refresh-token expiration, role, scope and Secret
+delivery checks still apply. Validation preserves the original session bytes;
+no field rename or session rotation is needed. Offline checkpoint export/import
+still requires local expiration metadata because it cannot check the provider.
+
 To defer only the signer credentials:
 
 ```bash

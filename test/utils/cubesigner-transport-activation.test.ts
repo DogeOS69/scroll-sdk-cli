@@ -45,6 +45,49 @@ describe('mode-aware CubeSigner installation check', () => {
   it('permits explicit regtest transport with fresh remote identity and delivered Secret checks', async () => {
     expect(await run()).include({activation: 'verified', installed: 'not-verified', mode: 'transport_only'})
   })
+  for (const format of ['cs', 'legacy']) it(`accepts ${format} session metadata without rewriting the delivered credentials`, async () => {
+    const session = JSON.parse(seed)
+    if (format === 'cs') session.expiration = session.session_exp
+    delete session.session_exp
+    seed = JSON.stringify(session)
+    delivered = seed
+    const file = path.join(root, 'secrets/cubesigner-signer-session.json')
+    fs.writeFileSync(file, seed)
+    expect((await run()).activation).equal('verified')
+    expect(fs.readFileSync(file, 'utf8')).equal(seed)
+    client.sessions = async () => []
+    let error: unknown
+    try {await run()} catch (error_) {error = error_}
+    expect(String(error)).include('Runtime session is revoked, absent or expired')
+  })
+  for (const failure of ['local-expired', 'refresh-expired', 'remote-expired', 'conflicting', 'invalid']) it(`rejects cs session with ${failure}`, async () => {
+    const session = JSON.parse(seed)
+    session.expiration = session.session_exp
+    delete session.session_exp
+    if (failure === 'local-expired') session.expiration = 1
+    if (failure === 'refresh-expired') session.session_info.refresh_token_exp = 1
+    if (failure === 'remote-expired') client.sessions = async () => [{exp: 1, session_id: session.session_info.session_id}]
+    if (failure === 'conflicting') session.session_exp = session.expiration + 1
+    if (failure === 'invalid') session.expiration = String(session.expiration)
+    seed = JSON.stringify(session)
+    delivered = seed
+    fs.writeFileSync(path.join(root, 'secrets/cubesigner-signer-session.json'), seed)
+    let error: unknown
+    try {await run()} catch (error_) {error = error_}
+    expect(error).instanceOf(Error)
+    expect(String(error)).not.include('NONFUNCTIONAL_TEST')
+  })
+  it('accepts delivered JSON formatting and key order while checking actual credentials', async () => {
+    delivered = JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(seed)).reverse()), null, 2) + '\n'
+    fs.writeFileSync(path.join(root, '.data/protocol_context.json'), '{}\n')
+    const context = {data: {'protocol_context.json': '{ }\n'}, kind: 'ConfigMap', metadata: {name: 'protocol-context-config'}}
+    expect((await run(`${yaml.dump(workload)}---\n${yaml.dump(context)}`)).activation).equal('verified')
+    delivered = JSON.stringify({...JSON.parse(delivered), token: 'DIFFERENT_NONFUNCTIONAL_TOKEN'})
+    let error: unknown
+    try {await run()} catch (error_) {error = error_}
+    expect(String(error)).include('Delivered runtime session differs')
+    expect(String(error)).not.include('DIFFERENT_NONFUNCTIONAL_TOKEN')
+  })
   it('accepts empty Helm documents without skipping rendered protocol context validation', async () => {
     const context = {data: {'protocol_context.json': '{}'}, kind: 'ConfigMap', metadata: {name: 'protocol-context-config'}}
     const manifest = () => `---\n# Source: optional disabled template\n---\n${yaml.dump(workload)}---\n${yaml.dump(context)}---\n`

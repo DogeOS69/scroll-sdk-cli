@@ -6,6 +6,7 @@ import type {CapacityManagerConfig} from '../types/capacity-manager.js'
 
 import {AwsCliRunner} from './aws-cli.js'
 import {validateDstackInternalTls, verifyDstackAcmCertificate} from './dstack-internal-tls.js'
+import {canonicalJson} from './json-content.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
 
 type Connection = NonNullable<CapacityManagerConfig['connection']>
@@ -69,7 +70,7 @@ export function prepareCapacityNetwork(root: string, connection: Connection, dep
   if (connection.mode !== 'internal-alb') return {applied: false, mode: connection.mode, serverUrl: connection.serverUrl}
   const input = connection.internalAlb!
   const template = capacityNetworkTemplate(input)
-  const fingerprint = digest(JSON.stringify({deployment, input, namespace, service, template}))
+  const fingerprint = digest(canonicalJson({deployment, input, namespace, service, template}))
   const templatePath = '.scrollsdk/capacity-manager/network-template.json'
   writeJson(localPath(root, templatePath), template)
   if (!apply) return {applied: false, fingerprint, mode: connection.mode, serverUrl: `https://${input.hostname}`, stackName: input.stackName, templatePath}
@@ -100,16 +101,17 @@ export function prepareCapacityNetwork(root: string, connection: Connection, dep
   }
 
   const stack = call(['cloudformation', 'describe-stacks', '--stack-name', existing.StackId]).Stacks?.[0]
-  if (!stack?.Tags?.some((t: any) => t.Key === 'ManagedBy' && t.Value === OWNER) || !stack.Tags.some((t: any) => t.Key === 'IntentSha256' && t.Value === fingerprint)) throw new Error('Existing stack ownership or intent differs; no resources were changed')
+  if (!stack?.Tags?.some((t: any) => t.Key === 'ManagedBy' && t.Value === OWNER)) throw new Error('Existing stack ownership or intent differs; no resources were changed')
   if (stack.StackStatus !== 'CREATE_COMPLETE') return {applied: false, next: 'Inspect CloudFormation events; rerun after completion. Do not install capacity-manager yet.', stackId: stack.StackId, status: stack.StackStatus}
-  // Detect external changes rather than trusting tags alone.
+  // The live template is authoritative. Legacy IntentSha256 tags depended on
+  // property order and must not reject an otherwise identical owned stack.
   const deployed = call(['cloudformation', 'get-template', '--stack-name', stack.StackId]).TemplateBody
   if (!isDeepStrictEqual(typeof deployed === 'string' ? JSON.parse(deployed) : deployed, template)) throw new Error('Deployed network template differs; inspect stack drift before continuing')
   const outputs = Object.fromEntries((stack.Outputs ?? []).map((o: any) => [o.OutputKey, o.OutputValue]))
   if (!outputs.TargetGroupArn || !outputs.SecurityGroupId || outputs.Url !== `https://${input.hostname}`) throw new Error('Network stack outputs are incomplete')
   const bindingFile = '.scrollsdk/capacity-manager/dstack-targetgroupbinding.json'
   writeJson(localPath(root, bindingFile), {apiVersion: 'elbv2.k8s.aws/v1beta1', kind: 'TargetGroupBinding', metadata: {name: 'capacity-manager-dstack', namespace}, spec: {networking: {ingress: [{from: [{securityGroup: {groupID: outputs.SecurityGroupId}}], ports: [{port: 3000, protocol: 'TCP'}]}]}, serviceRef: {name: service, port: 3000}, targetGroupARN: outputs.TargetGroupArn, targetType: 'ip'}})
-  writeJson(localPath(root, CAPACITY_NETWORK), {bindingFile, connectionSha256: digest(JSON.stringify(connection)), fingerprint, schema: OWNER, serverUrl: outputs.Url, stackId: stack.StackId, status: 'ready'})
+  writeJson(localPath(root, CAPACITY_NETWORK), {bindingFile, connection, fingerprint, schema: OWNER, serverUrl: outputs.Url, stackId: stack.StackId, status: 'ready'})
   return {applied: false, bindingFile, next: 'Review and apply TargetGroupBinding in the saved cluster, then run capacity-manager prepare and preflight', serverUrl: outputs.Url, status: 'ready'}
 }
 
@@ -120,6 +122,8 @@ export function capacityConnectionUrl(root: string, connection?: Connection): st
   const file = localPath(root, CAPACITY_NETWORK)
   let state: any
   try {state = JSON.parse(fs.readFileSync(file, 'utf8'))} catch {throw new Error('Run capacity-manager network --apply until ready before prepare')}
-  if (state.connectionSha256 !== digest(JSON.stringify(connection)) || state.status !== 'ready' || state.schema !== OWNER || state.serverUrl !== `https://${connection.internalAlb!.hostname}`) throw new Error('Internal HTTPS network is not ready for the selected endpoint')
+  if (state.status !== 'ready' || state.schema !== OWNER || state.serverUrl !== `https://${connection.internalAlb!.hostname}`) throw new Error('Internal HTTPS network is not ready for the selected endpoint')
+  if (!state.connection) throw new Error('Refresh legacy network state with capacity-manager network --apply; the existing stack is read back, not recreated')
+  if (!isDeepStrictEqual(state.connection, connection)) throw new Error('Internal HTTPS network is not ready for the selected endpoint')
   return state.serverUrl
 }

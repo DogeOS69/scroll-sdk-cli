@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {capacityConnectionUrl, capacityNetworkTemplate, prepareCapacityNetwork, validateCapacityConnection} from '../../src/utils/capacity-manager-network.js'
+import {digest} from '../../src/utils/preparation-io.js'
 
 const input = {certificateArn: 'arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000', hostname: 'controller.example.invalid', inboundCidrs: ['10.0.0.0/16'], region: 'us-east-1', stackName: 'example-cm-network', subnets: ['subnet-00000001', 'subnet-00000002'], vpcId: 'vpc-00000000'}
 const connection = () => ({internalAlb: structuredClone(input), mode: 'internal-alb' as const})
@@ -107,6 +108,32 @@ describe('capacity-manager private network', () => {
     expect(() => capacityConnectionUrl(root, {...connection(), internalAlb: {...input, subnets: ['subnet-00000003', 'subnet-00000004']}})).to.throw('not ready')
     mock.corruptTemplate()
     expect(run).to.throw('template differs')
+  })
+
+  it('ignores property order and refreshes legacy hash-only state by reading the live template', () => {
+    const mock = provider()
+    const original = connection()
+    // eslint-disable-next-line perfectionist/sort-objects -- Exercise YAML property reordering.
+    const reordered = {mode: original.mode, internalAlb: Object.fromEntries(Object.entries(input).reverse())} as typeof original
+    const preview = (selected: typeof original) => prepareCapacityNetwork(root, selected, 'test-deployment', 'chain', 'controller')
+    expect(preview(original).fingerprint).equal(preview(reordered).fingerprint)
+    const run = (selected = original) => prepareCapacityNetwork(root, selected, 'test-deployment', 'chain', 'controller', true, mock.aws)
+    run()
+    mock.stack.StackStatus = 'CREATE_COMPLETE'
+    run()
+    expect(capacityConnectionUrl(root, reordered)).equal(`https://${input.hostname}`)
+    const file = path.join(root, '.scrollsdk/capacity-manager/network.json')
+    const legacy = JSON.parse(fs.readFileSync(file, 'utf8'))
+    delete legacy.connection
+    legacy.connectionSha256 = digest(JSON.stringify(original))
+    fs.writeFileSync(file, JSON.stringify(legacy))
+    mock.stack.Tags.find((tag: any) => tag.Key === 'IntentSha256').Value = 'legacy-order-dependent-fingerprint'
+    expect(() => capacityConnectionUrl(root, reordered)).to.throw('Refresh legacy network state')
+    expect(run(reordered).status).equal('ready')
+    expect(capacityConnectionUrl(root, reordered)).equal(`https://${input.hostname}`)
+    expect(mock.calls.filter(c => c[1] === 'create-stack')).length(1)
+    expect(() => run({...original, internalAlb: {...input, subnets: [...input.subnets].reverse()}})).to.throw('template differs')
+    expect(mock.calls.some(c => ['delete-stack', 'update-stack'].includes(c[1]))).equal(false)
   })
 
   it('does not adopt stacks, shadow existing exact-host private zones or replay failed stacks', () => {

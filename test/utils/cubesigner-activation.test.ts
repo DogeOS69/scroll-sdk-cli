@@ -124,6 +124,20 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  for (const format of ['cs', 'legacy']) it(`verifies production activation and session reuse with ${format} expiration metadata`, async () => {
+    const file = path.join(root, 'secrets/cubesigner-signer-session.json')
+    const session = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (format === 'cs') session.expiration = session.session_exp
+    delete session.session_exp
+    write('secrets/cubesigner-signer-session.json', session)
+    const before = fs.readFileSync(file)
+    expect((await activate()).activation).equal('verified')
+    expect((await prepareRuntimeSession({client, async create() {throw new Error('Must reuse the existing session')}, directory: root})).status).equal('existing-session-reused')
+    expect(fs.readFileSync(file).equals(before)).equal(true)
+    client.sessions = async () => []
+    await rejects(() => activate(), 'Runtime session is absent, revoked or expired')
+  })
+
   it('prepares and recovers an organization alias while pinning its canonical identity', async () => {
     const configFile = path.join(root, '.data/doge-config.toml')
     const config: any = toml.parse(fs.readFileSync(configFile, 'utf8'))
@@ -332,6 +346,15 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
       expect(emitted.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_MODE).equal('production_verifier_key_policy')
       expect(fs.existsSync(path.join(root, 'prepared-policy/attachment.json'))).equal(false)
     } finally {process.chdir(previous)}
+  })
+  it('accepts equivalent delivered context and session JSON', async () => {
+    const result = await activate({
+      readConfigMap: () => ({data: {'protocol_context.json': JSON.stringify(JSON.parse(fs.readFileSync(path.join(root, '.data/protocol_context.json'), 'utf8'))) + '\n\n'}}),
+      readSecret: (name: string) => ({data: name === 'cubesigner-signer-env'
+        ? {DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID: Buffer.from(key.keyId).toString('base64')}
+        : {'session.json': Buffer.from(JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(fs.readFileSync(path.join(root, 'secrets/cubesigner-signer-session.json'), 'utf8'))).reverse())) + '\n').toString('base64')}}),
+    })
+    expect(result.activation).equal('verified')
   })
   it('blocks a different context delivered to the target cluster', async () => {
     await rejects(() => activate({readConfigMap: () => ({data: {'protocol_context.json': '{}'}})}), 'Delivered protocol context')

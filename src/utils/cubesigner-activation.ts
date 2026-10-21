@@ -13,6 +13,8 @@ import {validateLiveAcceptance} from './cubesigner-acceptance.js'
 import {GOVERNANCE_INPUT, requirePolicy, verifyGovernanceEvidence, verifyRoleAttestation} from './cubesigner-governance.js'
 import {matchesCubesignerOrganization} from './cubesigner-organization.js'
 import {cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
+import {cubesignerSessionExpiration} from './cubesigner-session-format.js'
+import {jsonContentEqual} from './json-content.js'
 import {localPath, writeJson} from './preparation-io.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 import {normalizeCompressedSecp256k1PublicKey} from './secp256k1-public-key.js'
@@ -24,7 +26,8 @@ export function validateRuntimeSession(root: string, client: ActivationClient, k
   const session = JSON.parse(fs.readFileSync(file, 'utf8'))
   requirePolicy(matchesCubesignerOrganization(session.org_id, client) && session.role_id === key.roleId
     && session.env?.['Dev-CubeSignerStack']?.SignerApiRoot === client.apiRoot, 'Runtime session environment/org/role mismatch')
-  requirePolicy(typeof session.token === 'string' && session.token.length > 0 && session.session_exp > now && session.session_info?.refresh_token_exp > now, 'Runtime session expired or incomplete; explicit rotation is required')
+  const expiration = cubesignerSessionExpiration(session)
+  requirePolicy(typeof session.token === 'string' && session.token.length > 0 && (expiration === undefined || expiration > now) && session.session_info?.refresh_token_exp > now, 'Runtime session expired or incomplete; explicit rotation is required')
   const remote = sessions.filter(entry => entry.session_id === session.session_info?.session_id)
   requirePolicy(remote.length === 1 && remote[0].exp > now, 'Runtime session is absent, revoked or expired')
   requirePolicy(isDeepStrictEqual(remote[0].scopes, [SESSION_SCOPE]), 'Runtime session must have only the Dogecoin PSBT signing scope')
@@ -150,12 +153,12 @@ export async function verifyCubesignerActivation(options: {
     const readSecret = options.readSecret ?? ((name: string) => JSON.parse(execFileSync('kubectl', [...(options.kubeContext ? ['--context', options.kubeContext] : []), '-n', options.namespace ?? 'default', 'get', 'secret', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
     const readConfigMap = options.readConfigMap ?? ((name: string) => JSON.parse(execFileSync('kubectl', [...(options.kubeContext ? ['--context', options.kubeContext] : []), '-n', options.namespace ?? 'default', 'get', 'configmap', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
     const contextBytes = fs.readFileSync(proofRegularFile(path.resolve(root, refs.protocolContext.path)), 'utf8')
-    requirePolicy(readConfigMap('protocol-context-config').data?.['protocol_context.json'] === contextBytes, 'Delivered protocol context differs from prepared genesis')
-    for (const document of documents.filter(doc => doc?.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(document.data?.['protocol_context.json'] === contextBytes, 'Helm would replace the verified protocol context')
+    requirePolicy(jsonContentEqual(readConfigMap('protocol-context-config').data?.['protocol_context.json'], contextBytes), 'Delivered protocol context differs from prepared genesis')
+    for (const document of documents.filter(doc => doc?.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(jsonContentEqual(document.data?.['protocol_context.json'], contextBytes), 'Helm would replace the verified protocol context')
     const sessionSecret = readSecret('cubesigner-signer-session')
     const keySecret = readSecret('cubesigner-signer-env')
     requirePolicy(Buffer.from(keySecret.data?.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID ?? '', 'base64').toString() === key.keyId, 'Installed Secret key differs; finish Secret delivery before installation')
-    requirePolicy(Buffer.from(sessionSecret.data?.['session.json'] ?? '', 'base64').equals(fs.readFileSync(proofRegularFile(path.join(root, 'secrets/cubesigner-signer-session.json')))), 'Installed Secret session differs; finish Secret delivery before installation')
+    requirePolicy(jsonContentEqual(Buffer.from(sessionSecret.data?.['session.json'] ?? '', 'base64'), fs.readFileSync(proofRegularFile(path.join(root, 'secrets/cubesigner-signer-session.json')))), 'Installed Secret session differs; finish Secret delivery before installation')
   }
 
   requirePolicy(proofFileHash(configFile) === configHash && proofFileHash(valuesFile) === valuesHash
@@ -251,17 +254,18 @@ async function verifyTransportActivation(options: {
   const seed = JSON.parse(seedBytes.toString())
   const now = Date.now() / 1000
   requirePolicy(matchesCubesignerOrganization(seed.org_id, client) && seed.role_id === key.roleId && seed.env?.['Dev-CubeSignerStack']?.SignerApiRoot === client.apiRoot, 'Runtime session environment/org/role mismatch')
-  requirePolicy(typeof seed.token === 'string' && seed.token && seed.session_exp > now && seed.session_info?.refresh_token_exp > now, 'Runtime session is expired or incomplete; rotate it explicitly')
+  const expiration = cubesignerSessionExpiration(seed)
+  requirePolicy(typeof seed.token === 'string' && seed.token && (expiration === undefined || expiration > now) && seed.session_info?.refresh_token_exp > now, 'Runtime session is expired or incomplete; rotate it explicitly')
   const sessions = (await client.sessions(key.roleId)).filter(entry => entry.session_id === seed.session_info?.session_id)
   requirePolicy(sessions.length === 1 && sessions[0].exp > now, 'Runtime session is revoked, absent or expired')
   requirePolicy(Array.isArray(sessions[0].scopes) && sessions[0].scopes.length > 0 && sessions[0].scopes.every((scope: string) => ['sign:*', 'sign:btc:psbt:doge'].includes(scope)), 'Runtime session has unsupported scopes')
   const readSecret = options.readSecret ?? (name => JSON.parse(execFileSync('kubectl', ['--context', options.kubeContext, '-n', options.namespace, 'get', 'secret', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
   const readConfigMap = options.readConfigMap ?? (name => JSON.parse(execFileSync('kubectl', ['--context', options.kubeContext, '-n', options.namespace, 'get', 'configmap', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
   const context = fs.readFileSync(proofRegularFile(path.join(root, '.data/protocol_context.json')), 'utf8')
-  requirePolicy(readConfigMap('protocol-context-config').data?.['protocol_context.json'] === context, 'Delivered protocol context differs from the prepared Bridge')
-  for (const document of documents.filter(doc => doc?.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(document.data?.['protocol_context.json'] === context, 'Helm would replace the verified protocol context')
+  requirePolicy(jsonContentEqual(readConfigMap('protocol-context-config').data?.['protocol_context.json'], context), 'Delivered protocol context differs from the prepared Bridge')
+  for (const document of documents.filter(doc => doc?.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(jsonContentEqual(document.data?.['protocol_context.json'], context), 'Helm would replace the verified protocol context')
   requirePolicy(Buffer.from(readSecret('cubesigner-signer-env').data?.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID ?? '', 'base64').toString() === key.keyId, 'Delivered key Secret differs from the selected key')
-  requirePolicy(Buffer.from(readSecret('cubesigner-signer-session').data?.['session.json'] ?? '', 'base64').equals(seedBytes), 'Delivered runtime session differs from the prepared seed')
+  requirePolicy(jsonContentEqual(Buffer.from(readSecret('cubesigner-signer-session').data?.['session.json'] ?? '', 'base64'), seedBytes), 'Delivered runtime session differs from the prepared seed')
   requirePolicy(proofFileHash(configFile) === configHash && proofFileHash(valuesFile) === valuesHash && fs.readFileSync(seedFile).equals(seedBytes), 'Activation inputs changed during verification')
   return {activation: 'verified', checkedAt: new Date().toISOString(), installed: 'not-verified', mode: resolved.mode, proofAcceptance: 'not-checked', runtimeCache: 'not-inspected'}
 }

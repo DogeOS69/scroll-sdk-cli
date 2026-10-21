@@ -25,6 +25,29 @@ describe('private CubeSigner deployment checkpoint', () => {
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  it('preserves cs CLI expiration metadata across checkpoint export and import', () => {
+    const session = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
+    session.expiration = session.session_exp
+    delete session.session_exp
+    const bytes = JSON.stringify(session)
+    fs.writeFileSync(sessionFile(), bytes)
+    exportCubesignerCheckpoint(options())
+    fs.unlinkSync(sessionFile())
+    importCubesignerCheckpoint(options())
+    expect(fs.readFileSync(sessionFile(), 'utf8')).equal(bytes)
+  })
+
+  it('rejects conflicting local expiration fields and missing offline expiration evidence', () => {
+    const session = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'))
+    session.expiration = session.session_exp + 1
+    fs.writeFileSync(sessionFile(), JSON.stringify(session))
+    expect(() => exportCubesignerCheckpoint(options())).to.throw('Conflicting CubeSigner session expiration metadata')
+    delete session.expiration
+    delete session.session_exp
+    fs.writeFileSync(sessionFile(), JSON.stringify(session))
+    expect(() => exportCubesignerCheckpoint(options())).to.throw('expired')
+  })
+
   it('restores the identity and session while preserving unrelated configuration and private modes', () => {
     const receipt = exportCubesignerCheckpoint(options())
     const session = fs.readFileSync(sessionFile(), 'utf8')

@@ -1,8 +1,10 @@
 import {isIPv4} from 'node:net'
+import {isDeepStrictEqual} from 'node:util'
 
 import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
 import {AwsCliRunner} from './aws-cli.js'
+import {jsonContentEqual} from './json-content.js'
 
 type Input = NonNullable<DstackControllerConfig['internalTls']>
 const ALB = 'alb.ingress.kubernetes.io/'
@@ -56,7 +58,8 @@ export function verifyDstackAcmCertificate(config?: DstackControllerConfig, aws?
 export function assertDstackInternalIngress(values: {ingress?: DstackControllerConfig['ingress']}, input: Input): void {
   const expected = dstackInternalIngress(input)
   const {ingress} = values
-  if (!ingress?.enabled || ingress.className !== 'alb' || JSON.stringify(ingress.hosts) !== JSON.stringify(expected.hosts)
-    || Object.entries(expected.annotations!).some(([key, value]) => ingress.annotations?.[key] !== value)
+  if (!ingress?.enabled || ingress.className !== 'alb' || !isDeepStrictEqual(ingress.hosts, expected.hosts)
+    || Object.entries(expected.annotations!).some(([key, value]) => key === `${ALB}listen-ports`
+      ? !jsonContentEqual(ingress.annotations?.[key], value) : ingress.annotations?.[key] !== value)
     || ingress.annotations?.[`${ALB}group.name`] || ingress.annotations?.[`${ALB}security-groups`]) throw new Error('Dstack ingress differs from internalTls; regenerate its values before preparing capacity-manager')
 }
