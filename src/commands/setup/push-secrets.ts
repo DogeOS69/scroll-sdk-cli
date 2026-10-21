@@ -9,6 +9,8 @@ import * as path from 'node:path'
 import { promisify } from 'node:util'
 
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
+import {AwsCliRunner} from '../../utils/aws-cli.js'
+import {assertAwsAccessUpload, bindPreparedAwsAccess, preparedAwsReader} from '../../utils/aws-service-access.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {publishDstackSecrets} from '../../utils/dstack-secret-publisher.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
@@ -125,6 +127,13 @@ class AWSSecretService implements SecretService {
     private nonInteractive: boolean = false,
     private log: (message: string) => void = console.log,
   ) {
+    const expectedAccount = assertAwsAccessUpload(process.cwd(), prefixName, region)
+    if (expectedAccount) {
+      let account: string
+      try {account = new AwsCliRunner().json(['sts', 'get-caller-identity'], {region}).Account} catch {throw new Error('Cannot verify the AWS upload account (provider details omitted)')}
+      if (account !== expectedAccount) throw new Error('AWS upload credentials target a different account from setup aws')
+    }
+
     // In non-interactive mode, always override all by default
     if (nonInteractive) {
       this.overrideAll = true
@@ -239,7 +248,6 @@ class AWSSecretService implements SecretService {
   private async createOrUpdateSecret(content: Record<string, string>, secretName: string): Promise<boolean> {
     const fullSecretName = `${this.prefixName}/${secretName}`
     const jsonContent = JSON.stringify(content)
-    const escapedJsonContent = jsonContent.replaceAll("'", "'\\''")
     if (Object.keys(content).length === 0) {
       this.log(chalk.red(`Skipping secret: ${secretName} because it is empty`))
       return false
@@ -269,53 +277,31 @@ class AWSSecretService implements SecretService {
         }
       }
 
-      const command = `aws secretsmanager put-secret-value --secret-id "${fullSecretName}" --secret-string '${escapedJsonContent}' --region ${this.region}`
-      if (this.debug) {
-        this.log(chalk.yellow('--- Debug Output ---'))
-        this.log(chalk.cyan(`Command: ${command}`))
-        this.log(chalk.yellow('-------------------'))
-      }
-
       try {
-        await execAsync(command)
+        new AwsCliRunner().json(['secretsmanager', 'put-secret-value', '--secret-id', fullSecretName, '--secret-string', jsonContent], {region: this.region})
         this.log(chalk.green(`Successfully updated secret: ${fullSecretName}`))
         return true
-      } catch (error) {
-        console.error(chalk.red(`Failed to update secret: ${fullSecretName}`))
-        console.error(chalk.red(`Error details: ${error}`))
-        throw error
-      }
+      } catch {throw new Error('Failed to update AWS Secret; check the selected credentials and destination (contents omitted)')}
     } else {
-      const command = `aws secretsmanager create-secret --name "${fullSecretName}" --secret-string '${escapedJsonContent}' --region ${this.region}`
-      if (this.debug) {
-        this.log(chalk.yellow('--- Debug Output ---'))
-        this.log(chalk.cyan(`Command: ${command}`))
-        this.log(chalk.yellow('-------------------'))
-      }
-
       try {
-        await execAsync(command)
+        new AwsCliRunner().json(['secretsmanager', 'create-secret', '--name', fullSecretName, '--secret-string', jsonContent], {region: this.region})
         this.log(chalk.green(`Successfully created secret: ${fullSecretName}`))
         return true
-      } catch (error) {
-        console.error(chalk.red(`Failed to create secret: ${fullSecretName}`))
-        console.error(chalk.red(`Error details: ${error}`))
-        throw error
-      }
+      } catch {throw new Error('Failed to create AWS Secret; check the selected credentials and destination (contents omitted)')}
     }
   }
 
   private async secretExists(secretName: string): Promise<boolean> {
     const fullSecretName = `${this.prefixName}/${secretName}`
     try {
-      await execAsync(`aws secretsmanager describe-secret --secret-id "${fullSecretName}" --region ${this.region}`)
+      new AwsCliRunner().json(['secretsmanager', 'describe-secret', '--secret-id', fullSecretName], {region: this.region})
       return true
     } catch (error: any) {
       if (error.message.includes('ResourceNotFoundException')) {
         return false
       }
 
-      throw error
+      throw new Error('Cannot inspect AWS Secret destination (provider details omitted)')
     }
   }
 
@@ -1092,7 +1078,7 @@ export default class SetupPushSecrets extends Command {
       updated = this.deleteYamlValue(secret, 'serviceAccount') || updated
       updated = this.deleteYamlValue(secret, 'secretRegion') || updated
     } else {
-      updated = this.setYamlValue(secret, 'serviceAccount', credentials.serviceAccount) || updated
+      updated = this.setYamlValue(secret, 'serviceAccount', preparedAwsReader(process.cwd(), secret.serviceAccount) ?? credentials.serviceAccount) || updated
       updated = this.setYamlValue(secret, 'secretRegion', credentials.secretRegion) || updated
       updated = this.deleteYamlValue(secret, 'server') || updated
       updated = this.deleteYamlValue(secret, 'path') || updated
@@ -1156,6 +1142,7 @@ export default class SetupPushSecrets extends Command {
       }
     }
 
+    bindPreparedAwsAccess(process.cwd(), this.flags['values-dir'])
     if (matchedSecrets === 0) {
       const pushedNames = pushedSecrets.map(secret => secret.name).join(', ')
       const target = this.flags['values-file'] ? ` in ${this.flags['values-file']}` : ''

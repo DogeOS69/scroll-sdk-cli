@@ -204,3 +204,20 @@ the controller first. Inspect the saved role and ownership tags, remove only the
 checking for other attachments/users. Reused roles, optional worker profiles,
 network resources and load balancers remain operator-owned; CLI preparation does
 not delete any of them.
+
+## Policy scope
+
+The generated policy separates metadata reads from mutations. RunInstances grants
+require the dstack owner/project tags on the new instance and allow only the
+inspected subnet IDs. Termination, security-group mutation and volume lifecycle
+operations require the matching owner/project resource tags. CreateTags is
+permitted only as part of named create operations, preventing retagging an
+unrelated instance to gain termination access. PassRole is limited to roles in
+the explicitly selected worker instance profile and to EC2.
+
+Some required resources cannot use those project conditions: dstack 0.21.5 does
+not tag placement groups, root volumes or launch network interfaces. Their grants
+are constrained by account/region and API action; optional public-IP association
+also needs network-interface access. Metadata Describe APIs require Resource `*`.
+These are documented residual scopes, not a claim of perfect resource isolation.
+Changing eligible subnets or the dstack project requires rerunning preparation.

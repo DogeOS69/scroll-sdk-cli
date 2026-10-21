@@ -1,6 +1,15 @@
 /** Inputs to the resumable preparation workflow; credentials are file/env references. */
 export interface PreparationConfig {
   archive?: {action: 'configure' | 'create'; awsProfile?: string; publicRead?: boolean; writerRoleArn?: string}
+  /** Ownership of service permissions; new AWS plans default to managed. */
+  awsAccess?: {
+    awsProfile?: string
+    mode: 'external' | 'managed'
+    /** Optional exact customer-managed key ARN for runtime Secrets. */
+    secretsKmsKeyArn?: string
+    /** Snapshot writer is a separate Kubernetes identity; uploads remain operator initiated. */
+    snapshot?: {action: 'configure' | 'create'; publicRead: boolean; serviceAccount?: string}
+  }
   bridge: {
     /** Mutable, operator-supplied outpoints; relative to the deployment directory. */
     fundingFile?: string

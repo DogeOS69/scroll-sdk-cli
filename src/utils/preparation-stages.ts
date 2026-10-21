@@ -6,7 +6,7 @@ export type PreparationStage = typeof PREPARATION_STAGES[number]
 /** Stage boundaries are explicit; prerequisites are checked, never executed implicitly. */
 export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationStep[] {
   const order: Record<PreparationStage, string[]> = {
-    aws: ['identities', 'proof-aws', 'archive', 'archive-access', 'bridge-sequencer-kms', 'dstack-aws', 'dstack', 'dstack-db', 'blockscout-db'],
+    aws: ['identities', 'proof-aws', 'archive', 'archive-access', 'bridge-sequencer-kms', 'dstack-aws', 'dstack', 'aws-access', 'dstack-db', 'blockscout-db'],
     'bridge-funding': ['bridge-fee-wallet', 'bridge-prepare', 'ethereum-anchor', 'managed-helper-prepare', 'managed-helper-funding', 'managed-helper-setup', 'production-wallets', 'helper-funding', 'helper-setup', 'bridge-info', 'production-funding', 'helper-fund', 'managed-helper-fund', 'managed-helper-verify'],
     genesis: ['bootstrap', 'genesis-local'],
     'policy-prepare': ['cubesigner-policy-build'],

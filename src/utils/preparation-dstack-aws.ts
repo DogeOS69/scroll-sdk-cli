@@ -41,20 +41,37 @@ export function dstackAwsIntent(spec: DeploymentSpec): {namespace: string; roleN
 }
 
 /** Named operations used by dstack 0.21.5 EC2 fleets, not its optional gateways/LBs. */
-export function dstackWorkerPolicy(regions: string[], instanceProfile?: {arn: string; roles: string[]}): any {
-  const statements: any[] = [{
-    Action: [
+export function dstackWorkerPolicy(regions: string[], instanceProfile?: {arn: string; roles: string[]}, scope?: {account: string; network: Array<{eligibleSubnets: string[]; region: string; vpcId: string}>; project: string; publicIps: boolean}): any {
+  const regionCondition = {'aws:RequestedRegion': [...regions].sort()}
+  const resources = (kind: string) => regions.map(region => `arn:aws:ec2:${region}:${scope?.account ?? '*'}:${kind}/*`)
+  const owned = {StringEquals: {...regionCondition, 'ec2:ResourceTag/owner': 'dstack', ...(scope ? {'ec2:ResourceTag/dstack_project': scope.project} : {})}}
+  const requested = {StringEquals: {...regionCondition, 'aws:RequestTag/owner': 'dstack', ...(scope ? {'aws:RequestTag/dstack_project': scope.project} : {})}}
+  const statements: any[] = [
+    {Action: [
       'ec2:DescribeAvailabilityZones', 'ec2:DescribeImages', 'ec2:DescribeInstances', 'ec2:DescribeInstanceAttribute',
       'ec2:DescribeInstanceTypes', 'ec2:DescribeInstanceTypeOfferings', 'ec2:DescribeSecurityGroups', 'ec2:DescribeSubnets', 'ec2:DescribeVpcs',
       'ec2:DescribeRouteTables', 'ec2:DescribeVolumes', 'ec2:DescribeSpotInstanceRequests', 'ec2:DescribeCapacityReservations',
-      'ec2:DescribeAddresses', 'ec2:RunInstances', 'ec2:TerminateInstances', 'ec2:CancelSpotInstanceRequests',
-      'ec2:CreateTags', 'ec2:CreateSecurityGroup', 'ec2:DeleteSecurityGroup', 'ec2:AuthorizeSecurityGroupIngress', 'ec2:AuthorizeSecurityGroupEgress',
-      'ec2:CreatePlacementGroup', 'ec2:DeletePlacementGroup', 'ec2:CreateVolume', 'ec2:DeleteVolume',
-      'ec2:AttachVolume', 'ec2:DetachVolume', 'ec2:AllocateAddress', 'ec2:AssociateAddress', 'ec2:DisassociateAddress', 'ec2:ReleaseAddress',
-      'servicequotas:GetServiceQuota',
-    ],
-    Condition: {StringEquals: {'aws:RequestedRegion': [...regions].sort()}}, Effect: 'Allow', Resource: '*', Sid: 'WorkerCompute',
-  }]
+      'ec2:DescribeAddresses', 'ec2:DescribePlacementGroups', 'servicequotas:GetServiceQuota',
+    ], Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: '*', Sid: 'ReadWorkerCompute'},
+    {Action: 'ec2:RunInstances', Condition: requested, Effect: 'Allow', Resource: resources('instance'), Sid: 'LaunchTaggedWorkers'},
+    // dstack tags instances, not the root volume or network interface created by RunInstances.
+    {Action: 'ec2:RunInstances', Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: [
+      ...regions.map(region => `arn:aws:ec2:${region}::image/*`),
+      ...['network-interface', 'volume', 'security-group', 'key-pair', 'placement-group', 'capacity-reservation'].flatMap(kind => resources(kind)),
+      ...(scope ? scope.network.flatMap(item => item.eligibleSubnets.map(id => `arn:aws:ec2:${item.region}:${scope.account}:subnet/${id}`)) : resources('subnet')),
+    ], Sid: 'LaunchDependencies'},
+    {Action: 'ec2:CreateTags', Condition: {StringEquals: {...regionCondition, 'ec2:CreateAction': ['RunInstances', 'CreateSecurityGroup', 'CreateVolume', 'AllocateAddress']}}, Effect: 'Allow', Resource: ['instance', 'security-group', 'volume', 'elastic-ip'].flatMap(kind => resources(kind)), Sid: 'TagOnCreation'},
+    {Action: ['ec2:TerminateInstances', 'ec2:DeleteSecurityGroup', 'ec2:AuthorizeSecurityGroupIngress', 'ec2:AuthorizeSecurityGroupEgress', 'ec2:DeleteVolume', 'ec2:AttachVolume', 'ec2:DetachVolume'], Condition: owned, Effect: 'Allow', Resource: ['instance', 'security-group', 'volume'].flatMap(kind => resources(kind)), Sid: 'ManageOwnedWorkers'},
+    {Action: ['ec2:CreateSecurityGroup', 'ec2:CreateVolume'], Condition: requested, Effect: 'Allow', Resource: ['security-group', 'volume'].flatMap(kind => resources(kind)), Sid: 'CreateTaggedResources'},
+    {Action: 'ec2:CreateSecurityGroup', Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: scope ? scope.network.map(item => `arn:aws:ec2:${item.region}:${scope.account}:vpc/${item.vpcId}`) : resources('vpc'), Sid: 'WorkerVpcs'},
+    // dstack 0.21.5 does not tag placement groups. Restrict their account and region.
+    {Action: ['ec2:CreatePlacementGroup', 'ec2:DeletePlacementGroup'], Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: resources('placement-group'), Sid: 'PlacementGroups'},
+  ]
+  if (scope?.publicIps) statements.push(
+    {Action: 'ec2:AllocateAddress', Condition: requested, Effect: 'Allow', Resource: resources('elastic-ip'), Sid: 'AllocateWorkerAddress'},
+    {Action: ['ec2:AssociateAddress', 'ec2:DisassociateAddress', 'ec2:ReleaseAddress'], Condition: owned, Effect: 'Allow', Resource: resources('elastic-ip'), Sid: 'ManageWorkerAddress'},
+    {Action: ['ec2:AssociateAddress', 'ec2:DisassociateAddress'], Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: resources('network-interface'), Sid: 'WorkerAddressInterface'},
+  )
   if (instanceProfile) statements.push(
     {Action: 'iam:GetInstanceProfile', Effect: 'Allow', Resource: instanceProfile.arn, Sid: 'ReadWorkerProfile'},
     {Action: 'iam:PassRole', Condition: {StringEquals: {'iam:PassedToService': 'ec2.amazonaws.com'}}, Effect: 'Allow', Resource: instanceProfile.roles, Sid: 'PassWorkerRole'},
@@ -120,7 +137,7 @@ export function prepareDstackAws(root: string, spec: DeploymentSpec, aws: Pick<A
   const trust = {Statement: [{Action: 'sts:AssumeRoleWithWebIdentity', Condition: {StringEquals: {
     [`${issuerPath}:aud`]: 'sts.amazonaws.com', [`${issuerPath}:sub`]: `system:serviceaccount:${intent.namespace}:${intent.serviceAccount}`,
   }}, Effect: 'Allow', Principal: {Federated: provider}}], Version: '2012-10-17'}
-  const policy = dstackWorkerPolicy(Object.keys(input.vpcIds), profile)
+  const policy = dstackWorkerPolicy(Object.keys(input.vpcIds), profile, {account, network, project: spec.preparation!.dstack!.project ?? 'main', publicIps: input.publicIps ?? false})
   const tags = {Cluster: infrastructure.eksClusterName!, Deployment: spec.metadata.name, ManagedBy: 'scrollsdk-dstack-aws', Namespace: intent.namespace, ServiceAccount: intent.serviceAccount}
   let role = query(['iam', 'get-role', '--role-name', intent.roleName], infrastructure.region, input.action === 'create')?.Role
   const annotation = spec.dstackController!.serviceAccount?.annotations?.[ROLE_ANNOTATION]

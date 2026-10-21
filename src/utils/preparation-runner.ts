@@ -10,6 +10,7 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {PreparationPlan, PreparationRunner, PreparationStep} from './preparation-plan.js'
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
+import {bindPreparedAwsAccess, prepareAwsAccess} from './aws-service-access.js'
 import {prepareCapacityManager} from './capacity-manager.js'
 import {writeContractsHelmValues} from './contracts-helm-values.js'
 import {parseDatabaseUrl} from './dstack-database.js'
@@ -103,8 +104,10 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'proof-aws': {
         if (p.proofAws!.action === 'reuse') {reuseProofAws(root, spec); break}
-        await command(['proof-aws-init', '-N', '--yes', '--aws-region', spec.infrastructure.aws!.region, '--eks-cluster', spec.infrastructure.aws!.eksClusterName!, '--namespace', spec.infrastructure.namespace ?? 'default', '--deployment-alias', spec.metadata.name, '--artifact-public-read-mode', p.proofAws!.publicReadMode, ...optional('artifact-public-endpoint-url', p.proofAws!.publicEndpointUrl), ...optional('aws-profile', p.proofAws!.awsProfile), ...optional('secret-name', p.proofAws!.secretName), ...optional('coordinator-service-account', spec.proofCoordinator?.serviceAccount?.name), ...optional('withdrawal-service-account', spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name)]); break
+        await command(['proof-aws-init', '-N', '--yes', '--aws-region', spec.infrastructure.aws!.region, '--eks-cluster', spec.infrastructure.aws!.eksClusterName!, '--namespace', spec.infrastructure.namespace ?? 'default', '--deployment-alias', spec.metadata.name, '--artifact-public-read-mode', p.proofAws!.publicReadMode, ...optional('artifact-public-endpoint-url', p.proofAws!.publicEndpointUrl), ...optional('aws-profile', p.proofAws!.awsProfile), ...optional('coordinator-role-name', p.proofAws!.coordinatorRoleName), ...optional('withdrawal-role-name', p.proofAws!.withdrawalRoleName), ...optional('secret-name', p.proofAws!.secretName), ...optional('coordinator-service-account', spec.proofCoordinator?.serviceAccount?.name), ...optional('withdrawal-service-account', spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name)]); break
       }
+
+      case 'aws-access': {prepareAwsAccess(root, spec); break}
 
       case 'dstack-aws': {prepareDstackAws(root, spec); break}
 
@@ -286,6 +289,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(args)
         if (step.id === 'render-final') writeContractsHelmValues(root)
         writeHelmValues(root, spec)
+        bindPreparedAwsAccess(root)
         break
       }
 
@@ -302,7 +306,7 @@ export class CommandPreparationRunner implements PreparationRunner {
           productionFeeWallet(root, spec)
         }
 
-        await command(['gen-secrets', '-N']); break
+        await command(['gen-secrets', '-N']); bindPreparedAwsAccess(root); break
       }
 
       case 'cubesigner-session': {

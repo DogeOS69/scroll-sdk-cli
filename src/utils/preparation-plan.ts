@@ -6,6 +6,7 @@ import path from 'node:path'
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {resolveBridgeGenesisImage} from '../commands/setup/bridge-init.js'
+import {AWS_ACCESS_PLAN, managesAwsAccess, planAwsAccess, validateAwsAccess} from './aws-service-access.js'
 import {resolveCapacityManager} from './capacity-manager.js'
 import {DeploymentSpecFieldError} from './deployment-spec-fields.js'
 import {loadDeploymentSpec, resolveDeploymentSpecEnvRefs, validateDeploymentSpec} from './deployment-spec-generator.js'
@@ -23,11 +24,12 @@ import {refreshPreparationRuntime} from './preparation-runtime-refresh.js'
 import {PREPARATION_STAGES, type PreparationStage, prerequisiteStages, stageCommand, stagedPreparationSteps} from './preparation-stages.js'
 import {rentalEnvelope, resolveProofWorkers} from './proof-workers-config.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
-import {planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
+import {mergeBootstrapValues, planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
 import {specDstackController, specKubernetesTarget} from './spec-kubernetes-target.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
+import {generateValuesFiles} from './values-generator.js'
 
 export interface PreparationStep {effect: 'chain' | 'cloud' | 'local' | 'read'; id: string; retry: 'reconcile' | 'safe'; stage?: PreparationStage; title: string}
 export interface PreparationPlan {deploymentName: string; envFile?: string; id: string; schema: 'scrollsdk/preparation/v1' | 'scrollsdk/preparation/v2'; sdkDirectory: string; specHash: string; steps: PreparationStep[]}
@@ -62,6 +64,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
     if (p.dstack?.initializeDatabase) add('dstack-db', 'Initialize dstack in the existing PostgreSQL server', 'cloud')
   }
 
+  if (managesAwsAccess(spec)) add('aws-access', 'Prepare per-service runtime and Secret reader permissions', 'cloud')
   if (p.databases?.includes('blockscout')) add('blockscout-db', 'Initialize Blockscout in the existing PostgreSQL server', 'cloud')
   add('genesis', 'Generate native L2 genesis and contract artifacts')
   add('bridge-prepare', 'Compute protocol seed from genesis')
@@ -124,6 +127,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
 }
 
 export function validatePreparation(spec: DeploymentSpec): void {
+  validateAwsAccess(spec)
   if (spec.capacityManager) resolveCapacityManager(spec)
   specKubernetesTarget(spec)
   specDstackController(spec)
@@ -221,6 +225,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   }
 
   for (const item of p.inputs ?? []) {
+    if (managesAwsAccess(spec) && ['.data/aws-service-access.json', AWS_ACCESS_PLAN].includes(item.destination)) throw new Error('AWS access preparation generates its own records; remove them from external inputs')
     if (p.dstack?.aws?.action && item.destination === '.data/dstack-aws.json') throw new Error('Dstack AWS preparation generates its own resource record; remove dstack-aws.json from external inputs')
     if (p.proofAws && item.destination === '.data/proof-aws.json') throw new Error('proofAws generates its own receipt; remove proof-aws.json from external inputs')
     if (!item.source || !/^(\.data|secrets)\//.test(item.destination) || /(?:^|\/)(?:doge-config\.toml|setup_defaults\.toml|protocol_seed\.toml|protocol_context\.json|GenerateBridgeInfo\.toml|bridge\.json|bridge-sequencer-kms\.json|bridge-fee-wallet\.json|production-.*\.json|output-.*|genesis\.json)$/.test(item.destination)) throw new Error('External inputs may not overwrite managed Bridge or deployment state')
@@ -265,6 +270,8 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   feeVaultRecipientHash(spec.contracts?.feeVaultDogeRecipientAddress ?? '', spec.dogecoin.network)
   // Persist the choice in new plans. Previously saved plans keep their original funding path.
   if (spec.preparation?.bridge.mode === 'production' && spec.preparation.bridge.production) spec.preparation.bridge.production.funding ??= 'helper'
+  if (spec.infrastructure.provider === 'aws' && spec.preparation) spec.preparation.awsAccess ??= {mode: 'managed'}
+  if (managesAwsAccess(spec) && spec.preparation?.dstack?.providers?.includes('aws') && spec.preparation.dstack.aws) spec.preparation.dstack.aws.action ??= 'create'
   spec.templates = {sdkRevision: resolveSdkRevision(options.sdkDirectory, spec.templates?.sdkRevision)}
   // Selected external bindings must be usable by the frozen SDK before any
   // provider identity queries or release downloads, not only at bootstrap.
@@ -276,7 +283,15 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   const validation = validateDeploymentSpec(spec)
   if (!validation.valid) throw new Error(`Invalid spec fields: ${validation.errors.map(e => `${e.path} (${e.code})`).join(', ')}`)
   validatePreparation(spec)
-  planSpecBootstrap(spec, options.sdkDirectory)
+  const templates = planSpecBootstrap(spec, options.sdkDirectory)
+  // Inventory the same spec projections used by bootstrap, including aliases
+  // whose generated remote names differ from the SDK's example names.
+  if (managesAwsAccess(spec)) {
+    const generated = generateValuesFiles(spec, templates['values/scroll-monitor-production.yaml'], {bootstrap: true})
+    for (const [file, contents] of Object.entries(generated)) templates[`values/${file}`] = mergeBootstrapValues(templates[`values/${file}`], contents)
+  }
+
+  const awsAccess = planAwsAccess(spec, templates)
   const root = path.resolve(options.output)
   if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) throw new Error('Deployment root cannot be a symlink')
   const specText = JSON.stringify(spec, null, 2) + '\n'
@@ -295,6 +310,7 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   fs.mkdirSync(path.dirname(root), {mode: 0o700, recursive: true})
   const staging = fs.mkdtempSync(path.join(path.dirname(root), `.${path.basename(root)}.plan-`))
   try {
+    if (awsAccess) writeJson(path.join(staging, AWS_ACCESS_PLAN), awsAccess)
     privateWrite(path.join(staging, '.scrollsdkignore'), '.scrollsdk/\n.data/contracts-build/\n')
     privateWrite(path.join(staging, WORKFLOW_DIR, 'intent.json'), specText)
     writeJson(path.join(staging, WORKFLOW_DIR, 'plan.json'), plan)

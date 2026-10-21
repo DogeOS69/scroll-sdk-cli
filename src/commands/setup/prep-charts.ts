@@ -21,6 +21,7 @@ import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {bindPreparedAwsAccess} from '../../utils/aws-service-access.js'
 import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
 import {HISTORY_SERVICE, frontendHistoryEnv, historyConfig} from '../../utils/bridge-history.js'
@@ -1433,6 +1434,7 @@ export default class SetupPrepCharts extends Command {
       process.chdir(transaction.stagingRoot)
       if (!this.flags['proof-preparation']) reconcileTsoAlbEdge(transaction.stagingRoot, undefined, path.relative(transaction.stagingRoot, stagedValuesDir))
       generation = await this.generateCharts(stagedValuesDir)
+      bindPreparedAwsAccess(transaction.stagingRoot, path.relative(transaction.stagingRoot, stagedValuesDir))
       if (this.albSpec) projectExistingAlbDirectory(stagedValuesDir, this.albSpec, !this.flags['proof-preparation'])
       if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
       process.chdir(deploymentRoot)

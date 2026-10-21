@@ -49,6 +49,7 @@ export default class ProofAwsInit extends Command {
     'aws-region': Flags.string({description: 'AWS region containing EKS and the proof token secret (auto-detected when omitted)'}),
     bucket: Flags.string({ description: 'Advanced consistency assertion for the proof artifact bucket; the value is read from doge-config proofArtifacts.s3' }),
     config: Flags.string({ default: DEFAULT_PROOF_AWS_CONFIG, description: 'Output config file consumed by setup prep-charts' }),
+    'coordinator-role-name': Flags.string({description: 'IAM role name for the coordinator; defaults to the deployment and cluster name'}),
     'coordinator-service-account': Flags.string({description: 'Kubernetes service account used by proof-coordinator (default: proof-coordinator)'}),
     'deployment-alias': Flags.string({description: 'Unique deployment instance alias used to derive deterministic bucket and IAM role names'}),
     'doge-config': Flags.string({default: '.data/doge-config.toml', description: 'DogeOS config containing the canonical proofArtifacts.s3 store'}),
@@ -60,6 +61,7 @@ export default class ProofAwsInit extends Command {
     'rotate-tokens': Flags.boolean({ default: false, description: 'Replace the proof-work token and the prover-worker master in an existing secret (drain Workers first; restart the coordinator, WP and capacity manager, then re-mint every Worker credential)' }),
     'secret-name': Flags.string({description: 'Secrets Manager secret holding proof-work-token and the coordinator-only prover-worker-master (default: scroll/<deployment-alias>/proof-coordinator-secrets)'}),
     'skip-vpc-endpoint': Flags.boolean({default: false, description: 'Do not auto-discover or create an S3 Gateway VPC endpoint for EKS-internal S3 traffic'}),
+    'withdrawal-role-name': Flags.string({description: 'IAM role name for withdrawal proof transport; defaults to the deployment and cluster name'}),
     'withdrawal-service-account': Flags.string({description: 'Kubernetes service account used by withdrawal-processor (default: withdrawal-processor)'}),
     yes: Flags.boolean({char: 'y', default: false, description: 'Apply the displayed AWS resource plan without confirmation'}),
   }
@@ -257,7 +259,7 @@ export default class ProofAwsInit extends Command {
           bucket,
           coordinatorRole: {
             description: 'DogeOS proof-coordinator artifact store role',
-            roleName: truncateIamRoleName(`dogeos-${alias}-${cluster}-proof-coordinator`),
+            roleName: flags['coordinator-role-name'] ?? truncateIamRoleName(`dogeos-${alias}-${cluster}-proof-coordinator`),
             serviceAccount: coordinatorServiceAccount,
           },
           keyPrefix,
@@ -265,7 +267,7 @@ export default class ProofAwsInit extends Command {
           secretName,
           withdrawalRole: {
             description: 'DogeOS withdrawal-processor proof transport role',
-            roleName: truncateIamRoleName(`dogeos-${alias}-${cluster}-wp-proof`),
+            roleName: flags['withdrawal-role-name'] ?? truncateIamRoleName(`dogeos-${alias}-${cluster}-wp-proof`),
             serviceAccount: withdrawalServiceAccount,
           },
         }
