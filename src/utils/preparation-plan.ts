@@ -64,7 +64,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
     if (p.dstack?.initializeDatabase) add('dstack-db', 'Initialize dstack in the existing PostgreSQL server', 'cloud')
   }
 
-  if (managesAwsAccess(spec)) add('aws-access', 'Prepare per-service runtime and Secret reader permissions', 'cloud')
+  if (managesAwsAccess(spec)) add('aws-access', 'Prepare service runtime permissions and a shared Secret reader', 'cloud')
   if (p.databases?.includes('blockscout')) add('blockscout-db', 'Initialize Blockscout in the existing PostgreSQL server', 'cloud')
   add('genesis', 'Generate native L2 genesis and contract artifacts')
   add('bridge-prepare', 'Compute protocol seed from genesis')

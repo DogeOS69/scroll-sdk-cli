@@ -54,7 +54,7 @@ export function createSdkFixture(directory: string): string {
     fs.writeFileSync(target, '# nonfunctional fixture\n')
   }
 
-  fs.writeFileSync(path.join(directory, 'examples/Makefile.example'), ['install-aws-access:', '\t@true', 'install-l2-reth-sequencer:', '\t@true', 'delete-l2-reth-sequencer:', '\t@true', 'install-l2-reth-bootnode:', '\t@true', 'delete-l2-reth-bootnode:', '\t@true'].join('\n'))
+  fs.writeFileSync(path.join(directory, 'examples/Makefile.example'), ['install-aws-identities:', '\t@true', 'install-l2-reth-sequencer:', '\t@true', 'delete-l2-reth-sequencer:', '\t@true', 'install-l2-reth-bootnode:', '\t@true', 'delete-l2-reth-bootnode:', '\t@true'].join('\n'))
   const git = (...args: string[]) => execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', stdio: 'pipe'}).trim()
   git('init'); git('add', 'examples', 'charts'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Nonfunctional SDK templates')
   return git('rev-parse', 'HEAD')

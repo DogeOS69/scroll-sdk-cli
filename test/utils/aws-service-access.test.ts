@@ -19,7 +19,7 @@ function spec(): DeploymentSpec {
 
 function template(keys: string[]): string {return yaml.dump({externalSecrets: {env: {data: keys.map(key => ({remoteRef: {key, property: key.split('/').at(-1)}, secretKey: key.split('/').at(-1)})), provider: 'aws'}}})}
 const templates = {
-  Makefile: 'install-aws-access:',
+  Makefile: 'install-aws-identities:',
   'values/fee-oracle-production.yaml': template(['fee-oracle-secret-env']),
   'values/l2-reth-sequencer-production.yaml': template(['l2-reth-sequencer-__INSTANCE_INDEX__-secret-env']),
   'values/proof-coordinator-production.yaml': template(['proof-work-token', 'prover-worker-master']),
@@ -154,12 +154,17 @@ describe('per-service AWS access', () => {
     return plan
   }
 
-  it('plans distinct readers per service and Reth instance without wildcard secrets', () => {
+  it('plans one shared reader for the union of deployment Secrets, including separate Reth instances', () => {
     const plan = save()
-    expect(Object.keys(plan.readers)).deep.equal(['fee-oracle', 'l2-reth-sequencer-0', 'l2-reth-sequencer-1', 'proof-coordinator', 'withdrawal-processor'])
-    expect(plan.readers['withdrawal-processor'].secrets).not.include(`${plan.prefix}/prover-worker-master`)
-    expect(plan.readers['proof-coordinator'].secrets).include(`${plan.prefix}/prover-worker-master`)
-    expect(plan.readers['l2-reth-sequencer-0'].secrets[0]).not.equal(plan.readers['l2-reth-sequencer-1'].secrets[0])
+    expect(Object.keys(plan.serviceSecrets)).deep.equal(['fee-oracle', 'l2-reth-sequencer-0', 'l2-reth-sequencer-1', 'proof-coordinator', 'withdrawal-processor'])
+    expect(plan.reader.serviceAccount).equal('external-secrets')
+    expect(plan.reader.secrets).deep.equal([...new Set(Object.values(plan.serviceSecrets).flat())].sort())
+    expect(plan.serviceSecrets['l2-reth-sequencer-0'][0]).not.equal(plan.serviceSecrets['l2-reth-sequencer-1'][0])
+    const input = spec(); input.preparation!.awsAccess!.secretReaderServiceAccount = 'shared-reader'
+    expect(save(input).reader.serviceAccount).equal('shared-reader')
+    input.preparation!.awsAccess!.snapshot = {action: 'create', publicRead: true, serviceAccount: 'shared-reader'}
+    input.snapshots = {s3: {bucket: 'fixture-snapshot', keyPrefix: 'snapshots', region: 'us-east-1'}}
+    expect(() => validateAwsAccess(input)).throw('separate ServiceAccounts')
   })
   it('keeps external mode read-only and validates managed bucket choices', () => {
     const input = spec(); input.preparation!.awsAccess!.mode = 'external'
@@ -182,6 +187,8 @@ describe('per-service AWS access', () => {
     save(); const aws = new FakeAws()
     prepareAwsAccess(root, spec(), aws)
     expect([...aws.secrets.values()].every(secret => secret.SecretString === undefined)).true
+    expect(aws.roles.size).equal(1)
+    expect([...aws.policies.values()][0].Statement[0].Resource).deep.equal([...aws.secrets.values()].map(secret => secret.ARN).sort())
     const creates = aws.calls.filter(args => args[1].startsWith('create-')).length
     prepareAwsAccess(root, spec(), aws)
     expect(aws.calls.filter(args => args[1].startsWith('create-')).length).equal(creates)
@@ -190,25 +197,33 @@ describe('per-service AWS access', () => {
   })
   it('refuses an existing role owned by someone else and redacts provider errors', () => {
     const plan = save(); const aws = new FakeAws()
-    aws.roles.set(plan.readers['fee-oracle'].roleName, {Tags: []})
+    aws.roles.set(plan.reader.roleName, {Tags: []})
     expect(() => prepareAwsAccess(root, spec(), aws)).throw('ownership')
     aws.failure = 'sts get-caller-identity'
     try {prepareAwsAccess(root, spec(), aws); expect.fail('expected failure')} catch (error) {expect(String(error)).include('failed').not.include('PRIVATE_DETAIL')}
   })
-  it('splits proof tokens preserving existing values across retries and leaves the source intact', () => {
-    const plan = save(); const aws = new FakeAws()
-    const secretName = 'fixture/legacy-proof'
-    writeProofAwsConfig(path.join(root, '.data/proof-aws.json'), buildProofAwsConfig({coordinatorServiceAccount: 'proof-coordinator', identity: {artifactRegion: 'us-east-1', awsRegion: 'us-east-1', deploymentAlias: 'fixture', eksCluster: 'fixture', namespace: 'fixture'}, keyPrefix: 'proof', provisioned: {artifactReadTransport: {publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com', publicReadMode: 'existing-public-s3', publicStatus: 'operator-managed-unverified'}, bucket: 'fixture-proof', bucketCreated: false, coordinatorRoleArn: `arn:aws:iam::${account}:role/coordinator`, secretAction: 'reused', secretName, withdrawalRoleArn: `arn:aws:iam::${account}:role/withdrawal`}, withdrawalServiceAccount: 'withdrawal-processor'}))
+  it('grants the shared reader the original proof Secret without reading, copying or rotating tokens', () => {
+    const input = spec(); input.preparation!.proofAws = {action: 'create', publicReadMode: 'existing-public-s3'}
+    const plan = save(input); const aws = new FakeAws()
+    const secretName = 'fixture/existing-proof'
+    writeProofAwsConfig(path.join(root, '.data/proof-aws.json'), buildProofAwsConfig({coordinatorServiceAccount: 'proof-coordinator', identity: {artifactRegion: 'us-east-1', awsRegion: 'us-west-2', deploymentAlias: 'fixture', eksCluster: 'fixture', namespace: 'fixture'}, keyPrefix: 'proof', provisioned: {artifactReadTransport: {publicEndpointUrl: 'https://s3.us-east-1.amazonaws.com', publicReadMode: 'existing-public-s3', publicStatus: 'operator-managed-unverified'}, bucket: 'fixture-proof', bucketCreated: false, coordinatorRoleArn: `arn:aws:iam::${account}:role/coordinator`, secretAction: 'reused', secretName, withdrawalRoleArn: `arn:aws:iam::${account}:role/withdrawal`}, withdrawalServiceAccount: 'withdrawal-processor'}))
     const source = JSON.stringify({'proof-work-token': 'NONFUNCTIONAL_WORK_FIXTURE', 'prover-worker-master': 'NONFUNCTIONAL_MASTER_FIXTURE'})
-    aws.secrets.set(secretName, {SecretString: source})
-    prepareAwsAccess(root, spec(), aws)
-    expect(JSON.parse(aws.secrets.get(`${plan.prefix}/proof-work-token`).SecretString)).deep.equal({'proof-work-token': 'NONFUNCTIONAL_WORK_FIXTURE'})
-    const writes = aws.calls.filter(args => args[1] === 'put-secret-value').length
-    prepareAwsAccess(root, spec(), aws)
-    expect(aws.calls.filter(args => args[1] === 'put-secret-value').length).equal(writes)
+    const arn = `arn:aws:secretsmanager:us-west-2:${account}:secret:${secretName}-ABCDEF`
+    aws.secrets.set(secretName, {ARN: arn, Name: secretName, SecretString: source})
+    prepareAwsAccess(root, input, aws)
+    prepareAwsAccess(root, input, aws)
     expect(aws.secrets.get(secretName).SecretString).equal(source)
-    const readerPolicy = aws.policies.get(plan.readers['withdrawal-processor'].roleName)
-    expect(JSON.stringify(readerPolicy)).not.include('prover-worker-master').not.include('legacy-proof')
+    expect(aws.calls.some(args => ['get-secret-value', 'put-secret-value'].includes(args[1]))).false
+    expect(aws.secrets.has(`${plan.prefix}/proof-work-token`)).false
+    expect(aws.secrets.has(`${plan.prefix}/prover-worker-master`)).false
+    expect(aws.policies.get(plan.reader.roleName).Statement[0].Resource).include(arn)
+    const record = JSON.parse(fs.readFileSync(path.join(root, AWS_ACCESS_RECORD), 'utf8'))
+    const values: any = {externalSecrets: {token: {data: [{remoteRef: {key: 'old/token', property: 'proof-work-token'}, secretKey: 'proof-work-token'}]}}}
+    bindAwsAccessValues(values, 'withdrawal-processor', record)
+    expect(values.externalSecrets.token.serviceAccount).equal('external-secrets')
+    expect(values.externalSecrets.token.secretRegion).equal('us-west-2')
+    expect(values.externalSecrets.token.data).deep.equal([{remoteRef: {key: secretName, property: 'proof-work-token'}, secretKey: 'proof-work-token'}])
+    expect(record.reader.secrets).not.include(plan.proofSecret!.name)
   })
   it('gives a locally signed DA service a separate S3 identity and only its sidecar prefixes', () => {
     const input = spec()
@@ -216,7 +231,9 @@ describe('per-service AWS access', () => {
     input.proofArtifacts = {s3: {bucket: 'fixture-proof', keyPrefix: 'proof', region: 'us-east-1'}}
     input.preparation!.proofAws = {action: 'create', publicReadMode: 'existing-public-s3'}
     input.preparation!.archive = {action: 'configure', publicRead: true}
-    save(input)
+    const plan = planAwsAccess(input, {'Makefile': templates.Makefile, 'values/fee-oracle-production.yaml': templates['values/fee-oracle-production.yaml']})!
+    delete plan.proofSecret
+    fs.writeFileSync(path.join(root, AWS_ACCESS_PLAN), JSON.stringify(plan))
     const aws = new FakeAws()
     aws.buckets.set('fixture-da', {}); aws.buckets.set('fixture-proof', {})
     prepareAwsAccess(root, input, aws)
@@ -246,8 +263,10 @@ describe('per-service AWS access', () => {
     prepareAwsAccess(root, input, aws)
     expect(aws.calls.filter(args => args[1] === 'create-bucket')).length(1)
     bindPreparedAwsAccess(root)
-    const rendered = yaml.load(fs.readFileSync(path.join(root, 'values/aws-access-production.yaml'), 'utf8')) as any
-    expect(rendered.serviceAccounts.some((sa: any) => sa.name === 'snapshot-writer')).true
+    const rendered = yaml.load(fs.readFileSync(path.join(root, 'manifests/snapshot-writer-serviceaccount.yaml'), 'utf8')) as any
+    expect(rendered.kind).equal('ServiceAccount')
+    expect(rendered.metadata.name).equal('snapshot-writer')
+    expect(rendered.metadata.annotations['eks.amazonaws.com/role-arn']).equal(record.runtime['snapshot-writer'].roleArn)
   })
   it('renders prepared identities, rejects an unrelated Secret and protects upload destination', () => {
     const plan = save(); prepareAwsAccess(root, spec(), new FakeAws())
@@ -255,9 +274,15 @@ describe('per-service AWS access', () => {
     fs.writeFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), yaml.dump(values))
     bindPreparedAwsAccess(root)
     const rendered = yaml.load(fs.readFileSync(path.join(root, 'values/withdrawal-processor-production.yaml'), 'utf8')) as any
-    expect(rendered.externalSecrets.env.serviceAccount).equal(plan.readers['withdrawal-processor'].serviceAccount)
+    expect(rendered.externalSecrets.env.serviceAccount).equal(plan.reader.serviceAccount)
     expect(rendered.externalSecrets.env.data[0].remoteRef.key).equal(`${plan.prefix}/proof-work-token`)
+    const manifest = yaml.load(fs.readFileSync(path.join(root, 'manifests/aws-secret-reader.yaml'), 'utf8')) as any
+    expect(manifest.kind).equal('ServiceAccount')
+    expect(manifest.metadata).include({name: 'external-secrets', namespace: 'fixture'})
+    expect(manifest.automountServiceAccountToken).false
+    expect(fs.existsSync(path.join(root, 'values/aws-access-production.yaml'))).false
     const record = JSON.parse(fs.readFileSync(path.join(root, AWS_ACCESS_RECORD), 'utf8'))
+    expect(manifest.metadata.annotations['eks.amazonaws.com/role-arn']).equal(record.reader.roleArn)
     values.externalSecrets.env.data.push({remoteRef: {key: 'other-service-password'}})
     expect(() => bindAwsAccessValues(values, 'withdrawal-processor', record)).throw('outside')
     expect(() => assertAwsAccessUpload(root, 'another-deployment', plan.region)).throw('destination')

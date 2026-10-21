@@ -12,8 +12,8 @@ describe('prepared AWS Secret upload', () => {
     try {
       for (const name of ['.data', 'values', 'secrets', 'bin']) fs.mkdirSync(path.join(root, name))
       const secretName = 'fee-oracle-secret-env'; const prefix = 'fixture'; const region = 'us-east-1'
-      const account = '000000000000'; const serviceAccount = 'aws-reader-fee-oracle'
-      fs.writeFileSync(path.join(root, '.data/aws-service-access.json'), JSON.stringify({account, prefix, readers: {'fee-oracle': {roleArn: `arn:aws:iam::${account}:role/fixture-fee-reader`, secrets: [`${prefix}/${secretName}`], serviceAccount}}, region, runtime: {}}))
+      const account = '000000000000'; const serviceAccount = 'external-secrets'
+      fs.writeFileSync(path.join(root, '.data/aws-service-access.json'), JSON.stringify({account, namespace: 'fixture', prefix, reader: {roleArn: `arn:aws:iam::${account}:role/fixture-shared-reader`, secrets: [`${prefix}/${secretName}`], serviceAccount}, region, runtime: {}, serviceSecrets: {'fee-oracle': [`${prefix}/${secretName}`]}}))
       fs.writeFileSync(path.join(root, 'secrets/fee-oracle-secret.env'), 'FIXTURE=NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED\n')
       fs.writeFileSync(path.join(root, 'values/fee-oracle-production.yaml'), yaml.dump({externalSecrets: {[secretName]: {data: [{remoteRef: {key: `${prefix}/${secretName}`, property: 'FIXTURE'}, secretKey: 'FIXTURE'}], provider: 'aws', secretRegion: region, serviceAccount}}}))
       const fakeAws = path.join(root, 'bin/aws')

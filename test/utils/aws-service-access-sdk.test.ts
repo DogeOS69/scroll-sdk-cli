@@ -44,17 +44,19 @@ describe('AWS access bootstrap integration', () => {
       const frozen = JSON.parse(fs.readFileSync(path.join(out, '.scrollsdk/intent.json'), 'utf8'))
       await new CommandPreparationRunner().run(plan.steps.find(step => step.id === 'bootstrap')!, frozen, out, plan)
       const access = JSON.parse(fs.readFileSync(path.join(out, '.scrollsdk/aws-service-access.json'), 'utf8'))
-      const record = {...access, account: '000000000000', readers: Object.fromEntries(Object.entries(access.readers).map(([name, reader]: [string, any]) => [name, {...reader, roleArn: `arn:aws:iam::000000000000:role/${reader.roleName}`} ])), runtime: {}}
+      const record = {...access, account: '000000000000', reader: {...access.reader, roleArn: `arn:aws:iam::000000000000:role/${access.reader.roleName}`} , runtime: {}}
       fs.writeFileSync(path.join(out, '.data/aws-service-access.json'), JSON.stringify(record))
       bindPreparedAwsAccess(out)
       expect(frozen.preparation.awsAccess.mode).equal('managed')
       expect(plan.steps.find(step => step.id === 'aws-access')!.stage).equal('aws')
-      expect(access.readers.dogecoin.secrets).deep.equal([`${access.prefix}/dogecoin-secret-env`])
+      expect(access.serviceSecrets.dogecoin).deep.equal([`${access.prefix}/dogecoin-secret-env`])
       const values = yaml.load(fs.readFileSync(path.join(out, 'values/dogecoin-production.yaml'), 'utf8')) as any
-      expect(values.externalSecrets['dogecoin-secret-env'].serviceAccount).equal('aws-reader-dogecoin')
+      expect(values.externalSecrets['dogecoin-secret-env'].serviceAccount).equal('external-secrets')
       expect(values.externalSecrets['dogecoin-secret-env'].data[0].remoteRef.key).equal(`${access.prefix}/dogecoin-secret-env`)
-      const accounts = yaml.load(fs.readFileSync(path.join(out, 'values/aws-access-production.yaml'), 'utf8')) as any
-      expect(accounts.serviceAccounts).length(Object.keys(access.readers).length)
+      const reader = yaml.load(fs.readFileSync(path.join(out, 'manifests/aws-secret-reader.yaml'), 'utf8')) as any
+      expect(reader.metadata.name).equal('external-secrets')
+      expect(reader.metadata.annotations['eks.amazonaws.com/role-arn']).equal(record.reader.roleArn)
+      expect(fs.existsSync(path.join(out, 'values/aws-access-production.yaml'))).false
     } finally {fs.rmSync(temp, {force: true, recursive: true})}
   })
 })

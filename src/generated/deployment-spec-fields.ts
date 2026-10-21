@@ -157,7 +157,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.network": {"keys":["beaconRpcEndpoint","daPublisherEndpoint","l1ChainName","l2ChainId","l2ChainName","tokenSymbol"],"kind":"object"},
   "$.preparation": {"keys":["archive","awsAccess","bridge","databases","deploymentKitPublication","dstack","genesis","inputs","proofAws","proofMaterials","proofPublication","proofRelease","secretUpload","tsoAlbEdge"],"kind":"object"},
   "$.preparation.archive": {"keys":["action","awsProfile","publicRead","writerRoleArn"],"kind":"object"},
-  "$.preparation.awsAccess": {"keys":["awsProfile","mode","secretsKmsKeyArn","snapshot"],"kind":"object"},
+  "$.preparation.awsAccess": {"keys":["awsProfile","mode","secretReaderServiceAccount","secretsKmsKeyArn","snapshot"],"kind":"object"},
   "$.preparation.awsAccess.snapshot": {"keys":["action","publicRead","serviceAccount"],"kind":"object"},
   "$.preparation.bridge": {"keys":["fundingFile","image","mode","production"],"kind":"object"},
   "$.preparation.bridge.production": {"keys":["ethereumAnchor","funding","recoveryPublicKeys","sequencerKeyEnv","sequencerKms","sequencerPublicKey"],"kind":"object"},

@@ -5,6 +5,8 @@ export interface PreparationConfig {
   awsAccess?: {
     awsProfile?: string
     mode: 'external' | 'managed'
+    /** Shared ESO reader in the deployment namespace; defaults to external-secrets. */
+    secretReaderServiceAccount?: string
     /** Optional exact customer-managed key ARN for runtime Secrets. */
     secretsKmsKeyArn?: string
     /** Snapshot writer is a separate Kubernetes identity; uploads remain operator initiated. */
