@@ -113,9 +113,17 @@ scrollsdk setup capacity-manager network --dir deployment --spec capacity-select
 
 Creation is asynchronous. Repeat the same `--apply` command to read back the
 stack until the result is `ready`. It does not rent workers. A repeated invocation
-checks ownership tags, intent and template, rather than updating an existing stack
+checks ownership and the actual template, rather than updating an existing stack
 by name. Failed/rollback stacks require operator inspection of CloudFormation
 events; the CLI does not delete/recreate them or overwrite another owner's DNS.
+
+JSON/YAML whitespace and object field order do not change network intent. Existing
+stacks are checked by their ownership marker and actual CloudFormation template,
+not an order-dependent `IntentSha256` tag. Older local network receipts containing
+only `connectionSha256` need one rerun of the `network --apply` command above to
+record the connection fields. For an existing matching stack, this reads the stack
+and refreshes local files; it does not recreate or update the AWS resources.
+
 Changed network intent requires an explicitly reviewed replacement, or switching
 to an already provisioned `existing-https` endpoint. There is no automatic teardown.
 

@@ -347,6 +347,15 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
       expect(fs.existsSync(path.join(root, 'prepared-policy/attachment.json'))).equal(false)
     } finally {process.chdir(previous)}
   })
+  it('accepts equivalent delivered context and session JSON', async () => {
+    const result = await activate({
+      readConfigMap: () => ({data: {'protocol_context.json': JSON.stringify(JSON.parse(fs.readFileSync(path.join(root, '.data/protocol_context.json'), 'utf8'))) + '\n\n'}}),
+      readSecret: (name: string) => ({data: name === 'cubesigner-signer-env'
+        ? {DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID: Buffer.from(key.keyId).toString('base64')}
+        : {'session.json': Buffer.from(JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(fs.readFileSync(path.join(root, 'secrets/cubesigner-signer-session.json'), 'utf8'))).reverse())) + '\n').toString('base64')}}),
+    })
+    expect(result.activation).equal('verified')
+  })
   it('blocks a different context delivered to the target cluster', async () => {
     await rejects(() => activate({readConfigMap: () => ({data: {'protocol_context.json': '{}'}})}), 'Delivered protocol context')
   })

@@ -3,6 +3,7 @@ import * as yaml from 'js-yaml'
 import {execFileSync} from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import {isDeepStrictEqual} from 'node:util'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
@@ -261,7 +262,7 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
   // Verification must not silently fix a re-enabled Ingress or stale binding file.
   for (const file of Object.keys(projected)) {
     if (!ALB_VALUE_FILES.has(file)) continue
-    if (JSON.stringify(yaml.load(projected[file])) !== JSON.stringify(yaml.load(files[file] ?? 'null'))) fail(`${file}: stale values; regenerate before installation`)
+    if (!isDeepStrictEqual(yaml.load(projected[file]), yaml.load(files[file] ?? 'null'))) fail(`${file}: stale values; regenerate before installation`)
   }
 
   const {cluster} = read(['eks', 'describe-cluster', '--name', spec.infrastructure.aws!.eksClusterName])

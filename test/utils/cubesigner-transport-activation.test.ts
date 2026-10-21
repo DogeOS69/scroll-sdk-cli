@@ -77,6 +77,17 @@ describe('mode-aware CubeSigner installation check', () => {
     expect(error).instanceOf(Error)
     expect(String(error)).not.include('NONFUNCTIONAL_TEST')
   })
+  it('accepts delivered JSON formatting and key order while checking actual credentials', async () => {
+    delivered = JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(seed)).reverse()), null, 2) + '\n'
+    fs.writeFileSync(path.join(root, '.data/protocol_context.json'), '{}\n')
+    const context = {data: {'protocol_context.json': '{ }\n'}, kind: 'ConfigMap', metadata: {name: 'protocol-context-config'}}
+    expect((await run(`${yaml.dump(workload)}---\n${yaml.dump(context)}`)).activation).equal('verified')
+    delivered = JSON.stringify({...JSON.parse(delivered), token: 'DIFFERENT_NONFUNCTIONAL_TOKEN'})
+    let error: unknown
+    try {await run()} catch (error_) {error = error_}
+    expect(String(error)).include('Delivered runtime session differs')
+    expect(String(error)).not.include('DIFFERENT_NONFUNCTIONAL_TOKEN')
+  })
   it('accepts empty Helm documents without skipping rendered protocol context validation', async () => {
     const context = {data: {'protocol_context.json': '{}'}, kind: 'ConfigMap', metadata: {name: 'protocol-context-config'}}
     const manifest = () => `---\n# Source: optional disabled template\n---\n${yaml.dump(workload)}---\n${yaml.dump(context)}---\n`

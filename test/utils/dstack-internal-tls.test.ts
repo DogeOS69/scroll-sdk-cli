@@ -21,6 +21,14 @@ describe('dstack internal ALB HTTPS', () => {
       expect(() => assertDstackInternalIngress(altered, internalTls)).to.throw('differs from internalTls')
     }
   })
+  it('accepts JSON annotation whitespace but rejects changed listener ports', () => {
+    const values = yaml.load(generateDstackControllerValues({internalTls})!) as any
+    const key = 'alb.ingress.kubernetes.io/listen-ports'
+    values.ingress.annotations[key] = '[ { "HTTPS": 443 } ]\n'
+    expect(() => assertDstackInternalIngress(values, internalTls)).not.to.throw()
+    values.ingress.annotations[key] = '[{"HTTPS":8443}]'
+    expect(() => assertDstackInternalIngress(values, internalTls)).to.throw('differs from internalTls')
+  })
   it('requires explicit private-edge inputs and rejects incompatible ingress ownership and AWS region', () => {
     for (const changed of [{hostname: 'https://bad.example.invalid'}, {hostname: 'user:FAKE_PASSWORD@host'}, {subnets: ['subnet-aaaa']}, {inboundCidrs: ['0.0.0.0/0']}, {inboundCidrs: []}, {certificateArn: 'not-an-arn'}, {unknown: true}]) expect(() => generateDstackControllerValues({internalTls: {...internalTls, ...changed}})).to.throw()
     expect(() => generateDstackControllerValues({ingress: {enabled: false}, internalTls})).to.throw('not both')

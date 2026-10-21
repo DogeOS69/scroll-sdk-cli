@@ -99,6 +99,18 @@ describe('existing ALB lifecycle', () => {
     ['invalid service port', (s: any) => {s.infrastructure.aws.alb.bindings['tso-service'].serviceRef.port = 0}, 'numeric port'],
   ] as const) it(`rejects ${name}`, () => {const input = spec(); mutate(input); expect(() => validateExistingAlb(input)).to.throw(message)})
 
+  it('accepts reordered binding objects without accepting a changed backend', () => {
+    const values = files()
+    projectExistingAlb(values, spec())
+    const document = yaml.load(values['tso-service-production.yaml']) as any
+    const binding = document.targetGroupBindings['tso-service']
+    document.targetGroupBindings['tso-service'] = Object.fromEntries(Object.entries(binding).reverse())
+    values['tso-service-production.yaml'] = yaml.dump(document)
+    expect(verifyExistingAlb(spec(), values, provider()).bindings).deep.equal(['tso-service'])
+    document.targetGroupBindings['tso-service'].serviceRef.port = 9000
+    values['tso-service-production.yaml'] = yaml.dump(document)
+    expect(() => verifyExistingAlb(spec(), values, provider())).to.throw('stale values')
+  })
   it('leaves excluded application ingresses unchanged, including final preparation without ALB selection', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alb-unrelated-values-'))
     const unrelated = Object.fromEntries(['l1-devnet', 'dogecoin', 'blockbook', 'l1-interface', 'scroll-monitor', 'dstack-controller'].map(name => [
