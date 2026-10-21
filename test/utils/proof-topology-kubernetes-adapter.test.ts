@@ -504,6 +504,40 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(fs.existsSync(path.join(root, 'prover-worker-active/docker-compose'))).to.equal(false)
   })
 
+  for (const grace of [undefined, 780, 1200]) {
+    it(`preserves operator worker termination grace (${grace ?? 'unset'}) across regeneration`, () => {
+      const file = path.join(root, 'values/prover-worker-production.yaml')
+      const initial = yaml.load(fs.readFileSync(file, 'utf8')) as {termination?: {gracePeriodSeconds: number}}
+      if (grace !== undefined) initial.termination = {gracePeriodSeconds: grace}
+      fs.writeFileSync(file, yaml.dump(initial))
+      const proofTopology = topology('active', 'kubernetes')
+      proofTopology.generation = 'real'
+
+      for (let run = 0; run < 2; run++) {
+        reconcileCompiledProofTopology({
+          compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active', 'real'),
+          coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+          deploymentDir: root,
+          deploymentName: 'test',
+          network: 'testnet',
+          proofTopology,
+          valuesDir: path.join(root, 'values'),
+          withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+        })
+
+        const worker = yaml.load(fs.readFileSync(file, 'utf8')) as {
+          args: string[]
+          controller: {replicas: number}
+          termination?: {gracePeriodSeconds: number}
+        }
+        expect(worker.controller.replicas).to.equal(1)
+        expect(worker.args).to.deep.equal(WORKER_ARGV)
+        if (grace === undefined) expect(worker).not.to.have.property('termination')
+        else expect(worker.termination).to.deep.equal({gracePeriodSeconds: grace})
+      }
+    })
+  }
+
   it('projects eager compiler output and identity mounts without overriding operator IAM', () => {
     const bundle = fakeBundle(path.join(root, 'eager-bundle'), 'active')
     bundle.manifest.eager_materializer = 'eager-materializer.toml'
