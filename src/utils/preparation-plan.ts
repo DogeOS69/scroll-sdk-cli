@@ -57,7 +57,8 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   if (p.archive?.publicRead !== undefined) add('archive-access', 'Reconcile explicit DA blob read access', 'cloud')
   if (p.bridge.production?.sequencerKms) add('bridge-sequencer-kms', 'Prepare and pin the Bridge sequencer KMS key and withdrawal signing access', p.bridge.production.sequencerKms.action === 'create' ? 'cloud' : 'read')
   if (spec.dstackController && spec.dstackController.enabled !== false) {
-    if (p.dstack?.aws?.action) add('dstack-aws', 'Prepare dstack controller IAM role and inspect existing worker networks', p.dstack.aws.action === 'create' ? 'cloud' : 'read')
+    const dstackAws = dstackAwsIntent(spec)
+    if (dstackAws) add('dstack-aws', dstackAws.action === 'create' ? 'Prepare dstack controller IAM role and inspect existing worker networks' : 'Verify the annotated dstack controller role and inspect existing worker networks', dstackAws.action === 'create' ? 'cloud' : 'read')
     add('dstack', 'Prepare dstack controller credentials and config')
     if (p.dstack?.initializeDatabase) add('dstack-db', 'Initialize dstack in the existing PostgreSQL server', 'cloud')
   }
@@ -221,7 +222,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   }
 
   for (const item of p.inputs ?? []) {
-    if (p.dstack?.aws?.action && item.destination === '.data/dstack-aws.json') throw new Error('Dstack AWS preparation generates its own resource record; remove dstack-aws.json from external inputs')
+    if (dstackAwsIntent(spec) && item.destination === '.data/dstack-aws.json') throw new Error('Dstack AWS preparation generates its own resource record; remove dstack-aws.json from external inputs')
     if (p.proofAws && item.destination === '.data/proof-aws.json') throw new Error('proofAws generates its own receipt; remove proof-aws.json from external inputs')
     if (!item.source || !/^(\.data|secrets)\//.test(item.destination) || /(?:^|\/)(?:doge-config\.toml|setup_defaults\.toml|protocol_seed\.toml|protocol_context\.json|GenerateBridgeInfo\.toml|bridge\.json|bridge-sequencer-kms\.json|bridge-fee-wallet\.json|production-.*\.json|output-.*|genesis\.json)$/.test(item.destination)) throw new Error('External inputs may not overwrite managed Bridge or deployment state')
     localPath('/deployment', item.destination)

@@ -1142,7 +1142,7 @@ For Vast, retain `providers: [vastai]` and `vastaiApiKeyEnv: VASTAI_API_KEY` in
 to `1`. It is projected to Vast fleet `backend_options.min_reliability`, with
 `offer_order: price`. Explicitly carry over any stricter reliability floor when
 switching from bounded Workers. AWS fleets do not receive Vast backend options.
-For AWS, select controller IAM/IRSA preparation and explicit existing VPCs.
+For AWS, import the provider with explicit existing VPCs; this prepares the controller IAM/IRSA role.
 See [AWS preparation and manual prerequisites](dstack-aws-preparation.md) for
 create/reuse behavior, operator permissions and network checks:
 
@@ -1156,7 +1156,6 @@ preparation:
     mode: import
     providers: [aws]
     aws:
-      action: create # reuse discovers an operator-managed role without changing it
       vpcIds:
         us-east-1: vpc-REPLACE_WITH_EXISTING_VPC_ID
       publicIps: false
@@ -1167,8 +1166,9 @@ selected AWS region needs a VPC mapping. Private networking requires suitable
 private subnets, outbound access and controller-to-worker reachability. Optional
 `iamInstanceProfile` is an existing worker instance profile name. The AWS stage
 prepares the controller role and automatically binds its ARN; networks, optional
-worker profiles and quotas remain operator-owned. Omitting `aws.action` preserves
-the manual role-annotation workflow. There is no default-VPC fallback. AWS static
+worker profiles and quotas remain operator-owned. To use an operator-managed role
+instead, set its ARN as the controller's `eks.amazonaws.com/role-arn` annotation;
+it is then verified without changes. There is no default-VPC fallback. AWS static
 access keys are not imported by this path.
 
 `setup render` saves reviewable definitions in

@@ -103,7 +103,8 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
     if (config.provider === 'aws') {
       validateDstackAwsBackend(preparation.aws)
       if (config.regions.some(region => !preparation.aws!.vpcIds[region])) throw new Error('Every capacityManager AWS region requires an explicit dstack VPC ID')
-      if (!dstackAwsIntent(spec) && (spec.dstackController.defaultCredentialsEnabled !== true || !/^arn:aws(?:-[a-z]+)?:iam::\d{12}:role\/[\w+,./=@-]+$/.test(spec.dstackController.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn'] ?? ''))) throw new Error('AWS capacityManager requires dstack defaultCredentialsEnabled and an existing controller IRSA role annotation')
+      // Importing the AWS provider always prepares or verifies the controller role.
+      dstackAwsIntent(spec)
     }
   }
 

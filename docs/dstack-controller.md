@@ -415,10 +415,10 @@ The switch also enables automatic backend discovery in dstack 0.21.5. Configure
 the native AWS backend with `creds.type: default` in the referenced projects Secret,
 and grant the role only its intended provider permissions. The switch alone does
 not create a role. The credential importer supports AWS via explicit existing
-VPCs as well as Vast.ai/GCP. To prepare IAM/IRSA automatically, select
-`preparation.dstack.aws.action: create` or `reuse`; follow the
-[AWS preparation runbook](dstack-aws-preparation.md). This explicit preparation
-also enables default credentials and generates the role annotation. For externally
+VPCs as well as Vast.ai/GCP. Importing the AWS provider prepares IAM/IRSA
+automatically: it creates the controller role, or verifies the role named by an
+existing annotation; follow the [AWS preparation runbook](dstack-aws-preparation.md).
+This preparation also enables default credentials and binds the role annotation. For externally
 managed controller Secrets, select `preparation.dstack.mode: external` and provide
 those Secrets separately. Default
 Vast.ai deployments need no change. Hand-edited generated values are replaced on

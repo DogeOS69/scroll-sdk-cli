@@ -16,28 +16,33 @@ const POLICY_NAME = 'scrollsdk-dstack-workers'
 const asArray = (value: any): any[] => Array.isArray(value) ? value : value === undefined ? [] : [value]
 const document = (value: any): any => typeof value === 'string' ? JSON.parse(decodeURIComponent(value)) : value
 
-/** Resolve public intent only: planning must never contact AWS. */
-export function dstackAwsIntent(spec: DeploymentSpec): {namespace: string; roleName: string; serviceAccount: string} | undefined {
-  const input = spec.preparation?.dstack?.aws
-  if (input?.action === undefined) {
-    if (input?.controllerRoleName || input?.awsProfile) throw new Error('Dstack controllerRoleName/awsProfile requires aws.action: create or reuse')
+/**
+ * Resolve public intent only: planning must never contact AWS. Importing the AWS
+ * provider always prepares the controller role: an existing role annotation is
+ * verified read-only, otherwise the CLI creates and owns the role.
+ */
+export function dstackAwsIntent(spec: DeploymentSpec): {action: 'create' | 'reuse'; namespace: string; roleName: string; serviceAccount: string} | undefined {
+  const dstack = spec.preparation?.dstack
+  if (dstack?.mode !== 'import' || !dstack.providers?.includes('aws')) {
+    if (dstack?.aws?.controllerRoleName || dstack?.aws?.awsProfile) throw new Error('Dstack controllerRoleName/awsProfile require the imported AWS provider')
     return
   }
 
+  const input = dstack.aws
   const controller = spec.dstackController
-  if (!['create', 'reuse'].includes(input.action) || spec.preparation?.dstack?.mode !== 'import' || !spec.preparation.dstack.providers?.includes('aws') || !controller || controller.enabled === false || spec.infrastructure.provider !== 'aws' || !spec.infrastructure.aws?.eksClusterName) throw new Error('Dstack AWS preparation requires create/reuse, imported AWS backend, enabled controller and an EKS cluster')
+  if (!controller || controller.enabled === false || spec.infrastructure?.provider !== 'aws' || !spec.infrastructure.aws?.eksClusterName) throw new Error('The imported AWS dstack provider requires an enabled controller on an EKS cluster')
   validateDstackAwsBackend(input)
   if (controller.defaultCredentialsEnabled === false) throw new Error('Dstack AWS preparation requires default credentials; remove defaultCredentialsEnabled: false')
-  // Helm cannot annotate an externally managed ServiceAccount. Keep this handoff explicit.
-  if (controller.serviceAccount?.create === false) throw new Error('Dstack AWS preparation requires a chart-managed ServiceAccount; omit aws.action for an externally managed account')
   const serviceAccount = controller.serviceAccount?.name ?? controller.fullnameOverride ?? 'dstack-controller'
   if (!/^[\da-z](?:[\d.a-z-]{0,251}[\da-z])?$/.test(serviceAccount)) throw new Error('Dstack ServiceAccount requires a Kubernetes resource name')
   const annotation = controller.serviceAccount?.annotations?.[ROLE_ANNOTATION]
   if (annotation && !/^arn:aws(?:-[a-z]+)?:iam::\d{12}:role\/[\w+,./=@-]+$/.test(annotation)) throw new Error('Invalid dstack controller role annotation')
-  const roleName = input.controllerRoleName ?? annotation?.split('/').at(-1) ?? truncateIamRoleName(`dogeos-${sanitizeName(spec.metadata.name)}-${sanitizeName(spec.infrastructure.aws.eksClusterName)}-dstack`)
+  // Helm cannot annotate an externally managed ServiceAccount; it must already carry its role.
+  if (controller.serviceAccount?.create === false && !annotation) throw new Error('An externally managed dstack ServiceAccount requires its eks.amazonaws.com/role-arn annotation')
+  const roleName = input!.controllerRoleName ?? annotation?.split('/').at(-1) ?? truncateIamRoleName(`dogeos-${sanitizeName(spec.metadata.name)}-${sanitizeName(spec.infrastructure.aws.eksClusterName)}-dstack`)
   if (!/^[\w+,.=@-]{1,64}$/.test(roleName)) throw new Error('Invalid dstack controllerRoleName')
   if (annotation && annotation.split('/').at(-1) !== roleName) throw new Error('Dstack controllerRoleName conflicts with the role annotation')
-  return {namespace: specKubernetesTarget(spec).namespace, roleName, serviceAccount}
+  return {action: annotation ? 'reuse' : 'create', namespace: specKubernetesTarget(spec).namespace, roleName, serviceAccount}
 }
 
 /** Named operations used by dstack 0.21.5 EC2 fleets, not its optional gateways/LBs. */
@@ -92,7 +97,7 @@ export function dstackEligibleSubnets(subnets: any[], tables: any[], publicIps: 
   }).map(subnet => subnet.SubnetId).sort()
 }
 
-/** Only this explicitly selected step mutates IAM. Reuse performs metadata reads only. */
+/** Only a role without an annotation is created or updated. Reuse performs metadata reads only. */
 export function prepareDstackAws(root: string, spec: DeploymentSpec, aws: Pick<AwsCliRunner, 'json'> = new AwsCliRunner(spec.preparation?.dstack?.aws?.awsProfile)): void {
   const intent = dstackAwsIntent(spec)
   if (!intent) return
@@ -141,16 +146,16 @@ export function prepareDstackAws(root: string, spec: DeploymentSpec, aws: Pick<A
   const policy = dstackWorkerPolicy(Object.keys(input.vpcIds), profile, {account, network, partition, project: spec.capacityManager?.project ?? spec.preparation!.dstack!.project ?? 'main', publicIps: input.publicIps ?? false})
   const tags = {Cluster: infrastructure.eksClusterName!, Deployment: spec.metadata.name, ManagedBy: 'scrollsdk-dstack-aws', Namespace: intent.namespace, ServiceAccount: intent.serviceAccount}
   let role = query(['iam', 'get-role', '--role-name', intent.roleName], infrastructure.region, true)?.Role
-  if (!role && input.action === 'reuse') throw new Error(`Dstack role ${intent.roleName} does not exist; select aws.action: create or the existing controllerRoleName`)
+  if (!role && intent.action === 'reuse') throw new Error(`Dstack role ${intent.roleName} from the role annotation does not exist; correct the annotation, or remove it to let setup aws create the role`)
   const annotation = spec.dstackController!.serviceAccount?.annotations?.[ROLE_ANNOTATION]
   const expectedArn = role?.Arn ?? `arn:${partition}:iam::${account}:role/${intent.roleName}`
   if (!expectedArn.startsWith(`arn:${partition}:iam::${account}:role/`) || annotation && annotation !== expectedArn) throw new Error('Dstack role belongs to a different account or conflicts with the explicit annotation')
-  if (input.action === 'create') {
+  if (intent.action === 'create') {
     // IAM rejects inline role policies above 10,240 characters; fail before any mutation.
     if (JSON.stringify(policy).length > 10_240) throw new Error('Dstack worker policy exceeds the IAM inline policy size limit; select fewer regions or VPCs with fewer eligible subnets')
     if (role) {
       const actual = Object.fromEntries((role.Tags ?? []).map((tag: any) => [tag.Key, tag.Value]))
-      if (Object.entries(tags).some(([key, value]) => actual[key] !== value)) throw new Error('Dstack role already exists without matching CLI ownership tags; use reuse for an operator-managed role')
+      if (Object.entries(tags).some(([key, value]) => actual[key] !== value)) throw new Error('Dstack role already exists without matching CLI ownership tags; set its ARN as the controller role annotation to reuse it read-only')
       query(['iam', 'update-assume-role-policy', '--role-name', intent.roleName, '--policy-document', JSON.stringify(trust)])
     } else {
       role = query(['iam', 'create-role', '--role-name', intent.roleName, '--assume-role-policy-document', JSON.stringify(trust), '--tags', JSON.stringify(Object.entries(tags).map(([Key, Value]) => ({Key, Value})))]).Role

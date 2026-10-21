@@ -23,8 +23,13 @@ function fixture(): DeploymentSpec {
     dstackController: {enabled: true, serviceAccount: {name: 'fixture-controller'}},
     infrastructure: {aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, namespace: 'fixture', provider: 'aws'},
     metadata: {name: 'fixture'},
-    preparation: {bridge: {mode: 'helper'}, dstack: {aws: {action: 'create', awsProfile: 'fixture-profile', controllerRoleName: 'fixture-dstack', vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}, proofMaterials: {mode: 'existing'}},
+    preparation: {bridge: {mode: 'helper'}, dstack: {aws: {awsProfile: 'fixture-profile', controllerRoleName: 'fixture-dstack', vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}, proofMaterials: {mode: 'existing'}},
   } as unknown as DeploymentSpec
+}
+
+// An existing role annotation selects read-only reuse.
+function annotate(spec: DeploymentSpec): void {
+  spec.dstackController!.serviceAccount = {...spec.dstackController!.serviceAccount, annotations: {'eks.amazonaws.com/role-arn': roleArn}}
 }
 
 class FakeAws {
@@ -100,9 +105,12 @@ describe('dstack AWS preparation', () => {
     const steps = preparationSteps(spec, true)
     expect(steps.find(step => step.id === 'dstack-aws')).include({effect: 'cloud', stage: 'aws'})
     expect(steps.findIndex(step => step.id === 'dstack-aws')).lessThan(steps.findIndex(step => step.id === 'dstack'))
-    spec.preparation!.dstack!.aws!.action = 'reuse'
+    expect(dstackAwsIntent(spec)?.action).equal('create')
+    annotate(spec)
+    expect(dstackAwsIntent(spec)?.action).equal('reuse')
     expect(preparationSteps(spec).find(step => step.id === 'dstack-aws')?.effect).equal('read')
-    delete spec.preparation!.dstack!.aws!.action
+    spec.preparation!.dstack!.providers = ['vastai']
+    expect(() => dstackAwsIntent(spec)).throw('require the imported AWS provider')
     delete spec.preparation!.dstack!.aws!.awsProfile
     delete spec.preparation!.dstack!.aws!.controllerRoleName
     expect(dstackAwsIntent(spec)).undefined
@@ -159,6 +167,16 @@ describe('dstack AWS preparation', () => {
     expect(aws.calls.some(call => call.args[1] === 'update-assume-role-policy')).true
   })
 
+  it('requires EKS and an annotation on an externally managed ServiceAccount', () => {
+    const spec = fixture()
+    spec.dstackController!.serviceAccount = {create: false, name: 'fixture-controller'}
+    expect(() => dstackAwsIntent(spec)).throw('requires its eks.amazonaws.com/role-arn annotation')
+    annotate(spec)
+    expect(dstackAwsIntent(spec)?.action).equal('reuse')
+    spec.infrastructure = {...spec.infrastructure, provider: 'local'} as any
+    expect(() => dstackAwsIntent(spec)).throw('requires an enabled controller on an EKS cluster')
+  })
+
   it('does not take over an existing unowned role', () => {
     const aws = new FakeAws(); aws.existingRole()
     expect(() => prepareDstackAws(root, fixture(), aws)).throw('ownership tags')
@@ -167,7 +185,7 @@ describe('dstack AWS preparation', () => {
 
   it('reuses an existing role with decoded semantic trust and performs only metadata reads', () => {
     const spec = fixture(); const aws = new FakeAws(); aws.existingRole()
-    spec.preparation!.dstack!.aws!.action = 'reuse'
+    annotate(spec)
     prepareDstackAws(root, spec, aws)
     expect(aws.calls.every(call => /^(get|describe)-/.test(call.args[1]))).true
     // Reformatting JSON, including a trailing newline, has no effect.
@@ -178,8 +196,8 @@ describe('dstack AWS preparation', () => {
 
   it('reports a missing role for reuse without suggesting a permission problem', () => {
     const spec = fixture(); const aws = new FakeAws()
-    spec.preparation!.dstack!.aws!.action = 'reuse'
-    expect(() => prepareDstackAws(root, spec, aws)).throw('fixture-dstack does not exist')
+    annotate(spec)
+    expect(() => prepareDstackAws(root, spec, aws)).throw('fixture-dstack from the role annotation does not exist')
     expect(fs.existsSync(path.join(root, DSTACK_AWS_RECORD))).false
   })
 
@@ -201,7 +219,7 @@ describe('dstack AWS preparation', () => {
 
   it('rejects the wrong namespace trust before writing a binding', () => {
     const spec = fixture(); const aws = new FakeAws(); aws.sub = 'system:serviceaccount:another:fixture-controller'; aws.existingRole()
-    spec.preparation!.dstack!.aws!.action = 'reuse'
+    annotate(spec)
     expect(() => prepareDstackAws(root, spec, aws)).throw('does not trust')
     expect(fs.existsSync(path.join(root, DSTACK_AWS_RECORD))).false
   })

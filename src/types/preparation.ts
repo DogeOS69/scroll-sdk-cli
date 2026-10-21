@@ -33,10 +33,9 @@ export interface PreparationConfig {
   dstack?: {
     /** Existing AWS networking; controller uses its workload role, never static access keys. */
     aws?: {
-      /** Opt in to controller IAM/IRSA preparation; omit for manually managed roles. */
-      action?: 'create' | 'reuse'
+      /** Operator profile for controller role preparation; the controller itself uses IRSA. */
       awsProfile?: string
-      /** Defaults to a deployment/cluster-derived name; reuse also accepts the existing annotation. */
+      /** Created role name; defaults to a deployment/cluster-derived name. An existing role is selected by its annotation. */
       controllerRoleName?: string
       iamInstanceProfile?: string
       publicIps?: boolean

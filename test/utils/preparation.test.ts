@@ -70,7 +70,7 @@ describe('resumable preparation plan', () => {
     const spec = fixture()
     spec.infrastructure = {aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, bootnodeCount: 1, provider: 'aws', sequencerCount: 1}
     spec.dstackController = {database: {type: 'sqlite'}, enabled: true}
-    spec.preparation!.dstack = {aws: {action: 'create', vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}
+    spec.preparation!.dstack = {aws: {vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}
     fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
     const plan = await makePlan()
     expect(plan.steps.find(step => step.id === 'dstack-aws')).include({effect: 'cloud'})

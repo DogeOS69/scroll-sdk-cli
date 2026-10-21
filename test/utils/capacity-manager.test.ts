@@ -12,6 +12,7 @@ import {CAPACITY_MANAGER_STATE_PATHS, assertSdkWorkersRetired, buildCapacityMana
 import {assertDeploymentSpecFields} from '../../src/utils/deployment-spec-fields.js'
 import {generateDstackControllerValues} from '../../src/utils/dstack-controller-values.js'
 import {GenerationTransaction} from '../../src/utils/generation-transaction.js'
+import {dstackAwsIntent} from '../../src/utils/preparation-dstack-aws.js'
 import {writeJson} from '../../src/utils/preparation-io.js'
 import {preparationSteps} from '../../src/utils/preparation-plan.js'
 import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
@@ -97,6 +98,7 @@ describe('Core capacity manager', () => {
     input.spec.dstackController!.defaultCredentialsEnabled = true
     input.spec.dstackController!.serviceAccount = {annotations: {'eks.amazonaws.com/role-arn': 'arn:aws:iam::000000000000:role/fixture'}}
     input.spec.preparation!.dstack = {aws: {vpcIds: {'us-east-1': 'vpc-0123456789abcdef0'}}, mode: 'import', providers: ['aws']}
+    input.spec.infrastructure = {...input.spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, provider: 'aws'}
     expect(() => resolveCapacityManager(input.spec)).throw('providers must include')
     input.spec.preparation!.dstack.providers!.push('vastai')
     expect(resolveCapacityManager(input.spec).fallback!.fleet).equal('vast-fallback')
@@ -174,9 +176,14 @@ describe('Core capacity manager', () => {
     const {spec} = fixture()
     spec.preparation!.bridge = {image: 'example.invalid/bridge:offline', mode: 'production'}
     spec.preparation!.dstack = {aws: {vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}
+    spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, provider: 'aws'}
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-import-'))
     const calls: string[][] = []
     try {
+      // The aws stage has already prepared the controller role.
+      const intent = dstackAwsIntent(spec)!
+      writeJson(path.join(root, '.data/dstack-aws.json'), {account: '000000000000', cluster: 'fixture-cluster', controllerRoleArn: `arn:aws:iam::000000000000:role/${intent.roleName}`, namespace: intent.namespace, region: 'us-east-1', serviceAccount: intent.serviceAccount})
+      fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[dstackController]\nenabled = true\n')
       await new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)}).run({effect: 'local', id: 'dstack', retry: 'safe', title: 'Import'}, spec, root, {} as any)
       expect(calls).to.have.length(1)
       expect(calls[0]).to.include.members(['dstack-config', '--provider', 'aws', '--project', 'isolated-aws', '--aws-backend-config'])
@@ -198,8 +205,8 @@ describe('Core capacity manager', () => {
     delete spec.preparation!.dstack!.project
     expect(() => resolveCapacityManager(spec)).to.throw('VPC IDs')
     spec.preparation!.dstack!.aws = {vpcIds: {'us-east-1': 'vpc-00000000000000000'}}
-    expect(() => resolveCapacityManager(spec)).to.throw('IRSA')
-    spec.dstackController = {defaultCredentialsEnabled: true, enabled: true, serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'arn:aws:iam::000000000000:role/example-dstack'}}}
+    expect(() => resolveCapacityManager(spec)).to.throw('EKS cluster')
+    spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, provider: 'aws'}
     expect(() => resolveCapacityManager(spec)).not.to.throw()
     spec.capacityManager!.regions = ['us-west-2']
     expect(() => resolveCapacityManager(spec)).to.throw('explicit dstack VPC ID')
@@ -210,7 +217,7 @@ describe('Core capacity manager', () => {
   it('allows a planned dstack role without requiring the operator to copy an ARN', () => {
     const {spec} = fixture()
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, provider: 'aws'}
-    spec.preparation!.dstack = {aws: {action: 'create', vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}
+    spec.preparation!.dstack = {aws: {vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}
     expect(() => resolveCapacityManager(spec)).not.to.throw()
     spec.dstackController!.defaultCredentialsEnabled = false
     expect(() => resolveCapacityManager(spec)).to.throw('default credentials')

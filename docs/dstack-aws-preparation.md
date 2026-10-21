@@ -1,7 +1,7 @@
 # Prepare AWS access for dstack workers
 
-The staged workflow can create the dstack controller IAM role and its IRSA trust,
-or discover an existing role. The controller uses the AWS SDK default credential
+Importing the AWS dstack provider makes the staged workflow create the dstack
+controller IAM role and its IRSA trust, or verify an existing role. The controller uses the AWS SDK default credential
 chain with the ServiceAccount's projected web identity token. The operator's AWS
 CLI profile is used only during preparation; access keys are never copied to the
 controller or the deployment spec.
@@ -35,9 +35,9 @@ preparation:
     mode: import
     providers: [aws]
     aws:
-      action: create
       awsProfile: EXAMPLE_OPERATOR_PROFILE
-      # Optional; defaults to a name derived from deployment name and EKS cluster.
+      # Optional name for a created role; defaults to one derived from the
+      # deployment name and EKS cluster.
       controllerRoleName: EXAMPLE_DSTACK_CONTROLLER
       vpcIds:
         us-east-1: vpc-00000000000000000
@@ -77,39 +77,44 @@ failed/pending steps, rather than continuously reconciling a finished deployment
 Back up the local deployment directory. Missing records from completed steps must
 be restored from that backup; do not delete workflow state to trigger a repair.
 
-## Create versus reuse
+## Created versus existing roles
 
-- `action: create` creates the named role if absent and writes the inline policy
+There is no mode switch. The controller's role annotation selects the behavior:
+
+- **No `eks.amazonaws.com/role-arn` annotation:** the CLI creates the role
+  (`controllerRoleName` or the derived name) if absent and writes the inline policy
   `scrollsdk-dstack-workers`. A retry updates this policy and the trust only when
   the role has matching `ManagedBy`, `Deployment`, `Cluster`, `Namespace` and
-  `ServiceAccount` tags. It refuses to take over an unrelated existing role.
-  Other attached policies are not removed. Review those separately if an operator
-  has attached additional grants to a CLI-created role.
-- `action: reuse` only reads AWS metadata. Supply `controllerRoleName`, an existing
-  `eks.amazonaws.com/role-arn` annotation, or use the default derived role name.
+  `ServiceAccount` tags. It refuses to take over an unrelated existing role; to use
+  such a role, set its ARN as the annotation instead. Other attached policies are
+  not removed. Review those separately if an operator has attached additional
+  grants to a CLI-created role.
+- **Annotation set to an existing role ARN:** the CLI only reads AWS metadata.
   The role must trust the exact EKS provider and namespace/ServiceAccount, with
-  the STS audience. The CLI does not repair policies in reuse mode. The operator
-  must compare its grants with `dstackWorkerPolicy` in
+  the STS audience. The CLI does not repair policies for an existing role. The
+  operator must compare its grants with `dstackWorkerPolicy` in
   [the implementation](../src/utils/preparation-dstack-aws.ts) and perform a runtime
   canary; a matching trust statement is not proof of effective permissions.
-- Omit `action` to retain the previous manual workflow: supply
-  `defaultCredentialsEnabled: true` and the existing role annotation yourself.
-  Use this route for a ServiceAccount managed outside the chart. New preparation
-  requires a chart-managed account so the generated annotation actually takes effect.
+- **ServiceAccount managed outside the chart (`serviceAccount.create: false`):**
+  Helm cannot annotate it, so the annotation is required and the existing role is
+  verified read-only.
+
+The plan marks the `dstack-aws` step as a cloud mutation for a created role and as
+a read for an existing one. Review it before running `setup aws`.
 
 Trust documents are interpreted as JSON fields. Formatting, key ordering and a
 trailing newline do not affect acceptance. There is no new file fingerprint.
 
 ## Permissions and prerequisites
 
-The operator needs an authenticated AWS CLI profile. For both actions it needs:
+The operator needs an authenticated AWS CLI profile. For created and existing roles it needs:
 
 - `sts:GetCallerIdentity`, `eks:DescribeCluster` for the selected cluster;
 - `iam:GetOpenIDConnectProvider`, `iam:GetRole`, and `iam:GetInstanceProfile` when
   that option is selected;
 - `ec2:DescribeVpcs`, `ec2:DescribeSubnets`, `ec2:DescribeRouteTables` in each selected region.
 
-Create additionally needs `iam:CreateRole`, `iam:TagRole`,
+A created role additionally needs `iam:CreateRole`, `iam:TagRole`,
 `iam:UpdateAssumeRolePolicy` and `iam:PutRolePolicy` for the selected controller
 role. These are operator permissions, not grants to the controller. IAM resources
 can be scoped to their exact ARNs; EC2 describe operations use `Resource: "*"`.
@@ -117,10 +122,11 @@ Other selected AWS preparation steps have their own operator requirements.
 
 The generated controller policy uses named EC2 fleet operations (instance launch
 and termination, security groups, tags, volumes, placement groups and EIPs) plus
-quota reads. It restricts calls to `vpcIds` regions. **Its EC2 resource scope is
-regional, not limited by VPC or deployment tag.** Use a dedicated account/region
-or `reuse` with a separately reviewed policy if stronger resource isolation is
-required. There are no IAM administration, S3, KMS or load-balancer grants.
+quota reads. It restricts calls to `vpcIds` regions, launches to the inspected
+eligible subnets, and lifecycle mutations to resources tagged with the dstack owner
+and project; see [Policy scope](#policy-scope) for the residual untagged resources.
+Use a dedicated account/region, or an existing role with a separately reviewed
+policy, if stronger isolation is required. There are no IAM administration, S3, KMS or load-balancer grants.
 This is a worker-fleet policy, not permission to operate dstack gateways or all
 future dstack features. Reassess it when changing the controller version.
 
