@@ -576,6 +576,13 @@ the server publicly. `VPC_HOST` is reachable by the controller. The administrato
 must be able to create databases/users and grant schema permissions. This
 command does not provision an RDS instance or install PostgreSQL in Kubernetes.
 
+Administrator connections verify TLS certificates and the `PUBLIC_HOST` identity
+by default. Configure `[db.admin].SSL_CA` or `--ssl-ca` for an RDS/private CA bundle.
+Local development without TLS requires explicit `[db.admin].SSL_MODE = "disable"`
+or `--ssl-mode disable`; failures never trigger an automatic plaintext retry.
+These administrator settings are independent of `DSTACK_SSL_MODE` below. See
+[administrator TLS configuration](config-cleanup.md) for details.
+
 The command creates database `dstack` and login `dstack`, grants migration
 permissions, writes `[db].DSTACK_DB_CONNECTION_STRING` into private `config.toml`,
 and generates `secrets/dstack-controller-database.yaml` with mode `0600`.

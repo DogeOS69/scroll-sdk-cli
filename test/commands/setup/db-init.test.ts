@@ -119,10 +119,20 @@ describe('setup db-init active services', () => {
 
   it('updates dstack permissions without rotating credentials', async () => {
     flags = {...flags, databases: ['dstack'], 'update-permissions': true}
+    config.db.admin = {SSL_MODE: 'disable'}
     await run()
+    expect(command.pgSslMode).to.equal('disable')
     expect(command.updatePermissions.lastCall.args.slice(1, 3)).to.deep.equal(['dstack', 'dstack'])
     expect(command.initializeDatabase.called).to.equal(false)
     expect(fs.existsSync('secrets')).to.equal(false)
+  })
+
+  it('applies the TLS flag override before initializing a database', async () => {
+    flags = {...flags, databases: ['dstack'], 'ssl-mode': 'verify-full'}
+    config.db.admin = {SSL_MODE: 'disable'}
+    await run()
+    expect(command.pgSslMode).to.equal('verify-full')
+    expect(command.createConnection.calledOnce).to.equal(true)
   })
 
   it('rejects incompatible asyncpg URLs and unsafe Secret file names', () => {

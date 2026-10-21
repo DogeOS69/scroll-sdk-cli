@@ -1232,6 +1232,7 @@ Initialize Blockscout and dstack PostgreSQL databases, or update their permissio
 USAGE
   $ scrollsdk setup db-init [-c] [-d] [--json] [-N] [-u] [--update-port <value>]
     [--databases blockscout|dstack] [--doge-config <value>]
+    [--ssl-ca <value>] [--ssl-mode verify-full|disable]
 
 FLAGS
   -N, --non-interactive      Run without prompts, using config.toml values. Requires [db.admin] section with
@@ -1242,6 +1243,8 @@ FLAGS
       --json                 Output in JSON format (stdout for data, stderr for logs)
       --databases=<option>   Initialize only selected services; repeat to select both
       --doge-config=<value>  Doge config containing dstackController; defaults to .data/doge-config.toml
+      --ssl-ca=<value>       PEM CA bundle for administrator connections; overrides [db.admin].SSL_CA
+      --ssl-mode=<option>    Administrator TLS mode; overrides [db.admin].SSL_MODE (default: verify-full)
       --update-port=<value>  Update the port of current database values
 
 DESCRIPTION

@@ -49,7 +49,7 @@ try {
     CREATE_BLOCKSCOUT_DB: false,
     DSTACK_PASSWORD: 'test @:/?#%"\'\\' + secret,
     DSTACK_SSL_MODE: 'disable',
-    admin: {DATABASE: 'postgres', PASSWORD: secret, PUBLIC_HOST: address, PUBLIC_PORT: '5432', USERNAME: 'postgres', VPC_HOST: database, VPC_PORT: '5432'},
+    admin: {DATABASE: 'postgres', PASSWORD: secret, PUBLIC_HOST: address, PUBLIC_PORT: '5432', SSL_MODE: 'disable', USERNAME: 'postgres', VPC_HOST: database, VPC_PORT: '5432'},
   }}
   fs.writeFileSync(path.join(directory, 'config.toml'), toml.stringify(config), {mode: 0o600})
   const run = (...args) => JSON.parse(execFileSync(process.execPath,
