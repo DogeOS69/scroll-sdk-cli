@@ -232,8 +232,23 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
     let frontend: any
     try { frontend = toml.parse(selected.scrollConfig) } catch { throw new Error('Selected frontendsConfig must contain valid scrollConfig TOML') }
     if (String(frontend.REACT_APP_CHAIN_ID_L2) !== BigInt(chain).toString()) throw new Error('Selected frontend chain ID must match general.CHAIN_ID_L2')
+    const history = frontend.REACT_APP_HISTORY_API_URI
     const base = frontend.REACT_APP_BRIDGE_API_URI
-    if (typeof base === 'string' && base.trim()) {
+    if (typeof history === 'string' && history.trim()) {
+      for (const portal of bridgeUrls) {
+        let url: URL
+        try {
+          if (history.startsWith('//') || history.includes('\\') || history !== history.trim()) throw new Error('Invalid history URL')
+          if (!history.startsWith('/') && !/^https?:\/\//.test(history)) throw new Error('History URL must be absolute or root-relative')
+          url = new URL(history, portal)
+        } catch {throw new Error('Frontend history API must be a public HTTP(S) URL or root-relative path')}
+
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Frontend history API cannot contain credentials, query or fragment')
+        endpoint(url.host, url.protocol.slice(0, -1), '/', 'Frontend history API')
+        url.pathname = url.pathname.replace(/\/$/, '') + '/health'
+        bridgeChecks.push({equals: true, path: ['ready'], url: url.href})
+      }
+    } else if (typeof base === 'string' && base.trim()) {
       let url: URL
       try { url = new URL(base) } catch { throw new Error('Frontend bridge API must be a public HTTP(S) URL') }
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Frontend bridge API cannot contain credentials, query or fragment')

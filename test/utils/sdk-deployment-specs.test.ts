@@ -49,7 +49,12 @@ describe('paired SDK deployment starters', () => {
 
     validateExistingAlbSdk(sdk, spec)
     const sharedServices = aws.sharedAlb?.services ?? []
-    expect([...Object.keys(aws.alb!.bindings), ...sharedServices].sort()).deep.eq(Object.keys(ALB_SERVICES).sort())
+    // These pinned starters predate opt-in history deployment. Assert their
+    // actual public edges independently of later optional service additions.
+    expect([...Object.keys(aws.alb!.bindings), ...sharedServices].sort()).deep.eq([
+      'blockscout-api', 'blockscout-frontend', 'frontends', 'l2-reth-rpc-public',
+      'l2-reth-rpc-public-ws', 'proof-coordinator', 'tso-service',
+    ])
     const templates = loadSdkTemplateFiles(sdk, spec.templates!.sdkRevision).files
     const generated = generateValuesFiles(spec, templates['values/scroll-monitor-production.yaml'], {bootstrap: true})
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-starter-render-'))

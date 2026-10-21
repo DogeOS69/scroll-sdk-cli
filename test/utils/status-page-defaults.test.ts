@@ -30,6 +30,25 @@ describe('status-page defaults from deployment sources', () => {
   })
   afterEach(() => fs.rmSync(directory, {force: true, recursive: true}))
 
+  it('resolves the Activity API against the Portal origin and checks readiness instead of /txs', () => {
+    write('frontends-config.yaml', {scrollConfig: 'REACT_APP_CHAIN_ID_L2 = "221122"\nREACT_APP_HISTORY_API_URI = "/api/history/v1"\n'})
+    generate()
+    expect(values.statusPage.generated.probeConfig.bridgeChecks).to.deep.equal([
+      {equals: true, path: ['ready'], url: 'https://portal.example/api/history/v1/health'},
+    ])
+    expect(generate()).to.deep.equal([])
+    write('frontends-config.yaml', {scrollConfig: 'REACT_APP_CHAIN_ID_L2 = "221122"\nREACT_APP_HISTORY_API_URI = "https://history.example/api/history/v1/"\n'})
+    generate()
+    expect(values.statusPage.generated.probeConfig.bridgeChecks[0].url).to.equal('https://history.example/api/history/v1/health')
+  })
+
+  it('rejects ambiguous or credential-bearing history API endpoints', () => {
+    for (const url of ['//history.example/api', 'api/history/v1', 'https://user:fake@history.example/api', '/api/history/v1?token=fake', '/api/history/v1#fragment']) {
+      write('frontends-config.yaml', {scrollConfig: `REACT_APP_CHAIN_ID_L2 = "221122"\nREACT_APP_HISTORY_API_URI = "${url}"\n`})
+      expect(() => generate()).to.throw('history API')
+    }
+  })
+
   it('derives continuous production and the actual frontend history API without copying secrets', () => {
     generate()
     const {catalog, generated, publication} = values.statusPage

@@ -1,3 +1,4 @@
+import * as toml from '@iarna/toml'
 import { Command, Flags } from '@oclif/core'
 import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
@@ -243,6 +244,7 @@ export default class GenerateFromSpec extends Command {
 
     let configs: GeneratedConfigs | null = null
     if (spec.capacityManager && generateValues && !templateFiles['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use the paired capacity-manager SDK branch')
+    if (spec.bridgeHistory?.enabled && generateValues && !templateFiles['values/dogeos-bridge-history-production.yaml']) throw new Error('Selected SDK revision lacks dogeos-bridge-history templates; select SDK PR #189 or a release containing it')
     let valuesFiles: GeneratedValuesFiles | null = null
 
     if (generateConfigs) {
@@ -278,8 +280,15 @@ export default class GenerateFromSpec extends Command {
         const template = templateFiles[`values/${file}`]
         if (file === 'frontends-config.yaml') {
           const existing = existingValues(file)
+          const defaults = mergeFrontendConfigDocuments(template ? yaml.load(template) : undefined)
+          if (!spec.bridgeHistory?.enabled) {
+            const config = toml.parse(defaults.scrollConfig as string)
+            delete config.REACT_APP_HISTORY_API_URI
+            defaults.scrollConfig = toml.stringify(config)
+          }
+
           valuesFiles[file] = yaml.dump(mergeFrontendConfigDocuments(
-            template ? yaml.load(template) : undefined,
+            defaults,
             existing ? yaml.load(existing) : undefined,
             yaml.load(content),
           ), {lineWidth: -1})

@@ -15,6 +15,7 @@ import {resolveSdkRevision} from './spec-bootstrap.js'
 export const ALB_SERVICES: Record<string, {file: string; ingress: string[]}> = {
   'blockscout-api': {file: 'blockscout-production.yaml', ingress: ['blockscout-stack', 'blockscout', 'ingress']},
   'blockscout-frontend': {file: 'blockscout-production.yaml', ingress: ['blockscout-stack', 'frontend', 'ingress']},
+  'dogeos-bridge-history': {file: 'dogeos-bridge-history-production.yaml', ingress: ['ingress', 'main']},
   'frontends': {file: 'frontends-production.yaml', ingress: ['ingress', 'main']},
   'l2-reth-rpc-public': {file: 'l2-reth-rpc-public-production.yaml', ingress: ['ingress', 'main']},
   'l2-reth-rpc-public-ws': {file: 'l2-reth-rpc-public-production.yaml', ingress: ['ingress', 'websocket']},
@@ -45,6 +46,7 @@ export function validateExistingAlb(spec: DeploymentSpec): void {
 
   const groups = new Set<string>()
   for (const [name, binding] of Object.entries(config.bindings)) {
+    if (name === 'dogeos-bridge-history') fail('dogeos-bridge-history currently supports sharedAlb only; its SDK chart has no targetGroupBindings template')
     if (!Object.hasOwn(ALB_SERVICES, name) || !object(binding) || !Object.hasOwn(config.endpoints, binding.endpoint)) fail(`${name}: unknown service or endpoint`)
     if (!object(binding.serviceRef) || !label.test(binding.serviceRef.name) || !Number.isInteger(binding.serviceRef.port) || binding.serviceRef.port < 1 || binding.serviceRef.port > 65_535) fail(`${name}: serviceRef requires an actual Service name and numeric port`)
     if (!binding.targetGroupArn?.startsWith(arnPrefix) || !/^targetgroup\/[\w-]+\/[\da-f]{16}$/.test(binding.targetGroupArn.slice(arnPrefix.length))) fail(`${name}: target group ARN must use the configured account and region`)
@@ -348,7 +350,7 @@ export function verifyExistingAlb(spec: DeploymentSpec, files: Record<string, st
   return {bindings: Object.keys(config!.bindings), loadBalancers: new Set(Object.values(config!.endpoints).map(endpoint => endpoint.loadBalancerArn)).size}
 }
 
-const SHARED_SERVICES = new Set(['blockscout-api', 'blockscout-frontend', 'frontends', 'l2-reth-rpc-public', 'l2-reth-rpc-public-ws'])
+const SHARED_SERVICES = new Set(['blockscout-api', 'blockscout-frontend', 'dogeos-bridge-history', 'frontends', 'l2-reth-rpc-public', 'l2-reth-rpc-public-ws'])
 const ALB_ANNOTATION = 'alb.ingress.kubernetes.io/'
 
 function validateSharedAlb(spec: DeploymentSpec): void {
@@ -362,9 +364,11 @@ function validateSharedAlb(spec: DeploymentSpec): void {
   if (typeof config.certificateArn !== 'string' || !config.certificateArn.startsWith(prefix) || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(config.certificateArn.slice(prefix.length))) fail('sharedAlb.certificateArn must be an ACM certificate ARN in the configured account and region')
   if (!Array.isArray(config.services) || config.services.length === 0 || new Set(config.services).size !== config.services.length) fail('sharedAlb.services must be a nonempty list without duplicates')
   for (const name of config.services) {
-    if (!SHARED_SERVICES.has(name)) fail(`${name}: sharedAlb supports only public RPC, Portal and Blockscout services`)
+    if (!SHARED_SERVICES.has(name)) fail(`${name}: sharedAlb supports only public RPC, Portal, history and Blockscout services`)
     if (Object.hasOwn(aws?.alb?.bindings ?? {}, name)) fail(`${name}: cannot select both sharedAlb and an external ALB binding`)
   }
+
+  if (config.services.includes('dogeos-bridge-history') && (!spec.bridgeHistory?.enabled || !config.services.includes('frontends'))) fail('sharedAlb history requires bridgeHistory.enabled and frontends in the same group')
 
   if (config.services.includes('l2-reth-rpc-public-ws') && config.services.includes('l2-reth-rpc-public') && (!spec.frontend?.hosts.rpcGatewayWs || spec.frontend.hosts.rpcGatewayWs === spec.frontend.hosts.rpcGateway)) fail('sharedAlb RPC WebSocket requires a distinct rpcGatewayWs hostname')
   if (config.services.includes('blockscout-api') !== config.services.includes('blockscout-frontend')) fail('sharedAlb requires both Blockscout API and frontend')
@@ -413,8 +417,8 @@ export function projectSharedAlbValues(values: any, file: string, spec?: Deploym
     Object.assign(annotations, {
       [`${ALB_ANNOTATION}certificate-arn`]: config.certificateArn,
       [`${ALB_ANNOTATION}group.name`]: config.groupName,
-      [`${ALB_ANNOTATION}group.order`]: name === 'blockscout-api' ? '10' : '100',
-      [`${ALB_ANNOTATION}healthcheck-path`]: name === 'blockscout-api' ? '/api/health/readiness' : name === 'blockscout-frontend' ? '/api/healthz' : '/',
+      [`${ALB_ANNOTATION}group.order`]: ['blockscout-api', 'dogeos-bridge-history'].includes(name) ? '10' : '100',
+      [`${ALB_ANNOTATION}healthcheck-path`]: name === 'dogeos-bridge-history' ? '/api/history/v1/live' : name === 'blockscout-api' ? '/api/health/readiness' : name === 'blockscout-frontend' ? '/api/healthz' : '/',
       [`${ALB_ANNOTATION}listen-ports`]: '[{"HTTPS":443}]',
       [`${ALB_ANNOTATION}scheme`]: 'internet-facing',
       [`${ALB_ANNOTATION}ssl-policy`]: 'ELBSecurityPolicy-TLS13-1-2-2021-06',
