@@ -43,7 +43,23 @@ const paths: Record<string, string> = {
   '--protocol-context-json': 'protocol_context.json',
 }
 
-export function workerCommand(worker: ProverWorkerContractV1, publication: ProofProgramPublicationV1, workerId: string, architecture: string): string {
+// Match Core's all-family renderer; additional published files remain supported.
+const artifactEnvPrefixes: Record<string, string> = {
+  'batch/app.vmexe': 'DOGEOS_BATCH_VMEXE',
+  'batch/openvm.toml': 'DOGEOS_BATCH_CONFIG',
+  'bridge/batch-aggregation.vmexe': 'DOGEOS_AGGREGATION_VMEXE',
+  'bridge/batch-aggregation-openvm.toml': 'DOGEOS_AGGREGATION_CONFIG',
+  'bridge/bridge-artifact-manifest.json': 'DOGEOS_BRIDGE_MANIFEST',
+  'bridge/bridge-state.vmexe': 'DOGEOS_BRIDGE_VMEXE',
+  'bridge/l2-range-aggregation-topology-program.json': 'DOGEOS_TAG5_MANIFEST',
+  'bridge/openvm.toml': 'DOGEOS_BRIDGE_CONFIG',
+  'chunk/app.vmexe': 'DOGEOS_CHUNK_VMEXE',
+  'chunk/openvm.toml': 'DOGEOS_CHUNK_CONFIG',
+  'protocol_context.json': 'DOGEOS_PROTOCOL_CONTEXT',
+}
+
+/** Keep the startup command and its required public environment inseparable. */
+export function workerLaunch(worker: ProverWorkerContractV1, publication: ProofProgramPublicationV1, workerId: string, architecture: string): {command: string; env: Record<string, string>} {
   const argv = [...worker.argv]
   const options = new Set(argv.filter(a => a.startsWith('--')))
   if (!options.has('--worker-id') || !options.has('--worker-token-file')) throw new Error('Compiler Worker is missing its identity/token arguments')
@@ -59,18 +75,25 @@ export function workerCommand(worker: ProverWorkerContractV1, publication: Proof
   const commands = ['set -eu', 'umask 077', 'install -d /dogeos/artifacts/chunk /dogeos/artifacts/batch /dogeos/artifacts/bridge',
     `test "$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | tr -d '. ' | head -n 1)" = ${quote(architecture)}`,
     'printf %s "$DOGEOS_PROVER_WORKER_TOKEN" > /tmp/scrollsdk-worker.token', 'unset DOGEOS_PROVER_WORKER_TOKEN']
-  for (const [relative, entry] of Object.entries(publication.files)) {
+  const env: Record<string, string> = {}
+  for (const relative of Object.keys(publication.files).sort()) {
+    const entry = publication.files[relative]
     if (!/^[\w./-]+$/.test(relative) || relative.split('/').includes('..') || relative.startsWith('/')) throw new Error('Unsafe publication path')
     const url = new URL(entry.url)
     if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || !/^[\da-f]{64}$/.test(entry.sha256)) throw new Error('Worker artifacts require public HTTPS URLs without credentials and SHA-256 digests')
+    // A separate namespace and full path digest avoid punctuation/case collisions
+    // for extra resources without changing the known Core variable names.
+    const prefix = Object.hasOwn(artifactEnvPrefixes, relative) ? artifactEnvPrefixes[relative] : `DOGEOS_ARTIFACT_${digest(relative).toUpperCase()}`
+    env[`${prefix}_URL`] = entry.url
+    env[`${prefix}_SHA256`] = entry.sha256
     const target = `/dogeos/artifacts/${relative}`
     commands.push(`install -d ${quote(path.posix.dirname(target))}`,
-      `curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 600 --retry 2 ${quote(entry.url)} -o ${quote(target)}`,
-      `printf '%s  %s\\n' ${quote(entry.sha256)} ${quote(target)} | sha256sum --check --status`)
+      `curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 10 --speed-limit 1024 --speed-time 30 --max-time 600 --retry 2 "$${prefix}_URL" -o ${quote(target)}`,
+      `printf '%s  %s\\n' "$${prefix}_SHA256" ${quote(target)} | sha256sum --check --status`)
   }
 
   commands.push(`exec /usr/local/bin/prover-worker ${argv.map(value => quote(value)).join(' ')}`)
-  return commands.join('; ')
+  return {command: commands.join('; '), env}
 }
 
 export function capacityPlan(input: {generationId: string; imageCheck: ProofWorkerImageCheckV1; publication: ProofProgramPublicationV1; session: string; spec: DeploymentSpec; target: WorkerCapacityPlan['target']; worker: ProverWorkerContractV1}): WorkerCapacityPlan {
@@ -97,7 +120,8 @@ export function capacityPlan(input: {generationId: string; imageCheck: ProofWork
     const fleet = {...(aws ? {spot_policy: 'on-demand'} : {backend_options: [{min_reliability: config.minReliability, offer_order: 'price', type: 'vastai'}]}), ...providerOptions, backends: [config.backend], idle_duration: config.idleTimeoutMinutes * 60, max_price: config.maxPricePerHourUsd,
       name: `${name}-gpu`, nodes: '0..1', regions: config.regions, resources, retry: false,
       tags: {'scrollsdk-plan': id}, type: 'fleet'}
-    const task = {...providerOptions, backends: [config.backend], commands: [workerCommand(worker, publication, workerId, GPU_ARCHITECTURES[config.gpu])], env: {DOGEOS_PROVER_WORKER_READY_FILE: '/dogeos/artifacts/prover-worker-ready-v1.json', DOGEOS_PROVER_WORKER_TOKEN: '${{ secrets.' + workerSecret + ' }}', NVIDIA_DRIVER_CAPABILITIES: 'compute,utility', SCROLLSDK_WORKER_PLAN_ID: id}, fleets: [fleet.name], idle_duration: config.idleTimeoutMinutes * 60, image, max_duration: Math.floor(config.maxDurationHours * 3600), max_price: config.maxPricePerHourUsd,
+    const launch = workerLaunch(worker, publication, workerId, GPU_ARCHITECTURES[config.gpu])
+    const task = {...providerOptions, backends: [config.backend], commands: [launch.command], env: {...launch.env, DOGEOS_PROVER_WORKER_READY_FILE: '/dogeos/artifacts/prover-worker-ready-v1.json', DOGEOS_PROVER_WORKER_TOKEN: '${{ secrets.' + workerSecret + ' }}', NVIDIA_DRIVER_CAPABILITIES: 'compute,utility', SCROLLSDK_WORKER_PLAN_ID: id}, fleets: [fleet.name], idle_duration: config.idleTimeoutMinutes * 60, image, max_duration: Math.floor(config.maxDurationHours * 3600), max_price: config.maxPricePerHourUsd,
       name, nodes: 1, regions: config.regions,
       resources, retry: false, spot_policy: 'on-demand',
       stop_duration: config.stopTimeoutMinutes * 60,

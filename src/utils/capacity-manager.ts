@@ -18,7 +18,7 @@ import {assertDstackInternalIngress} from './dstack-internal-tls.js'
 import {GenerationTransaction} from './generation-transaction.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
 import {DEFAULT_PROOF_DEPLOYMENT_CONTRACT, readProofDeploymentContract, resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
-import {workerCommand} from './proof-workers-plan.js'
+import {workerLaunch} from './proof-workers-plan.js'
 import {loadSdkTemplateFiles, mergeBootstrapValues} from './spec-bootstrap.js'
 import {bindMakefileTarget, specDstackController, specKubernetesTarget} from './spec-kubernetes-target.js'
 
@@ -149,7 +149,8 @@ export function buildCapacityManagerValues(spec: DeploymentSpec, worker: ProverW
   if (publication.verification.anonymousHttpReadback !== 'passed' || publication.verification.authenticatedS3Readback !== 'passed') throw new Error('Publish and verify Worker artifacts before preparing capacity-manager')
   const families = Object.fromEntries([['scroll_chunk', config.runtimeEstimates.scrollChunkSeconds], ['scroll_batch', config.runtimeEstimates.scrollBatchSeconds], ['l2_range_aggregation', config.runtimeEstimates.l2RangeAggregationSeconds], ['bridge_state', config.runtimeEstimates.bridgeStateSeconds]].map(([name, seconds]) => [name, {max_workers: config.maxWorkers, min_vram_gib: 16, min_workers: 0, runtime_seconds: seconds}]))
   const policy = {families, global: {liveness_floor: config.minWorkers, max_workers: config.maxWorkers, scale_down_ttl_seconds: config.scaleDownTtlSeconds, steady_state_floor: 1, target_drain_seconds: config.targetDrainSeconds}, pool: {gpu_class: config.gpu, hourly_cost_usd_per_worker: config.maxPricePerHourUsd, max_hourly_cost_usd: config.maxHourlyCostUsd, max_workers: config.maxWorkers, provider: config.provider, provider_diversity_min: 1, vram_gib: ['A10G', 'L4'].includes(config.gpu) ? 22 : config.gpu === 'L40S' ? 44 : 24}}
-  return {image: config.image, manager: {dstack: {fleets: config.fleets, instanceTypes: config.instanceTypes, maxPricePerHourUsd: config.maxPricePerHourUsd, project: config.project, regions: config.regions}, policy: toml.stringify(policy as any), proofWorkBaseUrl: spec.proofTopology!.deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300', workerCommand: workerCommand(worker, publication, '{worker_id}', architectures[config.gpu]), workerIdPrefix: config.workerIdPrefix, workerImage: `${worker.image.repository}@${worker.image.digest}`}, prepared: true}
+  const launch = workerLaunch(worker, publication, '{worker_id}', architectures[config.gpu])
+  return {image: config.image, manager: {dstack: {fleets: config.fleets, instanceTypes: config.instanceTypes, maxPricePerHourUsd: config.maxPricePerHourUsd, project: config.project, regions: config.regions}, policy: toml.stringify(policy as any), proofWorkBaseUrl: spec.proofTopology!.deployment.proofWorkPublicUrl ?? 'http://withdrawal-processor:9300', workerCommand: launch.command, workerEnv: launch.env, workerIdPrefix: config.workerIdPrefix, workerImage: `${worker.image.repository}@${worker.image.digest}`}, prepared: true}
 }
 
 export function prepareCapacityManager(root: string, readContract = validateProofDeploymentContract, options: CapacityPreparationOptions = {}): {namespace: string; project: string; valuesFile: string} {
@@ -205,6 +206,15 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   // Clear a shared-token binding kept from older generated values; the chart
   // refuses both modes at once.
   projected.manager.workerTokenSecret = ''
+  const makefile = localPath(root, 'Makefile')
+  if (fs.existsSync(makefile)) {
+    // Existing deployments may still pin a chart that silently ignores workerEnv.
+    // Custom install flows without this variable must select a compatible chart.
+    const pin = fs.readFileSync(makefile, 'utf8').match(/^CAPACITY_MANAGER_CHART_VERSION\s*(?:\?=|:=|=)\s*([^\s#]+)/m)?.[1]
+    const version = pin?.match(/^(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/)
+    if (pin && (!version || Number(version[1]) === 0 && (Number(version[2]) < 1 || Number(version[2]) === 1 && Number(version[3]) < 4))) throw new Error('Worker artifact environment requires capacity-manager chart >= 0.1.4; update the SDK templates.sdkRevision and CAPACITY_MANAGER_CHART_VERSION before preparing')
+  }
+
   const content = mergeBootstrapValues(template, yaml.dump(projected))
   const values = yaml.load(content) as any
   // Fixed, separately named manager: deployment/selector and Secret destination are a shared contract.
@@ -220,7 +230,6 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   wp.networkPolicy.allowFrom.capacityManager = [{podSelector: {matchLabels: {'app.kubernetes.io/name': 'capacity-manager'}}}]
   fs.writeFileSync(wpFile, yaml.dump(wp, {lineWidth: -1, noRefs: true}))
   fs.writeFileSync(file, content)
-  const makefile = localPath(root, 'Makefile')
   if (fs.existsSync(makefile)) fs.writeFileSync(makefile, bindMakefileTarget(fs.readFileSync(makefile, 'utf8'), spec))
   if (!spec.dstackController?.internalTls && !spec.capacityManager!.connection && options.dstackUrl) spec.capacityManager!.connection = {mode: 'existing-https', serverUrl: projected.manager.dstack.serverUrl}
   if (options.specFile || options.dstackUrl) writeJson(localPath(root, CAPACITY_MANAGER_CONFIG), {capacityManager: spec.capacityManager})

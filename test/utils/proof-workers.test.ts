@@ -1,4 +1,5 @@
 import {expect} from 'chai'
+import {spawnSync} from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,13 +12,13 @@ import type {ProverWorkerContractV1} from '../../src/utils/proof-topology-compil
 import {digest, writeJson} from '../../src/utils/preparation-io.js'
 import {rentalEnvelope, resolveProofWorkers} from '../../src/utils/proof-workers-config.js'
 import {operateWorkerCapacity, retireCapacitySession, watchdogManifest} from '../../src/utils/proof-workers-lifecycle.js'
-import {capacityPlan, workerCommand, workerControllerLocation} from '../../src/utils/proof-workers-plan.js'
+import {capacityPlan, workerControllerLocation, workerLaunch} from '../../src/utils/proof-workers-plan.js'
 import {mintWorkerCredential} from '../../src/utils/prover-worker-credential.js'
 
 export function fixturePlan() {
   const image = {digest: `sha256:${'a'.repeat(64)}`, repository: 'example.invalid/worker'}
   const spec = {metadata: {name: 'test-deployment'}, preparation: {dstack: {project: 'test'}}, proofWorkers: {}} as DeploymentSpec
-  const paths = ['batch/openvm.toml', 'batch/app.vmexe', 'bridge/openvm.toml', 'bridge/bridge-state.vmexe', 'chunk/openvm.toml', 'chunk/app.vmexe', 'bridge/batch-aggregation-openvm.toml', 'bridge/batch-aggregation.vmexe', 'bridge/l2-range-aggregation-topology-program.json', 'protocol_context.json']
+  const paths = ['batch/openvm.toml', 'batch/app.vmexe', 'bridge/openvm.toml', 'bridge/bridge-state.vmexe', 'bridge/bridge-artifact-manifest.json', 'chunk/openvm.toml', 'chunk/app.vmexe', 'bridge/batch-aggregation-openvm.toml', 'bridge/batch-aggregation.vmexe', 'bridge/l2-range-aggregation-topology-program.json', 'protocol_context.json']
   const publication = {files: Object.fromEntries(paths.map(p => [p, {sha256: 'b'.repeat(64), url: `https://artifacts.example.invalid/${p}`} ])), verification: {anonymousHttpReadback: 'passed', authenticatedS3Readback: 'passed'}} as ProofProgramPublicationV1
   const worker = {argv: ['--worker-id', 'original', '--worker-token-file', '/secret', '--drain-timeout-ms', '720000', '--chunk-app-exe', '/old/chunk', '--enable-prove-scroll-chunk'], image, required_build_class: 'production'} as ProverWorkerContractV1
   const imageCheck = {cudaArchitectures: ['86'], image} as ProofWorkerImageCheckV1
@@ -98,11 +99,11 @@ describe('bounded proof-worker capacity', () => {
     expect(vast.workers[0].fleet.backend_options).to.deep.equal([{min_reliability: 0.95, offer_order: 'price', type: 'vastai'}])
     expect(vast.workers[0].task.backends).to.deep.equal(['vastai'])
   })
-  it('preserves the serialized Vast plan from the deployed SDK revision', () => {
+  it('pins the serialized Vast plan including its artifact environment', () => {
     // Captured from PR #78 at a9af2807, including its plan ID and worker names;
-    // re-pinned when each worker got its own credential secret (core #1591).
+    // re-pinned for per-worker credentials (Core #1591), then artifact env.
     // The plan ID seed is unchanged.
-    expect(digest(JSON.stringify(fixturePlan().plan))).to.equal('ff7b1b7230d94f16412e7fc9adfa8dffa96aa9c05875ae96b40a6dbaf6207825')
+    expect(digest(JSON.stringify(fixturePlan().plan))).to.equal('e44c7b4c961989639a8efae02e00b4c88b7eb3b51178a918c256cf64bdf54821')
   })
   it('carries operator durations into the task and watchdog without a CLI policy cap', () => {
     for (const [hours, seconds, envelope] of [[0.1, 360, 0.75], [48, 172_800, 39.07], [49, 176_400, 39.87], [168, 604_800, 135.07], [720, 2_592_000, 576.67]]) {
@@ -149,7 +150,86 @@ describe('bounded proof-worker capacity', () => {
     expect(() => capacityPlan(input)).to.throw('incompatible')
     input.spec.proofWorkers = {}
     input.publication.files['protocol_context.json'].url += '?token=example'
-    expect(() => workerCommand(input.worker, input.publication, 'worker', '86')).to.throw('without credentials')
+    expect(() => workerLaunch(input.worker, input.publication, 'worker', '86')).to.throw('without credentials')
+  })
+  it('pairs every artifact with stable Core-compatible variables on both direct workers', () => {
+    const {input} = fixturePlan()
+    for (const name of ['extra/a-b.json', 'extra/a_b.json', 'extra/A-b.json']) input.publication.files[name] = {...input.publication.files['chunk/app.vmexe']}
+    const launch = workerLaunch(input.worker, input.publication, 'worker', '86')
+    expect(launch.env.DOGEOS_CHUNK_VMEXE_URL).to.equal(input.publication.files['chunk/app.vmexe'].url)
+    expect(launch.env.DOGEOS_BRIDGE_MANIFEST_SHA256).to.equal('b'.repeat(64))
+    expect(Object.keys(launch.env)).to.have.length(Object.keys(input.publication.files).length * 2)
+    for (const [name, value] of Object.entries(launch.env)) {
+      expect(name).to.match(/^[A-Z_][\dA-Z_]*$/)
+      expect(launch.command).to.include(`"$${name}"`).and.not.to.include(value)
+    }
+
+    const reordered = {...input.publication, files: Object.fromEntries(Object.entries(input.publication.files).reverse())}
+    expect(workerLaunch(input.worker, reordered, 'worker', '86')).to.deep.equal(launch)
+    input.spec.proofWorkers = {count: 2, rentalBudgetUsd: 5}
+    for (const {task} of capacityPlan(input).workers) expect(task.env).to.include(launch.env)
+  })
+  it('retains publication path, HTTPS, credential and digest validation', () => {
+    const {input} = fixturePlan()
+    for (const name of ['../escape', '/absolute', 'extra/../../escape', 'bad;path']) {
+      const publication = structuredClone(input.publication)
+      publication.files[name] = {...publication.files['chunk/app.vmexe']}
+      expect(() => workerLaunch(input.worker, publication, 'worker', '86')).to.throw('Unsafe publication path')
+    }
+
+    for (const url of ['http://artifacts.example.invalid/file', 'https://user:FAKE@artifacts.example.invalid/file', 'https://artifacts.example.invalid/file?token=FAKE', 'https://artifacts.example.invalid/file#fragment']) {
+      const publication = structuredClone(input.publication)
+      publication.files['chunk/app.vmexe'].url = url
+      expect(() => workerLaunch(input.worker, publication, 'worker', '86')).to.throw('without credentials')
+    }
+
+    input.publication.files['chunk/app.vmexe'].sha256 = 'not-a-sha256'
+    expect(() => workerLaunch(input.worker, input.publication, 'worker', '86')).to.throw('SHA-256')
+    delete input.publication.files['chunk/app.vmexe']
+    expect(() => workerLaunch(input.worker, input.publication, 'worker', '86')).to.throw('resource missing')
+  })
+  it('executes quoted artifact env as data and aborts on missing env, download or hash failure', () => {
+    const {input} = fixturePlan()
+    const payload = 'disposable artifact bytes\n'
+    const unusualUrl = "https://artifacts.example.invalid/$(touch INJECTED);'double\"`touch INJECTED`"
+    for (const entry of Object.values(input.publication.files)) Object.assign(entry, {sha256: digest(payload)})
+    input.publication.files['batch/app.vmexe'].url = unusualUrl
+    const launch = workerLaunch(input.worker, input.publication, 'worker', '86')
+    const script = (name: string, content: string) => fs.writeFileSync(path.join(root, name), `#!${process.execPath}\n${content}`, {mode: 0o755})
+    script('nvidia-smi', "process.stdout.write('8.6\\n')")
+    script('curl', `const fs = require('node:fs'); const args = process.argv.slice(2);
+fs.appendFileSync(process.env.DOWNLOAD_LOG, JSON.stringify(args) + '\\n');
+if (process.env.FAIL_DOWNLOAD) process.exit(22);
+fs.writeFileSync(args[args.indexOf('-o') + 1], process.env.ARTIFACT_BYTES);`)
+    script('prover-worker', `const fs = require('node:fs'); const args = process.argv.slice(2);
+fs.writeFileSync(process.env.WORKER_LOG, JSON.stringify({args, token: fs.readFileSync(args[args.indexOf('--worker-token-file') + 1], 'utf8'), tokenEnv: process.env.DOGEOS_PROVER_WORKER_TOKEN}));`)
+    const command = launch.command.replaceAll('/dogeos/artifacts', `${root}/artifacts`).replaceAll('/tmp/scrollsdk-worker.token', `${root}/token`).replaceAll('/usr/local/bin/prover-worker', `${root}/prover-worker`)
+    const log = path.join(root, 'downloads.jsonl')
+    const workerLog = path.join(root, 'worker.json')
+    const env = {...process.env, ...launch.env, ARTIFACT_BYTES: payload, DOGEOS_PROVER_WORKER_TOKEN: 'disposable-worker-token', DOWNLOAD_LOG: log, PATH: `${root}:${process.env.PATH}`, WORKER_LOG: workerLog}
+    const run = (overrides: Record<string, string | undefined> = {}) => spawnSync('sh', ['-c', command], {cwd: root, encoding: 'utf8', env: {...env, ...overrides}})
+    const result = run()
+    expect(result.status, result.stderr).to.equal(0)
+    const downloads = fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[])
+    expect(downloads).to.have.length(11)
+    expect(downloads[0]).to.include(unusualUrl)
+    for (const args of downloads) {
+      for (const [flag, value] of [['--connect-timeout', '10'], ['--max-time', '600'], ['--speed-time', '30'], ['--proto', '=https'], ['--proto-redir', '=https']]) expect(args[args.indexOf(flag) + 1]).to.equal(value)
+    }
+
+    const started = JSON.parse(fs.readFileSync(workerLog, 'utf8'))
+    expect(started.token).to.equal('disposable-worker-token')
+    expect(started).not.to.have.property('tokenEnv')
+    expect(fs.statSync(path.join(root, 'token')).mode.toString(8).slice(-3)).to.equal('600')
+    expect(fs.existsSync(path.join(root, 'INJECTED'))).to.equal(false)
+    for (const overrides of [{DOGEOS_BATCH_VMEXE_URL: undefined}, {ARTIFACT_BYTES: 'corrupt'}, {FAIL_DOWNLOAD: '1'}]) {
+      fs.rmSync(workerLog, {force: true})
+      fs.writeFileSync(log, '')
+      const failure = run(overrides)
+      expect(failure.status).not.to.equal(0)
+      expect(fs.existsSync(workerLog)).to.equal(false)
+      expect(fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).length).to.be.lessThan(2)
+    }
   })
   it('installs and waits for an independent watchdog before sending per-worker credentials', () => {
     const plan = save()

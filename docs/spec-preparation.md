@@ -1022,7 +1022,13 @@ supported (for example, `g5.4xlarge`). Select `gpu: A10G` and the instance type
 explicitly; fleet selectors retain the AWS/dstack name `A10G`, and the planner
 uses 22 GiB of usable VRAM. Verify the regional price and capacity before rental.
 The manager image must be a compatible, separately published immutable image;
-this workflow neither builds nor publishes it.
+this workflow neither builds nor publishes it. Generated `manager.workerEnv`
+contains public artifact URLs and SHA-256 digests; `manager.workerCommand` uses
+quoted environment references. This requires capacity-manager chart **0.1.4+**
+and a committed `templates.sdkRevision` with the updated Makefile pin. Update
+existing deployment pins before generating these values; older charts ignore
+`workerEnv`. The direct `setup proof-workers` launcher supplies the same artifact
+environment in its dstack task. Worker credentials remain runtime inputs.
 
 - `setup proof-materials` prepares and verifies the Worker programs; `setup proof-publish` publishes them.
 - `setup render` uses `prep-charts` to generate
