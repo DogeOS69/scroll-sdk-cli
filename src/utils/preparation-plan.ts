@@ -15,6 +15,7 @@ import {validateExistingAlb, validateExistingAlbSdk} from './existing-alb.js'
 import {validateExistingNlbSdk} from './existing-nlb.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
 import {needsPreparationPolicy} from './preparation-cubesigner-policy.js'
+import {dstackAwsIntent} from './preparation-dstack-aws.js'
 import {usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, digest, loadPreparationEnv, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {resolvePreparationProofRelease} from './preparation-release.js'
@@ -56,6 +57,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   if (p.archive?.publicRead !== undefined) add('archive-access', 'Reconcile explicit DA blob read access', 'cloud')
   if (p.bridge.production?.sequencerKms) add('bridge-sequencer-kms', 'Prepare and pin the Bridge sequencer KMS key and withdrawal signing access', p.bridge.production.sequencerKms.action === 'create' ? 'cloud' : 'read')
   if (spec.dstackController && spec.dstackController.enabled !== false) {
+    if (p.dstack?.aws?.action) add('dstack-aws', 'Prepare dstack controller IAM role and inspect existing worker networks', p.dstack.aws.action === 'create' ? 'cloud' : 'read')
     add('dstack', 'Prepare dstack controller credentials and config')
     if (p.dstack?.initializeDatabase) add('dstack-db', 'Initialize dstack in the existing PostgreSQL server', 'cloud')
   }
@@ -168,6 +170,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (spec.dstackController && spec.dstackController.enabled !== false && !p.dstack) throw new Error('Enabled dstack requires preparation.dstack with explicit import or external credentials mode')
   if (p.dstack && !['external', 'import'].includes(p.dstack.mode)) throw new Error('Dstack preparation mode must be import or external')
   if (p.dstack?.mode === 'import' && (!p.dstack.providers?.length || p.dstack.providers.includes('vastai') && !p.dstack.vastaiApiKeyFile && !p.dstack.vastaiApiKeyEnv || p.dstack.providers.includes('gcp') && !p.dstack.gcpServiceAccountFile)) throw new Error('Dstack import requires providers and their credential file or environment references')
+  dstackAwsIntent(spec)
   if (p.dstack?.mode === 'import' && p.dstack.providers?.includes('aws')) validateDstackAwsBackend(p.dstack.aws)
   if (p.dstack?.vastaiApiKeyEnv && !/^[A-Z_a-z]\w*$/.test(p.dstack.vastaiApiKeyEnv)) throw new Error('Dstack vastaiApiKeyEnv must name an environment variable')
   if (p.dstack?.vastaiApiKeyEnv && p.dstack.vastaiApiKeyFile) throw new Error('Choose vastaiApiKeyEnv or vastaiApiKeyFile, not both')
@@ -218,6 +221,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
   }
 
   for (const item of p.inputs ?? []) {
+    if (p.dstack?.aws?.action && item.destination === '.data/dstack-aws.json') throw new Error('Dstack AWS preparation generates its own resource record; remove dstack-aws.json from external inputs')
     if (p.proofAws && item.destination === '.data/proof-aws.json') throw new Error('proofAws generates its own receipt; remove proof-aws.json from external inputs')
     if (!item.source || !/^(\.data|secrets)\//.test(item.destination) || /(?:^|\/)(?:doge-config\.toml|setup_defaults\.toml|protocol_seed\.toml|protocol_context\.json|GenerateBridgeInfo\.toml|bridge\.json|bridge-sequencer-kms\.json|bridge-fee-wallet\.json|production-.*\.json|output-.*|genesis\.json)$/.test(item.destination)) throw new Error('External inputs may not overwrite managed Bridge or deployment state')
     localPath('/deployment', item.destination)

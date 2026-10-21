@@ -16,6 +16,7 @@ import {parseDatabaseUrl} from './dstack-database.js'
 import {resolveEnvValue} from './non-interactive.js'
 import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
+import {bindPreparedDstackAws, prepareDstackAws} from './preparation-dstack-aws.js'
 import {productionFeeWallet} from './preparation-fee-wallet.js'
 import {checkPrivateKey, dogecoinRpc, prepareEthereumAnchor, prepareHelperFunding, prepareProductionBridgeFunding, prepareProductionWallets} from './preparation-funding.js'
 import {prepareLocalGenesis} from './preparation-genesis.js'
@@ -105,7 +106,10 @@ export class CommandPreparationRunner implements PreparationRunner {
         await command(['proof-aws-init', '-N', '--yes', '--aws-region', spec.infrastructure.aws!.region, '--eks-cluster', spec.infrastructure.aws!.eksClusterName!, '--namespace', spec.infrastructure.namespace ?? 'default', '--deployment-alias', spec.metadata.name, '--artifact-public-read-mode', p.proofAws!.publicReadMode, ...optional('artifact-public-endpoint-url', p.proofAws!.publicEndpointUrl), ...optional('aws-profile', p.proofAws!.awsProfile), ...optional('secret-name', p.proofAws!.secretName), ...optional('coordinator-service-account', spec.proofCoordinator?.serviceAccount?.name), ...optional('withdrawal-service-account', spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name)]); break
       }
 
+      case 'dstack-aws': {prepareDstackAws(root, spec); break}
+
       case 'dstack': {
+        bindPreparedDstackAws(root, spec)
         const d = p.dstack
         if (d?.databaseUrlEnv) {
           const url = process.env[d.databaseUrlEnv]
@@ -122,7 +126,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         const args = ['dstack-config', '-N', ...(d?.providers ?? []).flatMap(provider => ['--provider', provider]), ...optional('project', spec.capacityManager?.project ?? d?.project), ...optional('gcp-project-id', d?.gcpProjectId)]
         if (d?.aws) {
           const awsConfig = path.join(root, '.data/dstack/aws-backend.json')
-          privateWrite(awsConfig, JSON.stringify(d.aws, null, 2) + '\n')
+          privateWrite(awsConfig, JSON.stringify({iamInstanceProfile: d.aws.iamInstanceProfile, publicIps: d.aws.publicIps, vpcIds: d.aws.vpcIds}, null, 2) + '\n')
           args.push('--aws-backend-config', awsConfig)
         }
 
@@ -268,6 +272,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         }
 
         bindPreparedProofAws(root)
+        bindPreparedDstackAws(root, spec)
         // Proof contracts bind the complete doge-config file. Prepare credentials
         // before compiling that binding, never between compilation and export.
         await prepareGrafanaAdmin(root)

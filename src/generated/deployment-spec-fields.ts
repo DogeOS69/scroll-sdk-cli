@@ -165,7 +165,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.preparation.databases": {"kind":"array"},
   "$.preparation.deploymentKitPublication": {"keys":["awsProfile","mode"],"kind":"object"},
   "$.preparation.dstack": {"keys":["aws","databaseUrlEnv","gcpProjectId","gcpServiceAccountFile","initializeDatabase","mode","project","providers","vastaiApiKeyEnv","vastaiApiKeyFile"],"kind":"object"},
-  "$.preparation.dstack.aws": {"keys":["iamInstanceProfile","publicIps","vpcIds"],"kind":"object"},
+  "$.preparation.dstack.aws": {"keys":["action","awsProfile","controllerRoleName","iamInstanceProfile","publicIps","vpcIds"],"kind":"object"},
   "$.preparation.dstack.aws.vpcIds": {"kind":"record"},
   "$.preparation.dstack.providers": {"kind":"array"},
   "$.preparation.genesis": {"keys":["contractsSource"],"kind":"object"},
