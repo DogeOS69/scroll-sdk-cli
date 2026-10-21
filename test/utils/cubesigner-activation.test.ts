@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Synthetic provider/evidence fixtures. */
+import {CubeSignerClient} from '@cubist-labs/cubesigner-sdk'
 import * as toml from '@iarna/toml'
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
@@ -6,6 +7,7 @@ import {generateKeyPairSync, sign} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import sinon from 'sinon'
 
 import {bridgeHash, parseBridgeScript} from '../../src/utils/bridge-rotation.js'
 import {importLiveAcceptance} from '../../src/utils/cubesigner-acceptance.js'
@@ -92,7 +94,7 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     const full = {mfa: council}
     remote = {
       key: {acl: null, edit_policy: full, enabled: true, key_id: key.keyId, key_type: 'SecpDogeAddr', material_id: key.materialId, owner: 'User#owner', policy: request.body.policy, public_key: parsed.tee},
-      policy: {acl: [{actions: ['read:*', 'attach'], subjects: ['User#owner']}, {actions: ['sign'], subjects: [key.roleId]}], attached_to: [{key_id: key.keyId}], edit_policy: {applies_to_scopes: {AllOf: POLICY_EDIT_SCOPES}, mfa: council}, name: 'dogeos-bridge', owner: 'User#owner', policy_id: policyId, policy_type: 'Wasm',
+      policy: {acl: [{actions: ['read:*', 'attach'], subjects: ['User#owner']}, {actions: ['sign'], subjects: [key.roleId]}], attached_to: [{key_id: key.keyId}], edit_policy: {applies_to_scopes: {AllOf: POLICY_EDIT_SCOPES}, mfa: council}, name: 'dogeos_bridge', owner: 'User#owner', policy_id: policyId, policy_type: 'Wasm',
         rules: [{hash: release.wasm.sha256.replace('sha256:', '0x')}], version: 2},
       role: {edit_policy: full, enabled: true, name: 'fixture-role', role_id: key.roleId},
     }
@@ -111,7 +113,7 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     const at = new Date(Date.now() - 1000).toISOString()
     executed = {body: request.body, object_ids: {key_id: key.keyId, org_id: 'Org#fixture', policy_id: policyId, role_id: key.roleId}, operation: 'keyUpdate', outcome: {status: 'applied'}, target: key.keyId, timestamp: at}
     approval = {expires_at: Date.now() / 1000 + 300, id: 'mfa-fixture', request, status: {...council, approved_by: {'User#council': {Fido: {timestamp: Date.parse(at) / 1000}}}}}
-    handoff = {approvals: [write('approval.json', approval)], config: write('gov.json', {approval: {allowed_mfa_types: ['Fido'], approvers: ['User#council'], count: 1, lifetime_seconds: 300, num_auth_factors: 1}, key: {type: 'SecpDogeAddr'}, key_owner: 'User#owner', key_proposers: [], operators: ['User#operator'], org_id: 'Org#fixture', policy: {name: 'dogeos-bridge'}, policy_publishers: [],
+    handoff = {approvals: [write('approval.json', approval)], config: write('gov.json', {approval: {allowed_mfa_types: ['Fido'], approvers: ['User#council'], count: 1, lifetime_seconds: 300, num_auth_factors: 1}, key: {type: 'SecpDogeAddr'}, key_owner: 'User#owner', key_proposers: [], operators: ['User#operator'], org_id: 'Org#fixture', policy: {name: 'dogeos_bridge'}, policy_publishers: [],
         role: {name: 'fixture-role'}}), coreRevision: GOVERNANCE_CORE_REVISION, environment: 'gamma', kind: 'sealed-upgrade', operations: write('operations.json', [{...executed, outcome: {ids: ['mfa-fixture'], status: 'needs-approval'}}, executed]),
       request,
       runtimeSession: {session: 3600},
@@ -121,6 +123,25 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     fs.writeFileSync(path.join(root, 'secrets/cubesigner-signer.env'), `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${key.keyId}"\n`)
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
+
+  it('prepares and recovers an organization alias while pinning its canonical identity', async () => {
+    const configFile = path.join(root, '.data/doge-config.toml')
+    const config: any = toml.parse(fs.readFileSync(configFile, 'utf8'))
+    delete config.cubesigner.expectedPolicy
+    fs.writeFileSync(configFile, toml.stringify(config))
+    fs.rmSync(path.join(root, 'prepared-policy'), {recursive: true})
+    const selectionFile = path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
+    fs.rmSync(selectionFile)
+    input.organization = 'fixture_org'
+    client.organizationName = 'fixture_org'
+    await prepare()
+    expect(JSON.parse(fs.readFileSync(selectionFile, 'utf8')).organization).equal('Org#fixture')
+    fs.rmSync(selectionFile)
+    await prepare()
+    expect(JSON.parse(fs.readFileSync(selectionFile, 'utf8')).organization).equal('Org#fixture')
+    client.organization = 'Org#another'
+    await rejects(() => prepare(), 'Prepared organization differs')
+  })
 
   it('prepares complete production pins without creating attachment receipts; strict resolution remains closed', () => {
     const selected: any = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8'))
@@ -199,6 +220,29 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     expect((await prepareRuntimeSession({client, create, directory: root})).status).equal('existing-session-reused')
     expect(creates).equal(1)
   })
+  it('accepts the alias retained by the real SDK when creating and reusing a role session', async () => {
+    const file = path.join(root, 'secrets/cubesigner-signer-session.json')
+    const seed = JSON.parse(fs.readFileSync(file, 'utf8'))
+    fs.rmSync(file)
+    client.organizationName = 'fixture_org'
+    const management = await CubeSignerClient.create({...seed, org_id: 'fixture_org'})
+    const provider = sinon.stub(management.apiClient as any, 'exec').resolves({
+      expiration: seed.session_exp, session_info: seed.session_info, token: 'NONFUNCTIONAL_TEST',
+    })
+    try {
+      const create = (role: string, purpose: string, lifetimes: any) =>
+        management.apiClient.sessionCreateForRole(role, purpose, ['sign:btc:psbt:doge'], lifetimes)
+      expect((await prepareRuntimeSession({client, create, directory: root})).status).equal('session-prepared')
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).org_id).equal('fixture_org')
+      expect(management.orgId).equal('fixture_org')
+      expect((await prepareRuntimeSession({client, create, directory: root})).status).equal('existing-session-reused')
+      expect(provider.callCount).equal(1)
+      expect((await activate()).activation).equal('verified')
+      client.organizationName = 'another_org'
+      await rejects(() => prepareRuntimeSession({client, create, directory: root}), 'Runtime session environment/org/role mismatch')
+      expect(provider.callCount).equal(1)
+    } finally {provider.restore()}
+  })
   it('blocks duplicate session creation after uncertain remote success', async () => {
     fs.rmSync(path.join(root, 'secrets/cubesigner-signer-session.json'))
     let creates = 0
@@ -230,6 +274,13 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     await prepare()
     expect(fs.existsSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'))).equal(true)
     expect(fs.existsSync(path.join(root, 'prepared-policy/attachment.json'))).equal(false)
+  })
+  it('rejects preparation recovery when the alias resolves to a different provider policy ID', async () => {
+    const selectionPath = path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json')
+    fs.rmSync(selectionPath)
+    remote.policy.policy_id = 'NamedPolicy#00000000-0000-0000-0000-000000000002'
+    await rejects(() => prepare(), 'Published version changed during preparation recovery')
+    expect(fs.existsSync(selectionPath)).equal(false)
   })
   for (const field of ['policyIdentifier', 'programIdentityDigest', 'protocolContextSha256']) it(`blocks invalid expected ${field}`, async () => {
     input.release[field] = field === 'policyIdentifier' ? 'dogeos-bridge/latest' : 'unknown'

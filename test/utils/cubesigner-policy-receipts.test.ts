@@ -25,7 +25,7 @@ describe('CubeSigner policy receipt import', () => {
     const input = fixture()
     for (const name of ['live.json', 'release.json', 'attachment.json']) {
       const file = path.join(root, name)
-      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replaceAll('dogeos-bridge/v2', 'dogeos-bridge/v0'))
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replaceAll('dogeos_bridge/v2', 'dogeos_bridge/v0'))
     }
 
     const refs = input.selection.policyReceipts
@@ -36,7 +36,7 @@ describe('CubeSigner policy receipt import', () => {
     attachment.releaseSha256 = refs.release.sha256
     fs.writeFileSync(file, JSON.stringify(attachment))
     refs.attachment.sha256 = `sha256:${proofFileHash(file)}`
-    expect(resolveCubesignerPolicy(input).policy?.policyIdentifier).to.equal('dogeos-bridge/v0')
+    expect(resolveCubesignerPolicy(input).policy?.policyIdentifier).to.equal('dogeos_bridge/v0')
   })
 
   it('rejects another key, organization, changed context and changed Wasm', () => {

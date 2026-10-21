@@ -4,6 +4,7 @@ import {Command, Flags} from '@oclif/core'
 import os from 'node:os'
 import path from 'node:path'
 
+import {readCubesignerOrganization} from '../../../utils/cubesigner-organization.js'
 import {readRoleScopedPolicyKey} from '../../../utils/cubesigner-policy-readback.js'
 import {PolicyReconciliationError, reconcileCubesignerPolicy} from '../../../utils/cubesigner-policy-reconcile.js'
 import {DEFAULT_DEPLOYMENT} from '../../../utils/deployment-paths.js'
@@ -32,7 +33,7 @@ export default class CubesignerPolicyPrepare extends Command {
           authorities: async () => (await client.org().policyEngineConfiguration())?.allowed_http_authorities ?? [],
           environment: Object.entries(envs).find(([, env]) => env.SignerApiRoot === client.env.SignerApiRoot)?.[0] ?? 'unknown',
           key: (roleId, keyId) => readRoleScopedPolicyKey(api, roleId, keyId),
-          organization: client.orgId,
+          ...await readCubesignerOrganization(client),
           policy: (name, version) => api.policyGet(name, version as `v${number}`),
           role: id => api.roleGet(id),
         }

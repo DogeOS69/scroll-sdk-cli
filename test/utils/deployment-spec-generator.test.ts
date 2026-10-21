@@ -742,6 +742,23 @@ describe('deployment-spec-generator', () => {
       });
     });
 
+    for (const [policyIdentifier, accepted] of [
+      ['policy_123/v1', true], ['abc/v999999999', true], ['a'.repeat(30) + '/v1', true],
+      ['Policy_123/v1', false], ['_policy/v1', false], ['latest_policy/v1', false], ['policy-name/v1', false], ['policy.name/v1', false], ['ab/v1', false],
+      ['a'.repeat(31) + '/v1', false], ['policy_123/v0', false],
+    ] as const) it(`checks provider and signer compatible policy name ${policyIdentifier}`, () => {
+      const spec = createMinimalSpec();
+      spec.signing!.cubesigner!.productionPolicy = {
+        policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,
+        policyIdentifier,
+        programIdentityDigest: `sha256:${'cc'.repeat(32)}`,
+        proofResolverAuthority: 'https://proof-policy.example.com',
+        verifierIdentityDigest: `sha256:${'bb'.repeat(32)}`,
+      };
+      const result = validateDeploymentSpec(spec);
+      expect(result.errors.some(error => error.path === 'signing.cubesigner.productionPolicy.policyIdentifier')).equal(!accepted);
+    });
+
     it('validates CubeSigner production verifier-key policy evidence', () => {
       const spec = createMinimalSpec();
       spec.signing!.cubesigner!.productionPolicy = {
@@ -1458,7 +1475,7 @@ describe('deployment-spec-generator', () => {
         cubesigner: {
           productionPolicy: {
             policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,
-            policyIdentifier: 'dogeos-bridge/v1',
+            policyIdentifier: 'dogeos_bridge/v1',
             programIdentityDigest: `sha256:${'cc'.repeat(32)}`,
             proofResolverAuthority: 'https://proof-policy.example.com',
             verifierIdentityDigest: `sha256:${'bb'.repeat(32)}`,
@@ -1477,7 +1494,7 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include(`public_key = "${rawPublicKey}"`);
       expect(output).to.include('public_key_compressed = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"');
       expect(output).to.include('[cubesigner.productionPolicy]');
-      expect(output).to.include('policyIdentifier = "dogeos-bridge/v1"');
+      expect(output).to.include('policyIdentifier = "dogeos_bridge/v1"');
       expect(output).to.include('proofResolverAuthority = "https://proof-policy.example.com"');
     });
 
@@ -1791,7 +1808,7 @@ describe('deployment-spec-generator', () => {
       const spec = createMinimalSpec();
       spec.signing!.cubesigner!.productionPolicy = {
         policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,
-        policyIdentifier: 'dogeos-bridge/v1',
+        policyIdentifier: 'dogeos_bridge/v1',
         programIdentityDigest: `sha256:${'cc'.repeat(32)}`,
         proofResolverAuthority: 'https://proof-policy.example.com',
         verifierIdentityDigest: `sha256:${'bb'.repeat(32)}`,
@@ -1802,7 +1819,7 @@ describe('deployment-spec-generator', () => {
       const env = Object.fromEntries(values.env.map((item: any) => [item.name, item]));
 
       expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER.value)
-        .to.equal('dogeos-bridge/v1');
+        .to.equal('dogeos_bridge/v1');
       expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_ARTIFACT_DIGEST.value)
         .to.equal(`sha256:${'aa'.repeat(32)}`);
       expect(env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_KEY_IDENTIFIER.valueFrom)

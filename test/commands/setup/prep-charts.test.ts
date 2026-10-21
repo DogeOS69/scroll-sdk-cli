@@ -456,7 +456,7 @@ describe('setup prep-charts CubeSigner production config', () => {
       cubesigner: {
         productionPolicy: {
           policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,
-          policyIdentifier: 'dogeos-bridge/v1',
+          policyIdentifier: 'dogeos_bridge/v1',
           programIdentityDigest: `sha256:${'cc'.repeat(32)}`,
           proofResolverAuthority: 'https://proof-policy.example.com',
           verifierIdentityDigest: `sha256:${'bb'.repeat(32)}`,
@@ -468,7 +468,7 @@ describe('setup prep-charts CubeSigner production config', () => {
 
     expect(env).to.include({
       DOGEOS_CUBESIGNER_SIGNER_NETWORK: 'testnet',
-      DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER: 'dogeos-bridge/v1',
+      DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER: 'dogeos_bridge/v1',
       DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_PROOF_RESOLVER_AUTHORITY:
         'https://proof-policy.example.com',
       DOGEOS_CUBESIGNER_SIGNER_TSO_URL: 'http://tso-service:3000',

@@ -19,7 +19,7 @@ describe('CubeSigner policy deployment', () => {
     fs.writeFileSync(buildReceipt, JSON.stringify({compilerImage: `ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:${'1'.repeat(64)}`, coreRevision: 'a'.repeat(40), schema: 'dogeos/cubesigner-policy-build-receipt/v2', wasm: {path: path.basename(wasm), sha256: proofFileHash(wasm), sizeBytes: 8}}))
     const calls: string[][] = []
     let policy: string[] = []
-    const args = {buildReceipt, buildReceiptSha256: proofFileHash(buildReceipt), keyId: 'Key#fixture', name: 'test-policy', organization: 'Org#fixture', output: path.join(root, 'deployment'), run(_program: string, argv: string[]) {
+    const args = {buildReceipt, buildReceiptSha256: proofFileHash(buildReceipt), keyId: 'Key#fixture', name: 'test_policy', organization: 'Org#fixture', output: path.join(root, 'deployment'), run(_program: string, argv: string[]) {
       calls.push(argv)
       const changed = change?.(argv)
       if (changed !== undefined) return JSON.stringify(changed)
@@ -29,7 +29,7 @@ describe('CubeSigner policy deployment', () => {
       }
 
       if (argv.includes('invoke')) return JSON.stringify({response: {response: 'Deny'}})
-      return JSON.stringify({name: 'test-policy', policy_id: providerId, policy_type: 'Wasm', rules: [{hash: `0x${proofFileHash(wasm)}`}], version: 0})
+      return JSON.stringify({name: 'test_policy', policy_id: providerId, policy_type: 'Wasm', rules: [{hash: `0x${proofFileHash(wasm)}`}], version: 0})
     }}
     return {args, calls, wasm}
   }
@@ -37,7 +37,7 @@ describe('CubeSigner policy deployment', () => {
   it('accepts the actual provider first version v0 and verifies it before attaching', () => {
     const {args, calls} = fixture()
     const result = deployCubesignerPolicy(args)
-    expect(result.policyIdentifier).to.equal('test-policy/v0')
+    expect(result.policyIdentifier).to.equal('test_policy/v0')
     const mutation = calls.findIndex(args => args.includes('set-policy'))
     expect(calls.slice(0, mutation).some(args => args.includes('invoke'))).to.equal(true)
     expect(calls[mutation]).to.include(JSON.stringify(`${providerId}/v0`))
@@ -54,18 +54,25 @@ describe('CubeSigner policy deployment', () => {
     })
     expect(() => deployCubesignerPolicy(args)).to.throw('readback mismatch')
     const result = deployCubesignerPolicy(args)
-    expect(result.policyIdentifier).to.equal('test-policy/v0')
+    expect(result.policyIdentifier).to.equal('test_policy/v0')
     expect(calls.filter(argv => argv.includes('create'))).to.have.length(1)
+  })
+
+  for (const name of ['Policy_123', '_policy', 'latest_policy', 'test-policy', 'test.policy', 'ab', 'a'.repeat(31)]) it(`rejects invalid name ${name} before provider calls or output creation`, () => {
+    const {args, calls} = fixture()
+    expect(() => deployCubesignerPolicy({...args, name})).throw('3-30 lowercase ASCII letters')
+    expect(calls).empty
+    expect(fs.existsSync(args.output)).equal(false)
   })
 
   it('rejects a foreign policy or missing policy field before uploading', () => {
     for (const policy of [{}, {policy: ['another/v2']}, {policy: [{RequireMfa: {count: 1}}]}]) {
-      expect(() => assertPolicyAttachmentAllowed(policy, 'test-policy/v0')).to.throw()
+      expect(() => assertPolicyAttachmentAllowed(policy, 'test_policy/v0')).to.throw()
     }
   })
 
   it('does not mutate a key if the provider reports another Wasm hash', () => {
-    const {args, calls} = fixture(argv => argv.includes('create') ? {name: 'test-policy', policy_id: providerId, policy_type: 'Wasm', rules: [{hash: `0x${'f'.repeat(64)}`}], version: 0} : undefined)
+    const {args, calls} = fixture(argv => argv.includes('create') ? {name: 'test_policy', policy_id: providerId, policy_type: 'Wasm', rules: [{hash: `0x${'f'.repeat(64)}`}], version: 0} : undefined)
     expect(() => deployCubesignerPolicy(args)).to.throw('digest')
     expect(calls.some(args => args.includes('set-policy'))).to.equal(false)
   })

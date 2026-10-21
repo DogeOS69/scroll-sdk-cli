@@ -2,6 +2,7 @@ import {ETHEREUM_BEACON_PLACEHOLDER, ETHEREUM_RPC_PLACEHOLDER} from './ethereum-
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values and native TOML are dynamic documents. */
 
 import * as toml from '@iarna/toml'
+import {isDeepStrictEqual} from 'node:util'
 
 import type {ProofTopologyMode} from '../types/proof-topology.js'
 
@@ -119,6 +120,22 @@ export function mergeWithdrawalManagedDeploymentBlock(
 
     head = source.slice(0, begin)
     tail = source.slice(end + WITHDRAWAL_DEPLOYMENT_END.length)
+    // Markers are TOML comments, not table boundaries. Parse the tail together
+    // with the block so fields after END retain their original table ownership.
+    const remainder = toml.parse(`${inner}${tail}`) as Record<string, any>
+    const adopted = Object.keys(facts).filter(key => isPlainObject(facts[key]) && key in remainder && !(key in existing))
+    const extended = Object.entries(remainder).some(([key, value]) =>
+      (!isPlainObject(value) || key in existing) && !isDeepStrictEqual(existing[key], value))
+    if (adopted.length > 0 || extended) {
+      for (const [key, value] of Object.entries(remainder)) {
+        if (!isPlainObject(value) || key in existing || adopted.includes(key)) {
+          existing[key] = value
+          delete remainder[key]
+        }
+      }
+
+      tail = `\n\n${toml.stringify(remainder as toml.JsonMap).trimEnd()}\n`
+    }
   } else {
     // dogeos-proof-topology parses and reserializes the native config, so the
     // next prep-charts run sees a valid but markerless rendered file. Merely

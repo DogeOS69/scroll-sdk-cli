@@ -115,7 +115,7 @@ describe('late preparation policy receipts', () => {
       const file = path.join(transaction.stagingRoot, name)
       const content = fs.readFileSync(file, 'utf8')
       const values = yaml.load(content) as {configMaps: Record<string, {data: Record<string, string>}>; env: Array<{name: string; value: string}>}
-      expect(values.env.find(item => item.name === 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER')?.value).eq('dogeos-bridge/v2')
+      expect(values.env.find(item => item.name === 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_IDENTIFIER')?.value).eq('dogeos_bridge/v2')
       expect(JSON.parse(values.configMaps['proof-policy-live-evidence'].data['live-evidence.json']).result).eq('passed')
       fs.appendFileSync(path.join(inputs, 'policy.wasm'), 'changed')
       let error: unknown

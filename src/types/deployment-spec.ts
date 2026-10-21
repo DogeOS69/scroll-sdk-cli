@@ -709,7 +709,7 @@ export interface CubesignerProductionPolicy {
   liveEvidenceReportPath?: string
   /** sha256:<64 lowercase hex> digest of the reviewed policy artifact. */
   policyArtifactDigest: string
-  /** Immutable named policy version, for example dogeos-bridge/v1. */
+  /** Immutable named policy version, for example dogeos_bridge/v1. */
   policyIdentifier: string
   /** sha256:<64 lowercase hex> digest of the verifier program identity. */
   programIdentityDigest: string
