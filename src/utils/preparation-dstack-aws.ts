@@ -41,9 +41,10 @@ export function dstackAwsIntent(spec: DeploymentSpec): {namespace: string; roleN
 }
 
 /** Named operations used by dstack 0.21.5 EC2 fleets, not its optional gateways/LBs. */
-export function dstackWorkerPolicy(regions: string[], instanceProfile?: {arn: string; roles: string[]}, scope?: {account: string; network: Array<{eligibleSubnets: string[]; region: string; vpcId: string}>; project: string; publicIps: boolean}): any {
+export function dstackWorkerPolicy(regions: string[], instanceProfile?: {arn: string; roles: string[]}, scope?: {account: string; network: Array<{eligibleSubnets: string[]; region: string; vpcId: string}>; partition?: string; project: string; publicIps: boolean}): any {
+  const arn = `arn:${scope?.partition ?? 'aws'}:ec2`
   const regionCondition = {'aws:RequestedRegion': [...regions].sort()}
-  const resources = (kind: string) => regions.map(region => `arn:aws:ec2:${region}:${scope?.account ?? '*'}:${kind}/*`)
+  const resources = (kind: string) => regions.map(region => `${arn}:${region}:${scope?.account ?? '*'}:${kind}/*`)
   const owned = {StringEquals: {...regionCondition, 'ec2:ResourceTag/owner': 'dstack', ...(scope ? {'ec2:ResourceTag/dstack_project': scope.project} : {})}}
   const requested = {StringEquals: {...regionCondition, 'aws:RequestTag/owner': 'dstack', ...(scope ? {'aws:RequestTag/dstack_project': scope.project} : {})}}
   const statements: any[] = [
@@ -56,14 +57,14 @@ export function dstackWorkerPolicy(regions: string[], instanceProfile?: {arn: st
     {Action: 'ec2:RunInstances', Condition: requested, Effect: 'Allow', Resource: resources('instance'), Sid: 'LaunchTaggedWorkers'},
     // dstack tags instances, not the root volume or network interface created by RunInstances.
     {Action: 'ec2:RunInstances', Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: [
-      ...regions.map(region => `arn:aws:ec2:${region}::image/*`),
+      ...regions.map(region => `${arn}:${region}::image/*`),
       ...['network-interface', 'volume', 'security-group', 'key-pair', 'placement-group', 'capacity-reservation'].flatMap(kind => resources(kind)),
-      ...(scope ? scope.network.flatMap(item => item.eligibleSubnets.map(id => `arn:aws:ec2:${item.region}:${scope.account}:subnet/${id}`)) : resources('subnet')),
+      ...(scope ? scope.network.flatMap(item => item.eligibleSubnets.map(id => `${arn}:${item.region}:${scope.account}:subnet/${id}`)) : resources('subnet')),
     ], Sid: 'LaunchDependencies'},
     {Action: 'ec2:CreateTags', Condition: {StringEquals: {...regionCondition, 'ec2:CreateAction': ['RunInstances', 'CreateSecurityGroup', 'CreateVolume', 'AllocateAddress']}}, Effect: 'Allow', Resource: ['instance', 'security-group', 'volume', 'elastic-ip'].flatMap(kind => resources(kind)), Sid: 'TagOnCreation'},
     {Action: ['ec2:TerminateInstances', 'ec2:DeleteSecurityGroup', 'ec2:AuthorizeSecurityGroupIngress', 'ec2:AuthorizeSecurityGroupEgress', 'ec2:DeleteVolume', 'ec2:AttachVolume', 'ec2:DetachVolume'], Condition: owned, Effect: 'Allow', Resource: ['instance', 'security-group', 'volume'].flatMap(kind => resources(kind)), Sid: 'ManageOwnedWorkers'},
     {Action: ['ec2:CreateSecurityGroup', 'ec2:CreateVolume'], Condition: requested, Effect: 'Allow', Resource: ['security-group', 'volume'].flatMap(kind => resources(kind)), Sid: 'CreateTaggedResources'},
-    {Action: 'ec2:CreateSecurityGroup', Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: scope ? scope.network.map(item => `arn:aws:ec2:${item.region}:${scope.account}:vpc/${item.vpcId}`) : resources('vpc'), Sid: 'WorkerVpcs'},
+    {Action: 'ec2:CreateSecurityGroup', Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: scope ? scope.network.map(item => `${arn}:${item.region}:${scope.account}:vpc/${item.vpcId}`) : resources('vpc'), Sid: 'WorkerVpcs'},
     // dstack 0.21.5 does not tag placement groups. Restrict their account and region.
     {Action: ['ec2:CreatePlacementGroup', 'ec2:DeletePlacementGroup'], Condition: {StringEquals: regionCondition}, Effect: 'Allow', Resource: resources('placement-group'), Sid: 'PlacementGroups'},
   ]
@@ -137,9 +138,10 @@ export function prepareDstackAws(root: string, spec: DeploymentSpec, aws: Pick<A
   const trust = {Statement: [{Action: 'sts:AssumeRoleWithWebIdentity', Condition: {StringEquals: {
     [`${issuerPath}:aud`]: 'sts.amazonaws.com', [`${issuerPath}:sub`]: `system:serviceaccount:${intent.namespace}:${intent.serviceAccount}`,
   }}, Effect: 'Allow', Principal: {Federated: provider}}], Version: '2012-10-17'}
-  const policy = dstackWorkerPolicy(Object.keys(input.vpcIds), profile, {account, network, project: spec.capacityManager?.project ?? spec.preparation!.dstack!.project ?? 'main', publicIps: input.publicIps ?? false})
+  const policy = dstackWorkerPolicy(Object.keys(input.vpcIds), profile, {account, network, partition, project: spec.capacityManager?.project ?? spec.preparation!.dstack!.project ?? 'main', publicIps: input.publicIps ?? false})
   const tags = {Cluster: infrastructure.eksClusterName!, Deployment: spec.metadata.name, ManagedBy: 'scrollsdk-dstack-aws', Namespace: intent.namespace, ServiceAccount: intent.serviceAccount}
-  let role = query(['iam', 'get-role', '--role-name', intent.roleName], infrastructure.region, input.action === 'create')?.Role
+  let role = query(['iam', 'get-role', '--role-name', intent.roleName], infrastructure.region, true)?.Role
+  if (!role && input.action === 'reuse') throw new Error(`Dstack role ${intent.roleName} does not exist; select aws.action: create or the existing controllerRoleName`)
   const annotation = spec.dstackController!.serviceAccount?.annotations?.[ROLE_ANNOTATION]
   const expectedArn = role?.Arn ?? `arn:${partition}:iam::${account}:role/${intent.roleName}`
   if (!expectedArn.startsWith(`arn:${partition}:iam::${account}:role/`) || annotation && annotation !== expectedArn) throw new Error('Dstack role belongs to a different account or conflicts with the explicit annotation')

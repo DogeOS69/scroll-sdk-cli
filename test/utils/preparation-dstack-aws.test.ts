@@ -175,6 +175,20 @@ describe('dstack AWS preparation', () => {
     expect(withPreparedDstackAws(root, spec).dstackController?.defaultCredentialsEnabled).true
   })
 
+  it('reports a missing role for reuse without suggesting a permission problem', () => {
+    const spec = fixture(); const aws = new FakeAws()
+    spec.preparation!.dstack!.aws!.action = 'reuse'
+    expect(() => prepareDstackAws(root, spec, aws)).throw('fixture-dstack does not exist')
+    expect(fs.existsSync(path.join(root, DSTACK_AWS_RECORD))).false
+  })
+
+  it('uses the caller partition for every EC2 resource', () => {
+    const policy = dstackWorkerPolicy(['cn-north-1'], undefined, {account: '000000000000', network: [{eligibleSubnets: ['subnet-fixture'], region: 'cn-north-1', vpcId: 'vpc-fixture'}], partition: 'aws-cn', project: 'main', publicIps: true})
+    const arns = policy.Statement.flatMap((statement: any) => [statement.Resource].flat()).filter((resource: string) => resource !== '*')
+    expect(arns.length).greaterThan(0)
+    expect(arns.every((resource: string) => resource.startsWith('arn:aws-cn:ec2:cn-north-1:'))).true
+  })
+
   it('rejects the wrong namespace trust before writing a binding', () => {
     const spec = fixture(); const aws = new FakeAws(); aws.sub = 'system:serviceaccount:another:fixture-controller'; aws.existingRole()
     spec.preparation!.dstack!.aws!.action = 'reuse'

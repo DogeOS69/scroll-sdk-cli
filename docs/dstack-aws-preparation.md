@@ -178,7 +178,9 @@ The operator must verify:
 4. On-demand GPU vCPU quotas, instance-type availability, subnet address capacity,
    EBS capacity, and EIP quota if the selected instance type uses EIPs. For Spot
    extensions, ensure the EC2 Spot service-linked role and Spot quota exist;
-   this command does not create them.
+   this command does not create them. The generated policy covers the on-demand
+   launches capacity-manager selects; Spot launches additionally need
+   `RunInstances` on `spot-instances-request` resources.
 
 See [dstack backend documentation](https://dstack.ai/docs/concepts/backends/)
 for backend behavior; this CLI implementation targets 0.21.5, so newer upstream
