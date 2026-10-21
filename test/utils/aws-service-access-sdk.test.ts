@@ -15,7 +15,7 @@ import {createSdkFixture} from '../helpers/sdk-templates.js'
 
 // AWS_ACCESS_TEST_SDK optionally exercises the real companion checkout as well.
 describe('AWS access bootstrap integration', () => {
-  it('inventories generated Secret aliases and binds the committed SDK output without cloud calls', async function () {
+  for (const overlays of [false, true]) it(`inventories and binds generated Secrets with Helm overlays ${overlays ? 'enabled' : 'disabled'}`, async function () {
     this.timeout(60_000)
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'aws-access-sdk-'))
     try {
@@ -38,6 +38,7 @@ describe('AWS access bootstrap integration', () => {
       spec.preparation = {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'b'.repeat(64)}`, mode: 'helper'}, proofMaterials: {mode: 'existing'}}
       spec.attestationSigners = Array.from({length: 3}, (_, index) => ({attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: `partner-${index}`, transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}))
       spec.bridge.initialAttestationKeyset = {signerIds: spec.attestationSigners.map((signer: any) => signer.name), threshold: 2}
+      if (overlays) spec.helmValues = Object.fromEntries(['dogecoin', 'l2-reth-sequencer'].map(service => [`${service}-production.yaml`, yaml.dump({externalSecrets: {'extra-secret': {data: [{remoteRef: {key: `fixture/${service}-extra${service === 'dogecoin' ? '' : '-__INSTANCE_INDEX__'}`, property: 'FIXTURE'}, secretKey: 'FIXTURE'}], provider: 'aws'}}})]))
       const input = path.join(temp, 'intent.yaml'); const out = path.join(temp, 'deployment')
       fs.writeFileSync(input, yaml.dump(spec))
       const plan = await createPreparationPlan({output: out, sdkDirectory: sdk, spec: input, staged: true})
@@ -49,10 +50,20 @@ describe('AWS access bootstrap integration', () => {
       bindPreparedAwsAccess(out)
       expect(frozen.preparation.awsAccess.mode).equal('managed')
       expect(plan.steps.find(step => step.id === 'aws-access')!.stage).equal('aws')
-      expect(access.serviceSecrets.dogecoin).deep.equal([`${access.prefix}/dogecoin-secret-env`])
+      expect(access.serviceSecrets.dogecoin).deep.equal([`${access.prefix}/dogecoin-secret-env`, ...(overlays ? [`${access.prefix}/dogecoin-extra`] : [])].sort())
+      if (overlays) for (const index of [0, 1]) {
+        expect(access.serviceSecrets[`l2-reth-sequencer-${index}`]).include(`${access.prefix}/l2-reth-sequencer-extra-${index}`)
+        expect(access.reader.secrets).include(`${access.prefix}/l2-reth-sequencer-extra-${index}`)
+      }
+
       const values = yaml.load(fs.readFileSync(path.join(out, 'values/dogecoin-production.yaml'), 'utf8')) as any
       expect(values.externalSecrets['dogecoin-secret-env'].serviceAccount).equal('external-secrets')
       expect(values.externalSecrets['dogecoin-secret-env'].data[0].remoteRef.key).equal(`${access.prefix}/dogecoin-secret-env`)
+      if (overlays) {
+        expect(values.externalSecrets['extra-secret'].data[0].remoteRef.key).equal(`${access.prefix}/dogecoin-extra`)
+        expect(values.externalSecrets['extra-secret'].serviceAccount).equal('external-secrets')
+      }
+
       const reader = yaml.load(fs.readFileSync(path.join(out, 'manifests/aws-secret-reader.yaml'), 'utf8')) as any
       expect(reader.metadata.name).equal('external-secrets')
       expect(reader.metadata.annotations['eks.amazonaws.com/role-arn']).equal(record.reader.roleArn)

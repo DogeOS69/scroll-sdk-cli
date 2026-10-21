@@ -26,6 +26,7 @@ import {rentalEnvelope, resolveProofWorkers} from './proof-workers-config.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {mergeBootstrapValues, planSpecBootstrap, resolveSdkRevision} from './spec-bootstrap.js'
 import {resolveCubesignerIdentity} from './spec-cubesigner.js'
+import {applyHelmValues} from './spec-helm-values.js'
 import {specDstackController, specKubernetesTarget} from './spec-kubernetes-target.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 import {specAwsSecretPrefix} from './spec-secret-prefix.js'
@@ -289,6 +290,9 @@ export async function createPreparationPlan(options: {envFile?: string; output: 
   if (managesAwsAccess(spec)) {
     const generated = generateValuesFiles(spec, templates['values/scroll-monitor-production.yaml'], {bootstrap: true})
     for (const [file, contents] of Object.entries(generated)) templates[`values/${file}`] = mergeBootstrapValues(templates[`values/${file}`], contents)
+    const values = Object.fromEntries(Object.entries(templates).filter(([file]) => file.startsWith('values/') && file.endsWith('.yaml')).map(([file, contents]) => [file.slice('values/'.length), contents]))
+    applyHelmValues(values, spec)
+    for (const [file, contents] of Object.entries(values)) templates[`values/${file}`] = contents
   }
 
   const awsAccess = planAwsAccess(spec, templates)

@@ -101,7 +101,7 @@ export function planAwsAccess(spec: DeploymentSpec, templates: Record<string, st
   }
 
   if (spec.preparation?.bridge?.production?.sequencerKms) runtimePermissions['withdrawal-processor:signing'] = {actions: ['kms:GetPublicKey', 'kms:Sign'], key: spec.preparation.bridge.production.sequencerKms.keyId ?? 'created by bridge-sequencer-kms'}
-  if (spec.preparation?.dstack?.providers?.includes('aws')) runtimePermissions['dstack-controller'] = {network: spec.preparation.dstack.aws?.vpcIds, preparation: spec.preparation.dstack.aws?.action ?? 'external', project: spec.preparation.dstack.project ?? 'main'}
+  if (spec.preparation?.dstack?.providers?.includes('aws')) runtimePermissions['dstack-controller'] = {network: spec.preparation.dstack.aws?.vpcIds, preparation: spec.preparation.dstack.aws?.action ?? 'external', project: spec.capacityManager?.project ?? spec.preparation.dstack.project ?? 'main'}
   return {cluster: spec.infrastructure.aws!.eksClusterName, namespace, prefix, proofSecret, reader, region: spec.preparation?.secretUpload?.awsRegion ?? spec.infrastructure.aws!.region, runtimePermissions, serviceSecrets}
 }
 
@@ -306,10 +306,10 @@ function snapshotWriterPolicy(store: {bucket: string; keyPrefix?: string}): any 
   return policy
 }
 
-/** Preserve a prepared reader even when push-secrets targets a single custom values file. */
-export function preparedAwsReader(root: string, name: unknown): string | undefined {
+/** Bind an uploaded Secret to its prepared reader without scanning unrelated values files. */
+export function preparedAwsReader(root: string, secretName: string): string | undefined {
   const file = localPath(root, AWS_ACCESS_RECORD)
-  if (!fs.existsSync(file) || typeof name !== 'string') return
+  if (!fs.existsSync(file)) return
   const record: AwsAccessRecord = JSON.parse(fs.readFileSync(file, 'utf8'))
-  return record.reader?.serviceAccount === name ? name : undefined
+  return record.reader?.secrets.includes(`${record.prefix}/${secretName}`) ? record.reader.serviceAccount : undefined
 }

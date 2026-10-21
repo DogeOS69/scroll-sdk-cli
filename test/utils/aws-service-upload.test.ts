@@ -7,15 +7,18 @@ import path from 'node:path'
 
 // Exercise the actual command with a fake executable, including --debug.
 describe('prepared AWS Secret upload', () => {
-  it('keeps the reader, redacts values, and rejects another account before writing', () => {
+  for (const selection of ['directory', 'custom-only', 'custom-with-default']) it(`keeps the prepared reader and upload scope for ${selection}`, () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aws-upload-'))
     try {
-      for (const name of ['.data', 'values', 'secrets', 'bin']) fs.mkdirSync(path.join(root, name))
+      for (const name of ['.data', 'custom', 'secrets', 'bin', ...(selection === 'custom-only' ? [] : ['values'])]) fs.mkdirSync(path.join(root, name))
       const secretName = 'fee-oracle-secret-env'; const prefix = 'fixture'; const region = 'us-east-1'
-      const account = '000000000000'; const serviceAccount = 'external-secrets'
+      const account = '000000000000'; const serviceAccount = 'shared-reader'
+      const valuesFile = selection === 'directory' ? 'values/fee-oracle-production.yaml' : 'custom/fee-oracle.yaml'
       fs.writeFileSync(path.join(root, '.data/aws-service-access.json'), JSON.stringify({account, namespace: 'fixture', prefix, reader: {roleArn: `arn:aws:iam::${account}:role/fixture-shared-reader`, secrets: [`${prefix}/${secretName}`], serviceAccount}, region, runtime: {}, serviceSecrets: {'fee-oracle': [`${prefix}/${secretName}`]}}))
       fs.writeFileSync(path.join(root, 'secrets/fee-oracle-secret.env'), 'FIXTURE=NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED\n')
-      fs.writeFileSync(path.join(root, 'values/fee-oracle-production.yaml'), yaml.dump({externalSecrets: {[secretName]: {data: [{remoteRef: {key: `${prefix}/${secretName}`, property: 'FIXTURE'}, secretKey: 'FIXTURE'}], provider: 'aws', secretRegion: region, serviceAccount}}}))
+      fs.writeFileSync(path.join(root, valuesFile), yaml.dump({externalSecrets: {[secretName]: {data: [{remoteRef: {key: `${prefix}/${secretName}`, property: 'FIXTURE'}, secretKey: 'FIXTURE'}], provider: 'aws', secretRegion: region, serviceAccount: 'external-secrets'}}}))
+      const untouched = fs.readFileSync(path.join(root, valuesFile), 'utf8')
+      if (selection === 'custom-with-default') fs.writeFileSync(path.join(root, 'values/fee-oracle-production.yaml'), untouched)
       const fakeAws = path.join(root, 'bin/aws')
       fs.writeFileSync(fakeAws, `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -25,12 +28,13 @@ if (operation === 'sts get-caller-identity') console.log(JSON.stringify({Account
 else console.log('{}');
 `, {mode: 0o700})
       const log = path.join(root, 'aws-operations.log')
-      const run = (identity: string) => spawnSync(process.execPath, [path.resolve('bin/run.js'), 'setup', 'push-secrets', '-N', '--provider', 'aws', '--aws-prefix', prefix, '--aws-region', region, '--debug'], {cwd: root, encoding: 'utf8', env: {...process.env, FIXTURE_AWS_ACCOUNT: identity, FIXTURE_AWS_LOG: log, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`}})
+      const run = (identity: string) => spawnSync(process.execPath, [path.resolve('bin/run.js'), 'setup', 'push-secrets', '-N', '--provider', 'aws', '--aws-prefix', prefix, '--aws-region', region, '--debug', ...(selection === 'directory' ? [] : ['--values-file', valuesFile])], {cwd: root, encoding: 'utf8', env: {...process.env, FIXTURE_AWS_ACCOUNT: identity, FIXTURE_AWS_LOG: log, PATH: `${path.join(root, 'bin')}:${process.env.PATH}`}})
       const result = run(account)
       expect(result.status, result.stderr).equal(0)
       expect(result.stdout + result.stderr).not.include('NONFUNCTIONAL_VALUE_MUST_NOT_BE_LOGGED')
-      const values = yaml.load(fs.readFileSync(path.join(root, 'values/fee-oracle-production.yaml'), 'utf8')) as {externalSecrets: Record<string, {serviceAccount: string}>}
+      const values = yaml.load(fs.readFileSync(path.join(root, valuesFile), 'utf8')) as {externalSecrets: Record<string, {serviceAccount: string}>}
       expect(values.externalSecrets[secretName].serviceAccount).equal(serviceAccount)
+      if (selection === 'custom-with-default') expect(fs.readFileSync(path.join(root, 'values/fee-oracle-production.yaml'), 'utf8')).equal(untouched)
       expect(fs.readFileSync(log, 'utf8')).include('secretsmanager put-secret-value')
       fs.writeFileSync(log, '')
       const wrong = run('111111111111')

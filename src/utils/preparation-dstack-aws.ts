@@ -137,7 +137,7 @@ export function prepareDstackAws(root: string, spec: DeploymentSpec, aws: Pick<A
   const trust = {Statement: [{Action: 'sts:AssumeRoleWithWebIdentity', Condition: {StringEquals: {
     [`${issuerPath}:aud`]: 'sts.amazonaws.com', [`${issuerPath}:sub`]: `system:serviceaccount:${intent.namespace}:${intent.serviceAccount}`,
   }}, Effect: 'Allow', Principal: {Federated: provider}}], Version: '2012-10-17'}
-  const policy = dstackWorkerPolicy(Object.keys(input.vpcIds), profile, {account, network, project: spec.preparation!.dstack!.project ?? 'main', publicIps: input.publicIps ?? false})
+  const policy = dstackWorkerPolicy(Object.keys(input.vpcIds), profile, {account, network, project: spec.capacityManager?.project ?? spec.preparation!.dstack!.project ?? 'main', publicIps: input.publicIps ?? false})
   const tags = {Cluster: infrastructure.eksClusterName!, Deployment: spec.metadata.name, ManagedBy: 'scrollsdk-dstack-aws', Namespace: intent.namespace, ServiceAccount: intent.serviceAccount}
   let role = query(['iam', 'get-role', '--role-name', intent.roleName], infrastructure.region, input.action === 'create')?.Role
   const annotation = spec.dstackController!.serviceAccount?.annotations?.[ROLE_ANNOTATION]

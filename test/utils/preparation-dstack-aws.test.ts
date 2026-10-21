@@ -134,6 +134,19 @@ describe('dstack AWS preparation', () => {
     expect(spec.dstackController?.serviceAccount?.annotations).undefined
   })
 
+  it('uses the capacity-manager project for both dstack configuration and worker permissions', async () => {
+    const spec = fixture(); const aws = new FakeAws()
+    spec.capacityManager = {project: 'workers'} as any
+    prepareDstackAws(root, spec, aws)
+    const calls: string[][] = []
+    await new CommandPreparationRunner(async (_root, _step, args) => {calls.push(args)}).run({effect: 'local', id: 'dstack', retry: 'safe', title: 'Import'}, spec, root, {} as any)
+    const configured = calls[0][calls[0].indexOf('--project') + 1]
+    expect(configured).equal('workers')
+    const {policy} = JSON.parse(fs.readFileSync(path.join(root, DSTACK_AWS_RECORD), 'utf8'))
+    expect(policy.Statement.find((statement: any) => statement.Sid === 'LaunchTaggedWorkers').Condition.StringEquals['aws:RequestTag/dstack_project']).equal(configured)
+    expect(policy.Statement.find((statement: any) => statement.Sid === 'ManageOwnedWorkers').Condition.StringEquals['ec2:ResourceTag/dstack_project']).equal(configured)
+  })
+
   it('retries an interrupted create without creating a second role', () => {
     const spec = fixture(); const aws = new FakeAws()
     aws.failure = 'iam put-role-policy'

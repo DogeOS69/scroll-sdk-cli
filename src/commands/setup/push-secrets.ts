@@ -10,7 +10,7 @@ import { promisify } from 'node:util'
 
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import {AwsCliRunner} from '../../utils/aws-cli.js'
-import {assertAwsAccessUpload, bindPreparedAwsAccess, preparedAwsReader} from '../../utils/aws-service-access.js'
+import {assertAwsAccessUpload, preparedAwsReader} from '../../utils/aws-service-access.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {publishDstackSecrets} from '../../utils/dstack-secret-publisher.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
@@ -1078,7 +1078,7 @@ export default class SetupPushSecrets extends Command {
       updated = this.deleteYamlValue(secret, 'serviceAccount') || updated
       updated = this.deleteYamlValue(secret, 'secretRegion') || updated
     } else {
-      updated = this.setYamlValue(secret, 'serviceAccount', preparedAwsReader(process.cwd(), secret.serviceAccount) ?? credentials.serviceAccount) || updated
+      updated = this.setYamlValue(secret, 'serviceAccount', preparedAwsReader(process.cwd(), secretName) ?? credentials.serviceAccount) || updated
       updated = this.setYamlValue(secret, 'secretRegion', credentials.secretRegion) || updated
       updated = this.deleteYamlValue(secret, 'server') || updated
       updated = this.deleteYamlValue(secret, 'path') || updated
@@ -1142,7 +1142,6 @@ export default class SetupPushSecrets extends Command {
       }
     }
 
-    bindPreparedAwsAccess(process.cwd(), this.flags['values-dir'])
     if (matchedSecrets === 0) {
       const pushedNames = pushedSecrets.map(secret => secret.name).join(', ')
       const target = this.flags['values-file'] ? ` in ${this.flags['values-file']}` : ''
