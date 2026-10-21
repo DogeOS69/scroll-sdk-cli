@@ -43,9 +43,10 @@ receipt](https://github.com/DogeOS69/dogeos-core/tree/v0.3.0-develop/tools/real-
 and [AWS setup and balance-alert runbook](https://github.com/DogeOS69/dogeos-core/blob/15b09e4f26590ebf3f1549656e0a57a04ec20021/docs/engineering/aws-gpu-dstack.md)
 (stock-dstack version in core PR #1513).
 Add AWS to the dstack project selected by `preparation.dstack.project` (default
-`main`), retaining its Vast backend. Use externally managed controller Secrets
-(`preparation.dstack.mode: external`), the scoped AWS controller role and the
-chart's credential-chain opt-in. The artifact/workload roles from
+`main`), retaining its Vast backend. Use the [AWS preparation workflow](dstack-aws-preparation.md)
+to import backend settings and prepare the controller role, or retain externally
+managed controller Secrets (`preparation.dstack.mode: external`), an existing
+scoped AWS controller role and the chart's credential-chain opt-in. The artifact/workload roles from
 `setup proof-aws-init` do not grant GPU provisioning. Keep the SDK's checked
 Worker contract/image and generated fleet/task ownership; do not submit the
 core Capacity Manager fleet/env wrappers or copy a different release's image.
@@ -412,10 +413,14 @@ Default credentials without an IRSA annotation do not impose that metadata setti
 
 The switch also enables automatic backend discovery in dstack 0.21.5. Configure
 the native AWS backend with `creds.type: default` in the referenced projects Secret,
-and grant the role only its intended provider permissions. This does not create
-an IAM role or AWS backend. The credential importer currently handles Vast.ai/GCP;
-for externally managed AWS controller Secrets, select `preparation.dstack.mode:
-external` in a plan/apply spec and provide those Secrets separately. Default
+and grant the role only its intended provider permissions. The switch alone does
+not create a role. The credential importer supports AWS via explicit existing
+VPCs as well as Vast.ai/GCP. To prepare IAM/IRSA automatically, select
+`preparation.dstack.aws.action: create` or `reuse`; follow the
+[AWS preparation runbook](dstack-aws-preparation.md). This explicit preparation
+also enables default credentials and generates the role annotation. For externally
+managed controller Secrets, select `preparation.dstack.mode: external` and provide
+those Secrets separately. Default
 Vast.ai deployments need no change. Hand-edited generated values are replaced on
 regeneration; keep this intent in the source configuration.
 

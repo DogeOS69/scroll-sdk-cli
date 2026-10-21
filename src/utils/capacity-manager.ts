@@ -16,6 +16,7 @@ import {assertDeploymentSpecFields} from './deployment-spec-fields.js'
 import {validateDstackAwsBackend} from './dstack-credentials.js'
 import {assertDstackInternalIngress} from './dstack-internal-tls.js'
 import {GenerationTransaction} from './generation-transaction.js'
+import {dstackAwsIntent, withPreparedDstackAws} from './preparation-dstack-aws.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
 import {DEFAULT_PROOF_DEPLOYMENT_CONTRACT, readProofDeploymentContract, resolveContractFile, validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {workerLaunch} from './proof-workers-plan.js'
@@ -57,7 +58,7 @@ export function capacitySpec(root: string, specFile?: string): DeploymentSpec {
     delete spec.proofWorkers
   }
 
-  return spec
+  return withPreparedDstackAws(root, spec)
 }
 
 const architectures = {A10G: '86', A100: '80', A6000: '86', L4: '89', L40S: '89', RTX3090: '86', RTX4090: '89'}
@@ -102,7 +103,7 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
     if (config.provider === 'aws') {
       validateDstackAwsBackend(preparation.aws)
       if (config.regions.some(region => !preparation.aws!.vpcIds[region])) throw new Error('Every capacityManager AWS region requires an explicit dstack VPC ID')
-      if (spec.dstackController.defaultCredentialsEnabled !== true || !/^arn:aws(?:-[a-z]+)?:iam::\d{12}:role\/[\w+,./=@-]+$/.test(spec.dstackController.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn'] ?? '')) throw new Error('AWS capacityManager requires dstack defaultCredentialsEnabled and an existing controller IRSA role annotation')
+      if (!dstackAwsIntent(spec) && (spec.dstackController.defaultCredentialsEnabled !== true || !/^arn:aws(?:-[a-z]+)?:iam::\d{12}:role\/[\w+,./=@-]+$/.test(spec.dstackController.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn'] ?? ''))) throw new Error('AWS capacityManager requires dstack defaultCredentialsEnabled and an existing controller IRSA role annotation')
     }
   }
 

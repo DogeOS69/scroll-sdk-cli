@@ -207,6 +207,15 @@ describe('Core capacity manager', () => {
     expect(() => resolveCapacityManager(spec)).to.throw('must include')
   })
 
+  it('allows a planned dstack role without requiring the operator to copy an ARN', () => {
+    const {spec} = fixture()
+    spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1'}, provider: 'aws'}
+    spec.preparation!.dstack = {aws: {action: 'create', vpcIds: {'us-east-1': 'vpc-00000000000000000'}}, mode: 'import', providers: ['aws']}
+    expect(() => resolveCapacityManager(spec)).not.to.throw()
+    spec.dstackController!.defaultCredentialsEnabled = false
+    expect(() => resolveCapacityManager(spec)).to.throw('default credentials')
+  })
+
   it('rejects missing SDK templates and excludes deployment-specific DevNet profiles', () => {
     const {spec} = fixture()
     const sdk = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-sdk-'))
