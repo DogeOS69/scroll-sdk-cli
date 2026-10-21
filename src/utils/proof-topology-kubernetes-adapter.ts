@@ -407,8 +407,8 @@ function configureWorkerValues(
   values.command = [PROVER_WORKER_EXECUTABLE]
   values.args = worker.argv
   values.env = worker.environment
-  values.termination ||= {}
-  values.termination.gracePeriodSeconds = 420
+  // Pod termination grace is operator-owned Helm configuration. Preserve it
+  // across regeneration; operators size it above the worker's drain timeout.
   values.service ||= {}
   values.service.main ||= {}
   values.service.main.enabled = false
