@@ -7,7 +7,6 @@ import sinon from 'sinon'
 
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
-import Alb from '../../src/commands/setup/alb.js'
 import TestIngress from '../../src/commands/test/ingress.js'
 import {AwsCliRunner} from '../../src/utils/aws-cli.js'
 import {verifyExistingAlbTargetHealth} from '../../src/utils/existing-alb-runtime.js'
@@ -67,7 +66,6 @@ describe('existing ALB runtime ownership', () => {
       fs.writeFileSync(path.join(root, 'kubectl'), `#!${process.execPath}\nconst fs = require('node:fs'); const f = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(root, 'fixture.json'))})); const args = process.argv.slice(2); if (args[0] !== '--context' || args[1] !== 'fixture-context' || args[2] !== 'get') process.exit(2); const result = {'targetgroupbindings.elbv2.k8s.aws': {items: f.bindings}, service: f.service, 'endpointslices.discovery.k8s.io': {items: f.slices}}[args[3]]; if (!result) process.exit(2); console.log(JSON.stringify(result));\n`, {mode: 0o755})
       process.chdir(root)
       process.env.PATH = root
-      const preflight = sandbox.stub(Alb, 'run').resolves()
       sandbox.stub(AwsCliRunner.prototype, 'json').callsFake(f.aws.json)
       const log = sandbox.stub()
       const command: any = Object.create(TestIngress.prototype)
@@ -77,8 +75,6 @@ describe('existing ALB runtime ownership', () => {
       const compare = sandbox.spy(command, 'compareWithConfig')
       let error: unknown
       try {await command.run()} catch (error_) {error = error_}
-      expect(preflight.calledOnce).to.equal(true)
-      expect(preflight.firstCall.args[0]).to.include('--require-services')
       if (installed) {
         expect(error).to.equal(undefined)
         expect(log.calledWithMatch('Existing ALB targets healthy')).to.equal(true)
@@ -111,9 +107,7 @@ describe('existing ALB runtime ownership', () => {
       Object.assign(command, {configValues: {}, log() {}, parse: async () => ({flags: {namespace: 'legacy'}})})
       const ingresses = sandbox.stub(command, 'getIngresses').resolves({grafana: 'grafana.example.invalid'})
       const connectivity = sandbox.stub(command, 'checkHost').resolves(true)
-      const preflight = sandbox.stub(Alb, 'run').rejects(new Error('must not call ALB'))
       await command.run()
-      expect(preflight.called).false
       expect(ingresses.calledOnce).true
       expect(ingresses.firstCall.args[0]).eq('legacy')
       expect(ingresses.firstCall.args[1]).undefined

@@ -7,14 +7,13 @@ import path from 'node:path'
 
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
-import {projectExistingAlb, projectExistingAlbDirectory, suppressExistingAlbIngress, validateExistingAlb, validateExistingAlbSdk, verifyExistingAlb} from '../../src/utils/existing-alb.js'
+import {projectExistingAlb, projectExistingAlbDirectory, suppressExistingAlbIngress, validateExistingAlb, validateExistingAlbSdk} from '../../src/utils/existing-alb.js'
 import {reconcileDeploymentIngresses} from '../../src/utils/public-service-ingress.js'
 
 const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
 const loadBalancerArn = `${prefix}loadbalancer/app/example/0000000000000000`
 const listenerArn = `${prefix}listener/app/example/0000000000000000/1111111111111111`
 const targetGroupArn = `${prefix}targetgroup/example/2222222222222222`
-const certificateArn = 'arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000'
 const spec = () => ({infrastructure: {aws: {
   accountId: '000000000000',
   alb: {bindings: {'tso-service': {endpoint: 'public', serviceRef: {name: 'tso-service', port: 3000}, targetGroupArn}}, endpoints: {public: {listenerArn, loadBalancerArn}}, mode: 'existing'},
@@ -25,28 +24,8 @@ const files = () => ({'tso-service-production.yaml': yaml.dump({ingress: {main: 
   hosts: [{host: 'tso.example.invalid', paths: [{path: '/health', pathType: 'Exact'}, {path: '/signer', pathType: 'Prefix'}]}], ingressClassName: 'alb',
 }}})})
 
-function provider() {
-  const listener = {Certificates: [{CertificateArn: certificateArn}], ListenerArn: listenerArn, LoadBalancerArn: loadBalancerArn, Port: 443, Protocol: 'HTTPS'}
-  const responses: Record<string, any> = {
-    'describe-certificate': {Certificate: {NotAfter: 4_000_000_000, Status: 'ISSUED', SubjectAlternativeNames: ['*.example.invalid']}},
-    'describe-cluster': {cluster: {resourcesVpcConfig: {vpcId: 'vpc-example'}}},
-    'describe-listener-certificates': {Certificates: [{CertificateArn: certificateArn}]},
-    'describe-listeners': {Listeners: [listener]},
-    'describe-load-balancers': {LoadBalancers: [{LoadBalancerArn: loadBalancerArn, Scheme: 'internet-facing', State: {Code: 'active'}, Type: 'application', VpcId: 'vpc-example'}]},
-    'describe-rules': {Rules: [{Actions: [{TargetGroupArn: targetGroupArn, Type: 'forward'}], Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['tso.example.invalid']}}, {Field: 'path-pattern', PathPatternConfig: {Values: ['/health', '/signer', '/signer/*']}}], Priority: '10'}]},
-    'describe-tags': {TagDescriptions: [{Tags: []}]},
-    'describe-target-groups': {TargetGroups: [{HealthCheckEnabled: true, HealthCheckPath: '/health', HealthCheckPort: 'traffic-port', HealthCheckProtocol: 'HTTP', LoadBalancerArns: [loadBalancerArn], Matcher: {HttpCode: '200'}, Protocol: 'HTTP', TargetGroupArn: targetGroupArn, TargetType: 'ip', VpcId: 'vpc-example'}]},
-  }
-  const calls: string[][] = []
-  return {calls, json(args: string[]) {
-    calls.push(args)
-    if (!responses[args[1]]) throw new Error('Unexpected provider request')
-    if (args[1] === 'describe-tags') return {TagDescriptions: responses[args[1]].TagDescriptions.map((item: any) => ({...item, ResourceArn: args[3]}))}
-    return responses[args[1]]
-  }, responses}
-}
-
 describe('existing ALB lifecycle', () => {
+
   it('disables managed Ingress and emits only external target references, idempotently', () => {
     const values: Record<string, string> = files()
     projectExistingAlb(values, spec())
@@ -98,19 +77,6 @@ describe('existing ALB lifecycle', () => {
     ['legacy discovery', (s: any) => {s.preparation = {tsoAlbEdge: {enabled: true}}}, 'disable preparation.tsoAlbEdge'],
     ['invalid service port', (s: any) => {s.infrastructure.aws.alb.bindings['tso-service'].serviceRef.port = 0}, 'numeric port'],
   ] as const) it(`rejects ${name}`, () => {const input = spec(); mutate(input); expect(() => validateExistingAlb(input)).to.throw(message)})
-
-  it('accepts reordered binding objects without accepting a changed backend', () => {
-    const values = files()
-    projectExistingAlb(values, spec())
-    const document = yaml.load(values['tso-service-production.yaml']) as any
-    const binding = document.targetGroupBindings['tso-service']
-    document.targetGroupBindings['tso-service'] = Object.fromEntries(Object.entries(binding).reverse())
-    values['tso-service-production.yaml'] = yaml.dump(document)
-    expect(verifyExistingAlb(spec(), values, provider()).bindings).deep.equal(['tso-service'])
-    document.targetGroupBindings['tso-service'].serviceRef.port = 9000
-    values['tso-service-production.yaml'] = yaml.dump(document)
-    expect(() => verifyExistingAlb(spec(), values, provider())).to.throw('stale values')
-  })
   it('leaves excluded application ingresses unchanged, including final preparation without ALB selection', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alb-unrelated-values-'))
     const unrelated = Object.fromEntries(['l1-devnet', 'dogecoin', 'blockbook', 'l1-interface', 'scroll-monitor', 'dstack-controller'].map(name => [
@@ -135,156 +101,6 @@ describe('existing ALB lifecycle', () => {
       projectExistingAlbDirectory(root, input, true)
       for (const [file, content] of Object.entries(unrelated)) expect(fs.readFileSync(path.join(root, file), 'utf8')).to.equal(content)
     } finally {fs.rmSync(root, {force: true, recursive: true})}
-  })
-
-  it('verifies selected AWS resources using only describe calls', () => {
-    const values = files()
-    projectExistingAlb(values, spec())
-    const aws = provider()
-    expect(verifyExistingAlb(spec(), values, aws)).to.deep.equal({bindings: ['tso-service'], loadBalancers: 1})
-    expect(aws.calls.every(args => args[1].startsWith('describe-'))).to.equal(true)
-  })
-
-  for (const [name, mutate, message] of [
-    ['controller-owned ALB', (r: any) => {r['describe-tags'].TagDescriptions[0].Tags.push({Key: 'ingress.k8s.aws/stack', Value: 'another-release'})}, 'externally managed ALB'],
-    ['wrong VPC', (r: any) => {r['describe-load-balancers'].LoadBalancers[0].VpcId = 'other'}, 'selected EKS VPC'],
-    ['wrong target type', (r: any) => {r['describe-target-groups'].TargetGroups[0].TargetType = 'instance'}, 'HTTP/IP group'],
-    ['wrong health path', (r: any) => {r['describe-target-groups'].TargetGroups[0].HealthCheckPath = '/'}, 'health check'],
-    ['broad TSO route', (r: any) => {r['describe-rules'].Rules[0].Conditions[1].PathPatternConfig.Values = ['/*']}, 'outside the generated ingress policy'],
-    ['missing route', (r: any) => {r['describe-rules'].Rules = []}, 'missing listener rule'],
-    ['default forwarding', (r: any) => {r['describe-rules'].Rules[0].Conditions = []}, 'explicit host/path'],
-    ['foreign host', (r: any) => {r['describe-rules'].Rules[0].Conditions[0].HostHeaderConfig.Values.push('other.example.invalid')}, 'outside the generated ingress policy'],
-    ['expired certificate', (r: any) => {r['describe-certificate'].Certificate.NotAfter = 0}, 'unexpired issued ACM'],
-    ['certificate mismatch', (r: any) => {r['describe-certificate'].Certificate.SubjectAlternativeNames = ['other.invalid']}, 'unexpired issued ACM'],
-  ] as const) it(`fails preflight for ${name}`, () => {
-    const values = files()
-    projectExistingAlb(values, spec())
-    const aws = provider()
-    mutate(aws.responses)
-    expect(() => verifyExistingAlb(spec(), values, aws)).to.throw(message)
-  })
-
-  for (const authentication of ['authenticate-oidc', 'authenticate-cognito']) {
-    it(`rejects ${authentication} on the selected forwarding rule`, () => {
-      const values = files()
-      projectExistingAlb(values, spec())
-      const aws = provider()
-      aws.responses['describe-rules'].Rules[0].Actions = [
-        {Order: 1, Type: authentication},
-        {Order: 2, TargetGroupArn: targetGroupArn, Type: 'forward'},
-      ]
-      expect(() => verifyExistingAlb(spec(), values, aws)).to.throw('single forward action')
-    })
-  }
-
-  it('does not silently repair tampered values during verification', () => {
-    const values: Record<string, string> = files()
-    projectExistingAlb(values, spec())
-    const changed = yaml.load(values['tso-service-production.yaml']) as any
-    changed.targetGroupBindings['tso-service'].serviceRef.name = 'unrelated'
-    values['tso-service-production.yaml'] = yaml.dump(changed)
-    expect(() => verifyExistingAlb(spec(), values, provider())).to.throw('stale values')
-  })
-
-  for (const ownership of ['elbv2.k8s.aws/cluster', 'ingress.k8s.aws/stack', 'service.k8s.aws/stack', 'gateway.k8s.aws/stack', 'missing', 'wrong-resource']) {
-    it(`rejects target group ownership ${ownership} even when the ALB is independent`, () => {
-      const values = files()
-      projectExistingAlb(values, spec())
-      const aws = provider()
-      const json = (args: string[]) => {
-        if (args[1] === 'describe-tags' && args[3] === targetGroupArn) return {TagDescriptions: ownership === 'missing' ? [] : [{
-          ResourceArn: ownership === 'wrong-resource' ? loadBalancerArn : targetGroupArn,
-          Tags: ownership === 'wrong-resource' ? [] : [{Key: ownership, Value: 'old-owner'}],
-        }]}
-        return aws.json(args)
-      }
-
-      expect(() => verifyExistingAlb(spec(), values, {json})).to.throw('externally managed target group')
-    })
-  }
-
-  for (const [apiPath, frontendFirst] of [['/api', true], ['/api', false], ['/api/v2', true], ['/api/v2', false]] as const) {
-    it(`${frontendFirst ? 'rejects' : 'accepts'} overlapping Blockscout ${apiPath} routes with frontend ${frontendFirst ? 'first' : 'last'}`, () => {
-      const input = spec()
-      const frontendGroup = targetGroupArn.replace('2222222222222222', '3333333333333333')
-      input.infrastructure.aws!.alb!.bindings = {
-        'blockscout-api': {endpoint: 'public', serviceRef: {name: 'api', port: 80}, targetGroupArn},
-        'blockscout-frontend': {endpoint: 'public', serviceRef: {name: 'frontend', port: 80}, targetGroupArn: frontendGroup},
-      }
-      const ingress = (route: string) => ({enabled: true, hostname: 'explorer.example.invalid', paths: [{path: route, pathType: 'Prefix'}]})
-      const values = {'blockscout-production.yaml': yaml.dump({'blockscout-stack': {blockscout: {ingress: ingress(apiPath)}, frontend: {ingress: ingress('/')}}})}
-      projectExistingAlb(values, input)
-      const aws = provider()
-      const baseRule = aws.responses['describe-rules'].Rules[0]
-      const rule = (group: string, paths: string[], priority: string) => ({
-        ...baseRule, Actions: [{TargetGroupArn: group, Type: 'forward'}], Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['explorer.example.invalid']}}, {Field: 'path-pattern', PathPatternConfig: {Values: paths}}],
-        Priority: priority,
-      })
-      // Response ordering must not substitute for AWS priority ordering.
-      aws.responses['describe-rules'].Rules = [rule(targetGroupArn, [apiPath, `${apiPath}/*`], frontendFirst ? '20' : '10'), rule(frontendGroup, ['/*'], frontendFirst ? '10' : '20')]
-      const json = (args: string[]) => args[1] === 'describe-target-groups'
-        ? {TargetGroups: [{...aws.responses['describe-target-groups'].TargetGroups[0], HealthCheckPath: '/', TargetGroupArn: args[3]}]}
-        : aws.json(args)
-      const verify = () => verifyExistingAlb(input, values, {json})
-      if (frontendFirst) expect(verify).to.throw('shadows blockscout-api')
-      else expect(verify()).to.deep.equal({bindings: ['blockscout-api', 'blockscout-frontend'], loadBalancers: 1})
-    })
-  }
-
-  for (const kind of ['fixed-response', 'redirect', 'foreign-forward', 'host-wildcard', 'path-wildcard', 'regex', 'source-restricted', 'authenticate']) {
-    it(`rejects an earlier ${kind} rule that intercepts the selected route`, () => {
-      const values = files()
-      projectExistingAlb(values, spec())
-      const aws = provider()
-      const rule: any = {
-        Actions: [{FixedResponseConfig: {ContentType: 'text/plain', StatusCode: '503'}, Type: 'fixed-response'}],
-        Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['tso.example.invalid']}}], Priority: '1',
-      }
-      if (kind === 'redirect') rule.Actions = [{RedirectConfig: {Host: 'other.example.invalid', StatusCode: 'HTTP_302'}, Type: 'redirect'}]
-      if (kind === 'foreign-forward') rule.Actions = [{TargetGroupArn: targetGroupArn.replace('2222222222222222', '3333333333333333'), Type: 'forward'}]
-      if (kind === 'host-wildcard') rule.Conditions[0].HostHeaderConfig.Values = ['*.EXAMPLE.INVALID']
-      if (kind === 'path-wildcard') rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {Values: ['/signer/*/task?']}})
-      if (kind === 'regex') rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {RegexValues: ['^/signer/.*$']}})
-      if (kind === 'source-restricted') rule.Conditions.push({Field: 'source-ip', SourceIpConfig: {Values: ['203.0.113.0/24']}})
-      if (kind === 'authenticate') {
-        rule.Actions = [{Order: 1, Type: 'authenticate-oidc'}, {Order: 2, TargetGroupArn: targetGroupArn, Type: 'forward'}]
-        rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {Values: ['/health']}})
-      }
-
-      aws.responses['describe-rules'].Rules.unshift(rule)
-      expect(() => verifyExistingAlb(spec(), values, aws)).to.throw(kind === 'authenticate' ? 'single forward action' : 'higher-priority listener rule 1 may shadow')
-    })
-  }
-
-  for (const kind of ['other-host', 'other-path', 'lower-priority', 'default', 'same-target']) {
-    it(`accepts a non-intercepting ${kind} rule`, () => {
-      const values = files()
-      projectExistingAlb(values, spec())
-      const aws = provider()
-      const rule: any = {
-        Actions: [{FixedResponseConfig: {ContentType: 'text/plain', StatusCode: '503'}, Type: 'fixed-response'}],
-        Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['tso.example.invalid']}}], Priority: '1',
-      }
-      if (kind === 'other-host') rule.Conditions[0].HostHeaderConfig.Values = ['other.example.invalid']
-      if (kind === 'other-path') rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {Values: ['/unrelated/*']}})
-      if (kind === 'lower-priority') rule.Priority = '20'
-      if (kind === 'default') {rule.Priority = 'default'; rule.Conditions = []}
-      if (kind === 'same-target') {
-        rule.Actions = [{TargetGroupArn: targetGroupArn, Type: 'forward'}]
-        rule.Conditions.push({Field: 'path-pattern', PathPatternConfig: {Values: ['/health']}})
-      }
-
-      aws.responses['describe-rules'].Rules.unshift(rule)
-      expect(verifyExistingAlb(spec(), values, aws).bindings).to.deep.equal(['tso-service'])
-    })
-  }
-
-  it('never exposes provider response details in failures', () => {
-    const values = files()
-    projectExistingAlb(values, spec())
-    const run = () => verifyExistingAlb(spec(), values, {json() {throw new Error('private-provider-response')}})
-    expect(run).to.throw('provider output omitted')
-    expect(run).not.to.throw('private-provider-response')
   })
 
   it('requires binding templates in the pinned SDK commit, not just the working tree', () => {

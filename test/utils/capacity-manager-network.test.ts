@@ -1,157 +1,68 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Offline AWS/Kubernetes fixtures. */
 import {expect} from 'chai'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {capacityConnectionUrl, capacityNetworkTemplate, prepareCapacityNetwork, validateCapacityConnection} from '../../src/utils/capacity-manager-network.js'
-import {digest} from '../../src/utils/preparation-io.js'
+import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
-const input = {certificateArn: 'arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000', hostname: 'controller.example.invalid', inboundCidrs: ['10.0.0.0/16'], region: 'us-east-1', stackName: 'example-cm-network', subnets: ['subnet-00000001', 'subnet-00000002'], vpcId: 'vpc-00000000'}
-const connection = () => ({internalAlb: structuredClone(input), mode: 'internal-alb' as const})
+import {capacityConnectionUrl, prepareDstackNetworkForSpec, validateCapacityConnection} from '../../src/utils/capacity-manager-network.js'
 
-describe('capacity-manager private network', () => {
-  let root: string
-  beforeEach(() => {root = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-network-'))})
-  afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
-
-  it('previews without AWS calls, no public DNS/certificate changes, and no GPU resources', () => {
-    const result = prepareCapacityNetwork(root, connection(), 'test-deployment', 'chain', 'controller', false, {json() {throw new Error('No provider calls allowed')}})
-    expect(result.applied).to.equal(false)
-    const template = capacityNetworkTemplate(input)
-    expect(template.Resources.LoadBalancer.Properties.Scheme).to.equal('internal')
-    expect(template.Resources.PrivateZone.Properties).to.deep.include({Name: input.hostname, VPCs: [{VPCId: input.vpcId, VPCRegion: input.region}]})
-    expect(Object.values(template.Resources).map((r: any) => r.Type)).not.to.include('AWS::EC2::Instance')
-    expect(template.Resources.Listener.Properties.Port).to.equal(443)
-    expect(template.Resources.TargetGroup.Properties.HealthCheckPath).to.equal('/')
-    expect(() => capacityConnectionUrl(root, connection())).to.throw('until ready')
-  })
-
-  it('rejects ambiguous, insecure and mismatched network declarations', () => {
-    for (const value of [
-      {mode: 'existing-https', serverUrl: 'http://controller:3000'},
-      {mode: 'existing-https', serverUrl: 'https://user:FAKE_SECRET@controller.invalid'},
-      {internalAlb: input, mode: 'existing-https', serverUrl: 'https://controller.invalid'},
-      {mode: 'internal-alb'},
-      {internalAlb: {...input, inboundCidrs: ['0.0.0.0/0']}, mode: 'internal-alb'},
-      {internalAlb: {...input, inboundCidrs: ['10.0.0.0/7']}, mode: 'internal-alb'},
-      {internalAlb: {...input, region: 'us-west-2'}, mode: 'internal-alb'},
-    ]) {
-      expect(() => validateCapacityConnection(value as any)).to.throw().and.not.to.have.property('message', 'FAKE_SECRET')
-    }
-
-    expect(capacityConnectionUrl(root, {mode: 'existing-https', serverUrl: 'https://controller.example.invalid'})).to.equal('https://controller.example.invalid')
-  })
-
-  function provider() {
-    const calls: string[][] = []
-    let stack: any
-    let template: any
-    let foreignZone = false
-    const aws = {json(args: string[]) {
-      calls.push(args)
-      switch (args.slice(0, 2).join(' ')) {
-        case 'acm describe-certificate': { return {Certificate: {DomainValidationOptions: [{ValidationMethod: 'DNS', ValidationStatus: 'SUCCESS'}], NotAfter: Date.now() / 1000 + 86_400, Status: 'ISSUED', SubjectAlternativeNames: ['*.example.invalid'], Type: 'AMAZON_ISSUED'}}
-        }
-
-        case 'sts get-caller-identity': { return {Account: '000000000000'}
-        }
-
-        case 'ec2 describe-subnets': { return {Subnets: input.subnets.map((SubnetId, i) => ({AvailabilityZone: `us-east-1${i ? 'b' : 'a'}`, AvailableIpAddressCount: 100, MapPublicIpOnLaunch: false, State: 'available', SubnetId, VpcId: input.vpcId}))}
-        }
-
-        case 'ec2 describe-vpc-attribute': { return {EnableDnsHostnames: {Value: true}, EnableDnsSupport: {Value: true}}
-        }
-
-        case 'cloudformation list-stacks': { return {StackSummaries: stack ? [stack] : []}
-        }
-
-        case 'route53 list-hosted-zones-by-vpc': { return {HostedZoneSummaries: foreignZone ? [{Name: input.hostname + '.'}] : []}
-        }
-
-        case 'cloudformation create-stack': {
-          const index = args.indexOf('--tags')
-          const Tags = args.slice(index + 1, args.indexOf('--client-request-token')).map(v => {const [key, value] = v.split(','); return {Key: key.slice(4), Value: value.slice(6)}})
-          template = JSON.parse(args[args.indexOf('--template-body') + 1])
-          stack = {Outputs: [{OutputKey: 'Url', OutputValue: `https://${input.hostname}`}, {OutputKey: 'TargetGroupArn', OutputValue: 'arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/example/0000'}, {OutputKey: 'SecurityGroupId', OutputValue: 'sg-00000000'}], StackId: 'nonfunctional-stack-id', StackName: input.stackName, StackStatus: 'CREATE_IN_PROGRESS', Tags}
-          return {StackId: stack.StackId}
-        }
-
-        case 'cloudformation describe-stacks': { return {Stacks: [stack]}
-        }
-
-        case 'cloudformation get-template': { return {TemplateBody: template}
-        }
-
-        default: { throw new Error('Unexpected provider mutation or read')
-        }
-      }
-    }}
-    return {aws, calls, corruptTemplate() {template.Resources.Listener.Properties.Port = 80}, foreignZone() {foreignZone = true}, get stack() {return stack}}
+const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
+const refs = {listenerArn: `${prefix}listener/app/dstack/0000/0000`, loadBalancerArn: `${prefix}loadbalancer/app/dstack/0000`, targetGroupArn: `${prefix}targetgroup/dstack/0000`}
+const connection = () => ({existingAlb: {...refs}, mode: 'existing-alb' as const, serverUrl: 'https://dstack.example.invalid'})
+function fixture(): DeploymentSpec {return {capacityManager: {connection: connection()}, dstackController: {enabled: true}, infrastructure: {aws: {accountId: '000000000000', eksClusterName: 'fixture', region: 'us-east-1'}, namespace: 'fixture', provider: 'aws'}, preparation: {}} as DeploymentSpec}
+function provider() {
+  const calls: string[][] = []
+  const data: Record<string, any> = {
+    'describe-certificate': {Certificate: {DomainValidationOptions: [{ValidationMethod: 'DNS', ValidationStatus: 'SUCCESS'}], NotAfter: Date.now() / 1000 + 86_400, Status: 'ISSUED', SubjectAlternativeNames: ['dstack.example.invalid'], Type: 'AMAZON_ISSUED'}},
+    'describe-cluster': {cluster: {resourcesVpcConfig: {vpcId: 'vpc-0000'}}},
+    'describe-listeners': {Listeners: [{Certificates: [{CertificateArn: 'arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000'}], ListenerArn: refs.listenerArn, LoadBalancerArn: refs.loadBalancerArn, Port: 443, Protocol: 'HTTPS'}]},
+    'describe-load-balancers': {LoadBalancers: [{AvailabilityZones: [{SubnetId: 'subnet-0000'}, {SubnetId: 'subnet-0001'}], LoadBalancerArn: refs.loadBalancerArn, Scheme: 'internal', SecurityGroups: ['sg-0000'], State: {Code: 'active'}, Type: 'application', VpcId: 'vpc-0000'}]},
+    'describe-rules': {Rules: [{Actions: [{TargetGroupArn: refs.targetGroupArn, Type: 'forward'}], Conditions: [{Field: 'host-header', HostHeaderConfig: {Values: ['dstack.example.invalid']}}, {Field: 'path-pattern', PathPatternConfig: {Values: ['/*']}}]}]},
+    'describe-security-groups': {SecurityGroups: [{GroupId: 'sg-0000', IpPermissions: [{FromPort: 443, IpProtocol: 'tcp', IpRanges: [{CidrIp: '10.0.0.0/16'}], ToPort: 443}], VpcId: 'vpc-0000'}]},
+    'describe-tags': {TagDescriptions: [refs.loadBalancerArn, refs.targetGroupArn].map(ResourceArn => ({ResourceArn, Tags: [{Key: 'ManagedBy', Value: 'CloudFormation'}]}))},
+    'describe-target-groups': {TargetGroups: [{LoadBalancerArns: [refs.loadBalancerArn], Port: 3000, Protocol: 'HTTP', TargetGroupArn: refs.targetGroupArn, TargetType: 'ip', VpcId: 'vpc-0000'}]},
+    'get-caller-identity': {Account: '000000000000'},
   }
+  return {calls, data, json(args: string[]) {calls.push(args); if (!(args[1] in data)) throw new Error('Unexpected or mutating operation'); return data[args[1]]}}
+}
 
-  it('resumes an owned asynchronous stack and produces a private backend binding', () => {
-    const mock = provider()
-    const run = () => prepareCapacityNetwork(root, connection(), 'test-deployment', 'chain', 'controller', true, mock.aws)
-    expect(run().status).to.equal('creating')
-    expect(run().status).to.equal('CREATE_IN_PROGRESS')
-    expect(() => capacityConnectionUrl(root, connection())).to.throw('not ready')
-    mock.stack.StackStatus = 'CREATE_COMPLETE'
-    expect(run().status).to.equal('ready')
-    expect(capacityConnectionUrl(root, connection())).to.equal(`https://${input.hostname}`)
-    expect(run().status).to.equal('ready')
-    expect(mock.calls.filter(c => c[1] === 'create-stack')).to.have.length(1)
+describe('existing dstack AWS endpoint', () => {
+  let root: string
+  beforeEach(() => {root = fs.mkdtempSync(path.join(os.tmpdir(), 'existing-dstack-'))})
+  afterEach(() => {fs.rmSync(root, {force: true, recursive: true})})
+  it('records an externally owned target group without a stack or genesis', () => {
+    const aws = provider(); const spec = fixture()
+    prepareDstackNetworkForSpec(root, spec, aws)
+    expect(capacityConnectionUrl(root, spec.capacityManager!.connection)).eq(connection().serverUrl)
     const binding = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/dstack-targetgroupbinding.json'), 'utf8'))
-    expect(binding.metadata.namespace).to.equal('chain')
-    expect(binding.spec.serviceRef).to.deep.equal({name: 'controller', port: 3000})
-    expect(binding.spec.networking.ingress[0].from[0].securityGroup.groupID).to.equal('sg-00000000')
-    expect(() => capacityConnectionUrl(root, {...connection(), internalAlb: {...input, subnets: ['subnet-00000003', 'subnet-00000004']}})).to.throw('not ready')
-    mock.corruptTemplate()
-    expect(run).to.throw('template differs')
+    expect(binding.spec.targetGroupARN).eq(refs.targetGroupArn)
+    expect(binding.spec.networking.ingress[0].from).deep.eq([{securityGroup: {groupID: 'sg-0000'}}])
+    const before = fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/network.json'), 'utf8')
+    prepareDstackNetworkForSpec(root, spec, aws)
+    expect(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/network.json'), 'utf8')).eq(before)
+    expect(aws.calls.every(call => /^(get|describe)-/.test(call[1]))).true
   })
-
-  it('ignores property order and refreshes legacy hash-only state by reading the live template', () => {
-    const mock = provider()
-    const original = connection()
-    // eslint-disable-next-line perfectionist/sort-objects -- Exercise YAML property reordering.
-    const reordered = {mode: original.mode, internalAlb: Object.fromEntries(Object.entries(input).reverse())} as typeof original
-    const preview = (selected: typeof original) => prepareCapacityNetwork(root, selected, 'test-deployment', 'chain', 'controller')
-    expect(preview(original).fingerprint).equal(preview(reordered).fingerprint)
-    const run = (selected = original) => prepareCapacityNetwork(root, selected, 'test-deployment', 'chain', 'controller', true, mock.aws)
-    run()
-    mock.stack.StackStatus = 'CREATE_COMPLETE'
-    run()
-    expect(capacityConnectionUrl(root, reordered)).equal(`https://${input.hostname}`)
-    const file = path.join(root, '.scrollsdk/capacity-manager/network.json')
-    const legacy = JSON.parse(fs.readFileSync(file, 'utf8'))
-    delete legacy.connection
-    legacy.connectionSha256 = digest(JSON.stringify(original))
-    fs.writeFileSync(file, JSON.stringify(legacy))
-    mock.stack.Tags.find((tag: any) => tag.Key === 'IntentSha256').Value = 'legacy-order-dependent-fingerprint'
-    expect(() => capacityConnectionUrl(root, reordered)).to.throw('Refresh legacy network state')
-    expect(run(reordered).status).equal('ready')
-    expect(capacityConnectionUrl(root, reordered)).equal(`https://${input.hostname}`)
-    expect(mock.calls.filter(c => c[1] === 'create-stack')).length(1)
-    expect(() => run({...original, internalAlb: {...input, subnets: [...input.subnets].reverse()}})).to.throw('template differs')
-    expect(mock.calls.some(c => ['delete-stack', 'update-stack'].includes(c[1]))).equal(false)
+  it('rejects removed creation mode and invalid URL/resource pairs', () => {
+    for (const input of [{internalAlb: {}, mode: 'internal-alb'}, {...connection(), serverUrl: 'https://user:password@example.invalid'}, {...connection(), serverUrl: 'https://example.invalid/path'}, {...connection(), existingAlb: {...refs, targetGroupArn: 'not-an-arn'}}]) expect(() => validateCapacityConnection(input as any)).throw()
+    expect(() => validateCapacityConnection({mode: 'existing-https', serverUrl: 'https://dstack.example.invalid'})).not.throw()
   })
-
-  it('does not adopt stacks, shadow existing exact-host private zones or replay failed stacks', () => {
-    const mock = provider()
-    const run = () => prepareCapacityNetwork(root, connection(), 'test-deployment', 'chain', 'controller', true, mock.aws)
-    run()
-    mock.stack.StackStatus = 'ROLLBACK_COMPLETE'
-    expect(run().status).to.equal('ROLLBACK_COMPLETE')
-    mock.stack.Tags = []
-    expect(run).to.throw('ownership or intent differs')
-    expect(mock.calls.filter(c => c[1] === 'create-stack')).to.have.length(1)
-    const second = provider()
-    second.foreignZone()
-    expect(() => prepareCapacityNetwork(root, connection(), 'test-deployment', 'chain', 'controller', true, second.aws)).to.throw('private zone already exists')
-    expect(second.calls.some(c => c[1] === 'create-stack')).to.equal(false)
+  it('does not audit externally managed policies, routing or certificates', () => {
+    const changes = [
+      (data: any) => {data['describe-load-balancers'].LoadBalancers[0].Scheme = 'internet-facing'},
+      (data: any) => {data['describe-tags'].TagDescriptions[0].Tags = [{Key: 'ingress.k8s.aws/stack', Value: 'controller'}]},
+      (data: any) => {data['describe-security-groups'].SecurityGroups[0].IpPermissions[0].IpRanges[0].CidrIp = '0.0.0.0/0'},
+      (data: any) => {data['describe-rules'].Rules[0].Conditions[0].HostHeaderConfig.Values = ['wrong.example.invalid']},
+      (data: any) => {data['describe-certificate'].Certificate.Status = 'PENDING_VALIDATION'},
+      (data: any) => {data['describe-target-groups'].TargetGroups[0].Port = 443},
+    ]
+    for (const change of changes) {const aws = provider(); change(aws.data); expect(() => prepareDstackNetworkForSpec(root, fixture(), aws)).not.throw()}
+    expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/network.json'))).true
   })
-
-  it('omits provider error contents', () => {
-    expect(() => prepareCapacityNetwork(root, connection(), 'test-deployment', 'chain', 'controller', true, {json() {throw new Error('FAKE_PRIVATE_PROVIDER_RESPONSE')}})).to.throw('details omitted')
+  it('rejects changed intent and redacts provider errors', () => {
+    prepareDstackNetworkForSpec(root, fixture(), provider())
+    expect(() => capacityConnectionUrl(root, {...connection(), serverUrl: 'https://other.example.invalid'})).throw('not been read')
+    expect(() => prepareDstackNetworkForSpec(root, fixture(), {json() {throw new Error('FAKE_PRIVATE_PROVIDER_RESPONSE')}})).throw('provider details omitted')
+    expect(() => capacityConnectionUrl(root, connection())).throw('Run setup aws')
   })
 })

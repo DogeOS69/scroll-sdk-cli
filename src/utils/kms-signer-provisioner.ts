@@ -1,14 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- AWS CLI responses are dynamic */
 import { getAddress, keccak256 } from 'ethers'
 import { execFileSync } from 'node:child_process'
-import { createPublicKey } from 'node:crypto'
+import { createHash, createPublicKey } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 
-import type { ArtifactStore } from './artifact-stores.js'
 import type { JsonOutputContext } from './json-output.js'
 import type { ManagedSignerConfig, ManagedSignerRole } from './signer-roles.js'
 
-import { ARCHIVE_WRITER_POLICY_NAMES, buildArchiveWriterPolicy } from './artifact-access.js'
-import {auditRolePolicies} from './iam-role-policy-audit.js'
+import {assertPreparationAwsReadOnly} from './aws-cli.js'
+import {ensureRetentionLifecycle} from './bucket-retention.js'
+import {type KmsKeyOwner, kmsKeyOwned, kmsOwnershipTags} from './kms-key-ownership.js'
+import {writeJson} from './preparation-io.js'
 import {normalizeS3ArchiveKeyPrefix} from './s3-archive.js'
 
 export type KmsSignerProvisionRole = Pick<
@@ -43,7 +46,6 @@ export interface KmsProvisionInput {
   archive?: BlobArchivePlan
   createArchiveBucket?: boolean
   kmsKeyId?: string
-  roleArn?: string
   serviceAccount?: string
 }
 
@@ -52,9 +54,9 @@ export interface KmsProvisionResult {
   aliasName: string
   keyArn: string
   keyId: string
+  /** Whether this deployment created the key; aws-roles checks the key policy of any other key. */
+  owned: boolean
   publicKeyBase64: string
-  roleArn?: string
-  roleName?: string
   serviceAccount: string
   signerConfig: ManagedSignerConfig
 }
@@ -111,26 +113,16 @@ export function deriveEthereumAddressFromSpkiDer(publicKeyBase64: string): strin
   return getAddress(`0x${hash.slice(-40)}`)
 }
 
-/** Prefix-scoped archive access for the legacy combined signer provisioner. */
-function archiveStorePolicy(bucket: string, keyPrefix?: string): Record<string, any> {
-  const prefix = normalizeS3ArchiveKeyPrefix(keyPrefix)
-  const bucketArn = `arn:aws:s3:::${bucket}`
-  return {
-    Statement: [
-      {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: `${bucketArn}/${prefix ? prefix + '/' : ''}*`},
-    ],
-    Version: '2012-10-17',
-  }
-}
-
 export class KmsSignerProvisioner {
   constructor(
     private readonly jsonCtx: JsonOutputContext,
-    private readonly profile?: string
+    private readonly profile?: string,
+    private readonly keyRecords = path.resolve('.data/kms-signers')
   ) {}
 
   inspectAddress(region: string, keyId: string): string {
-    return deriveEthereumAddressFromSpkiDer(this.fetchKmsPublicKey(region, keyId))
+    const metadata = this.describeKey(region, keyId)
+    return deriveEthereumAddressFromSpkiDer(this.fetchKmsPublicKey(region, metadata.Arn))
   }
 
   async provision(
@@ -145,55 +137,22 @@ export class KmsSignerProvisioner {
     const safeEksCluster = sanitizeName(identity.eksCluster)
     const aliasName = input.kmsKeyId || `alias/dogeos/${safeNetworkAlias}/${safeEksCluster}/${role.aliasSuffix}`
     const serviceAccount = input.serviceAccount || role.defaultServiceAccount
-    const roleName = input.roleArn
-      ? undefined
-      : truncateIamRoleName(`dogeos-${safeNetworkAlias}-${safeEksCluster}-${role.roleSuffix}`)
+    const owner: KmsKeyOwner = {catalogEntry: role.aliasSuffix, cluster: identity.eksCluster, deployment: identity.networkAlias}
 
     if (input.archive?.enabled && input.archive.bucket && input.createArchiveBucket !== false) {
       input.archive.created = this.ensureS3Bucket(input.archive.region || identity.awsRegion, input.archive.bucket, role.service)
     }
 
-    const keyInfo = this.ensureKmsKey(identity.awsRegion, aliasName, input.kmsKeyId, role)
+    const keyInfo = this.ensureKmsKey(identity.awsRegion, aliasName, input.kmsKeyId, role, owner)
     const publicKeyBase64 = this.fetchKmsPublicKey(identity.awsRegion, keyInfo.kmsKeyIdForConfig)
     const expectedAddress = deriveEthereumAddressFromSpkiDer(publicKeyBase64)
-    if (input.roleArn) auditRolePolicies({json: args => this.awsJson(args)}, input.roleArn.split('/').at(-1) as string, {
-      Statement: [{Action: ['kms:GetPublicKey', 'kms:Sign'], Effect: 'Allow', Resource: keyInfo.keyArn}],
-    }, [], ['kms'])
-    const roleArn = input.roleArn || this.ensureIamRole({
-      archiveBucket: input.archive?.enabled ? input.archive.bucket : undefined,
-      archiveKeyPrefix: input.archive?.keyPrefix,
-      awsRegion: identity.awsRegion,
-      eksCluster: identity.eksCluster,
-      keyArn: keyInfo.keyArn,
-      namespace: identity.namespace,
-      roleDescription: `${role.description} role`,
-      roleName: roleName as string,
-      service: role.service,
-      serviceAccount,
-    })
-
-    // Reusing a role must not silently skip the requested archive grant.
-    // Add a location-specific policy; do not replace its KMS/trust/other archive policies.
-    if (input.roleArn && input.archive?.enabled && input.archive.bucket) {
-      const roleName = input.roleArn.split('/').at(-1) as string
-      const existing = this.awsJson(['iam', 'get-role', '--role-name', roleName])
-      if (existing.Role?.Arn !== input.roleArn) throw new Error('Existing IAM role ARN does not match the requested archive role')
-      const prefix = normalizeS3ArchiveKeyPrefix(input.archive.keyPrefix)
-      const suffix = keccak256(Buffer.from(`${input.archive.bucket}/${prefix}`)).slice(2, 18)
-      auditRolePolicies({json: args => this.awsJson(args)}, roleName, archiveStorePolicy(input.archive.bucket, prefix), [`eth-da-submitter-archive-${suffix}`])
-      this.awsJson(['iam', 'put-role-policy', '--role-name', roleName,
-        '--policy-name', `eth-da-submitter-archive-${suffix}`, '--policy-document', JSON.stringify(archiveStorePolicy(input.archive.bucket, prefix))])
-      this.jsonCtx.info(`${role.service}: granted requested archive prefix on existing IAM role ${roleName}`)
-    }
-
     return {
       address: expectedAddress,
       aliasName,
       keyArn: keyInfo.keyArn,
       keyId: keyInfo.keyId,
+      owned: keyInfo.owned,
       publicKeyBase64,
-      roleArn,
-      roleName,
       serviceAccount,
       signerConfig: {
         backend: 'aws_kms',
@@ -207,27 +166,22 @@ export class KmsSignerProvisioner {
         role: role.role,
         service: role.service,
         serviceAccountName: serviceAccount,
-        serviceAccountRoleArn: roleArn,
       },
     }
   }
 
-  async provisionArchive(archive: BlobArchivePlan, options: {createBucket: boolean; roleArn?: string; sidecarStore?: Pick<ArtifactStore, 'bucket' | 'keyPrefix'>}): Promise<void> {
+  /** Bucket and retention only; the writer grant is part of the submitter role written by aws-roles. */
+  async provisionArchive(archive: BlobArchivePlan, options: {createBucket: boolean}): Promise<void> {
     if (!archive.enabled || !archive.bucket) return
     archive.keyPrefix = normalizeS3ArchiveKeyPrefix(archive.keyPrefix)
-    const match = options.roleArn?.match(/^arn:aws[\w-]*:iam::\d{12}:role\/(?:.*\/)?([^/]+)$/)
-    if (options.roleArn && !match) throw new Error('Invalid archive writer IAM role ARN')
     if (options.createBucket) archive.created = this.ensureS3Bucket(archive.region || 'us-east-1', archive.bucket, 'eth-da-submitter')
-    if (match) {
-      // Same document setup artifact-access --store da plans and checks.
-      const policy = buildArchiveWriterPolicy('da', {bucket: archive.bucket, keyPrefix: archive.keyPrefix}, options.sidecarStore)
-      auditRolePolicies({json: args => this.awsJson(args)}, match[1], policy, [ARCHIVE_WRITER_POLICY_NAMES.da])
-      this.awsJson(['iam', 'put-role-policy', '--role-name', match[1], '--policy-name', ARCHIVE_WRITER_POLICY_NAMES.da, '--policy-document', JSON.stringify(policy)])
-      this.jsonCtx.info('Updated the archive writer policy; signing key and role trust are unchanged.')
-    }
+    // DA blobs are kept forever: own this prefix's lifecycle rule and refuse expiring ones.
+    const lifecycle = ensureRetentionLifecycle({json: (args, options) => this.awsJson(args, options)}, 'da', {bucket: archive.bucket, keyPrefix: archive.keyPrefix, region: archive.region || 'us-east-1'})
+    if (lifecycle.changed) this.jsonCtx.info(`Set the DA archive retention lifecycle rule for s3://${archive.bucket}/${archive.keyPrefix}; no blob expires.`)
   }
 
   private aws(args: string[], options: AwsCommandOptions = {}): any {
+    assertPreparationAwsReadOnly(args)
     const fullArgs = [...args]
     if (options.region) fullArgs.push('--region', options.region)
     if (options.profile || this.profile) fullArgs.push('--profile', options.profile || this.profile as string)
@@ -261,183 +215,51 @@ export class KmsSignerProvisioner {
     return result.KeyMetadata
   }
 
-  private ensureIamRole(options: {
-    archiveBucket?: string
-    archiveKeyPrefix?: string
-    awsRegion: string
-    eksCluster: string
-    keyArn: string
-    namespace: string
-    roleDescription: string
-    roleName: string
-    service: string
-    serviceAccount: string
-  }): string {
-    const accountId = this.awsText(['sts', 'get-caller-identity'], { query: 'Account' })
-    const issuer = this.awsText(
-      ['eks', 'describe-cluster', '--name', options.eksCluster],
-      { query: 'cluster.identity.oidc.issuer', region: options.awsRegion }
-    )
-    if (!issuer || issuer === 'None') {
-      this.jsonCtx.error(
-        'E702_EKS_OIDC_MISSING',
-        `EKS cluster ${options.eksCluster} does not expose an OIDC issuer`,
-        'CONFIGURATION',
-        true,
-        { cluster: options.eksCluster }
-      )
-    }
-
-    const issuerHostPath = issuer.replace(/^https:\/\//, '')
-    const oidcProviderArn = `arn:aws:iam::${accountId}:oidc-provider/${issuerHostPath}`
-    const roleArn = `arn:aws:iam::${accountId}:role/${options.roleName}`
-    const trustPolicy = {
-      Statement: [{
-        Action: 'sts:AssumeRoleWithWebIdentity',
-        Condition: {
-          StringEquals: {
-            [`${issuerHostPath}:aud`]: 'sts.amazonaws.com',
-            [`${issuerHostPath}:sub`]: `system:serviceaccount:${options.namespace}:${options.serviceAccount}`,
-          },
-        },
-        Effect: 'Allow',
-        Principal: {
-          Federated: oidcProviderArn,
-        },
-      }],
-      Version: '2012-10-17',
-    }
-
-    const trustPolicyDocument = JSON.stringify(trustPolicy)
-    try {
-      this.awsJson(['iam', 'get-role', '--role-name', options.roleName])
-      // Identity-only preparation does not know the archive/sidecar intent.
-      // Audit S3 when configuring the archive, not against an empty S3 scope.
-      auditRolePolicies({json: args => this.awsJson(args)}, options.roleName, {
-        Statement: [
-          {Action: ['kms:GetPublicKey', 'kms:Sign'], Effect: 'Allow', Resource: options.keyArn},
-          ...(options.archiveBucket ? archiveStorePolicy(options.archiveBucket, options.archiveKeyPrefix).Statement : []),
-        ],
-      }, [`${options.service}-kms-sign`, ...(options.archiveBucket ? ['eth-da-submitter-s3-archive'] : [])], options.archiveBucket ? ['s3', 'kms'] : ['kms'])
-      this.awsJson([
-        'iam',
-        'update-assume-role-policy',
-        '--role-name',
-        options.roleName,
-        '--policy-document',
-        trustPolicyDocument,
-      ])
-      this.jsonCtx.info(`${options.service}: updated IAM role trust policy: ${options.roleName}`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!message.includes('NoSuchEntity')) throw error
-
-      this.awsJson([
-        'iam',
-        'create-role',
-        '--role-name',
-        options.roleName,
-        '--assume-role-policy-document',
-        trustPolicyDocument,
-        '--description',
-        options.roleDescription,
-      ])
-      this.jsonCtx.info(`${options.service}: created IAM role: ${options.roleName}`)
-    }
-
-    this.awsJson([
-      'iam',
-      'put-role-policy',
-      '--role-name',
-      options.roleName,
-      '--policy-name',
-      `${options.service}-kms-sign`,
-      '--policy-document',
-      JSON.stringify({
-        Statement: [{
-          Action: ['kms:GetPublicKey', 'kms:Sign'],
-          Effect: 'Allow',
-          Resource: options.keyArn,
-        }],
-        Version: '2012-10-17',
-      }),
-    ])
-    this.jsonCtx.info(`${options.service}: updated IAM KMS signing policy: ${options.roleName}`)
-
-    if (options.archiveBucket) {
-      this.awsJson([
-        'iam',
-        'put-role-policy',
-        '--role-name',
-        options.roleName,
-        '--policy-name',
-        'eth-da-submitter-s3-archive',
-        '--policy-document',
-        JSON.stringify(archiveStorePolicy(options.archiveBucket, options.archiveKeyPrefix)),
-      ])
-      this.jsonCtx.info(`${options.service}: updated IAM S3 archive policy: ${options.roleName} -> ${options.archiveBucket}`)
-    }
-
-    return roleArn
-  }
-
-  private ensureKmsKey(awsRegion: string, aliasName: string, providedKeyId: string | undefined, role: KmsSignerProvisionRole): {
+  private ensureKmsKey(awsRegion: string, aliasName: string, providedKeyId: string | undefined, role: KmsSignerProvisionRole, owner: KmsKeyOwner): {
     keyArn: string
     keyId: string
     kmsKeyIdForConfig: string
+    owned: boolean
   } {
+    const ownership = {json: (args: string[], options?: AwsCommandOptions) => this.awsJson(args, options)}
     if (providedKeyId) {
       const metadata = this.describeKey(awsRegion, providedKeyId)
-      this.validateKmsKey(metadata, providedKeyId)
+      if (!metadata?.Arn || !metadata.KeyId) throw new Error('KMS metadata is missing its ARN or KeyId')
       this.jsonCtx.info(`${role.service}: using KMS key: ${providedKeyId}`)
       return {
         keyArn: metadata.Arn,
         keyId: metadata.KeyId,
-        kmsKeyIdForConfig: providedKeyId,
+        kmsKeyIdForConfig: metadata.Arn,
+        owned: false,
       }
     }
 
+    const recordFile = path.join(this.keyRecords, `${createHash('sha256').update(JSON.stringify({aliasName, awsRegion, owner})).digest('hex')}.json`)
+    const saved = fs.existsSync(recordFile) ? JSON.parse(fs.readFileSync(recordFile, 'utf8')) : undefined
     const existingAlias = this.findKmsAlias(awsRegion, aliasName)
-    if (existingAlias?.TargetKeyId) {
-      const metadata = this.describeKey(awsRegion, existingAlias.TargetKeyId)
+    let metadata: any
+    if (saved) {
+      if (saved.schema !== 'dogeos/kms-signer-key/v1' || saved.aliasName !== aliasName || saved.region !== awsRegion || typeof saved.keyArn !== 'string') throw new Error('Invalid saved KMS key identity; restore its preparation record')
+      metadata = this.describeKey(awsRegion, saved.keyArn)
+      this.validateKmsKey(metadata, saved.keyArn)
+      if (metadata.Arn !== saved.keyArn) throw new Error('Saved KMS signing identity changed; refusing to replace it')
+    } else if (existingAlias?.TargetKeyId) {
+      metadata = this.describeKey(awsRegion, existingAlias.TargetKeyId)
       this.validateKmsKey(metadata, aliasName)
-      this.jsonCtx.info(`${role.service}: reusing KMS key alias: ${aliasName}`)
-      return {
-        keyArn: metadata.Arn,
-        keyId: metadata.KeyId,
-        kmsKeyIdForConfig: aliasName,
-      }
     }
 
-    const created = this.awsJson([
-      'kms',
-      'create-key',
-      '--key-spec',
-      'ECC_SECG_P256K1',
-      '--key-usage',
-      'SIGN_VERIFY',
-      '--description',
-      role.description,
-      '--tags',
-      `TagKey=dogeos:service,TagValue=${role.service}`,
-      `TagKey=dogeos:purpose,TagValue=${role.purposeTag}`,
-    ], { region: awsRegion })
-    const metadata = created.KeyMetadata
-    this.awsJson([
-      'kms',
-      'create-alias',
-      '--alias-name',
-      aliasName,
-      '--target-key-id',
-      metadata.KeyId,
-    ], { region: awsRegion })
-    this.jsonCtx.info(`${role.service}: created KMS key and alias: ${aliasName}`)
-
-    return {
-      keyArn: metadata.Arn,
-      keyId: metadata.KeyId,
-      kmsKeyIdForConfig: aliasName,
+    if (metadata && !kmsKeyOwned(ownership, metadata.Arn, owner, awsRegion)) throw new Error(`${aliasName} points to a KMS key this deployment did not create; select it explicitly to use it read-only`)
+    if (!metadata) {
+      metadata = this.awsJson(['kms', 'create-key', '--key-spec', 'ECC_SECG_P256K1', '--key-usage', 'SIGN_VERIFY', '--description', role.description,
+        '--tags', kmsOwnershipTags(owner, {'dogeos:purpose': role.purposeTag, 'dogeos:service': role.service})], {region: awsRegion}).KeyMetadata
     }
+
+    // Persist before alias creation: an interrupted alias operation must never
+    // create a second signing key. Normal configuration also pins this ARN.
+    writeJson(recordFile, {aliasName, keyArn: metadata.Arn, origin: 'created', region: awsRegion, schema: 'dogeos/kms-signer-key/v1'})
+    if (existingAlias?.TargetKeyId && existingAlias.TargetKeyId !== metadata.KeyId) throw new Error('KMS alias points to another signing key; refusing to retarget it')
+    if (!existingAlias?.TargetKeyId) this.awsJson(['kms', 'create-alias', '--alias-name', aliasName, '--target-key-id', metadata.KeyId], {region: awsRegion})
+    return {keyArn: metadata.Arn, keyId: metadata.KeyId, kmsKeyIdForConfig: metadata.Arn, owned: true}
   }
 
   private ensureS3Bucket(region: string, bucket: string, service: string): boolean {
@@ -517,6 +339,7 @@ export class KmsSignerProvisioner {
   }
 
   private validateKmsKey(metadata: any, keyId: string): void {
+    if (metadata?.KeyState !== 'Enabled') throw new Error('KMS signing key must be enabled; restore the existing key instead of replacing the identity')
     if (metadata.KeySpec !== 'ECC_SECG_P256K1') {
       this.jsonCtx.error(
         'E703_INVALID_KMS_KEY_SPEC',
