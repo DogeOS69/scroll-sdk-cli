@@ -1,0 +1,70 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "HttpsVpcId",
+    "ParameterValue": "vpc-REPLACE"
+  },
+  {
+    "ParameterKey": "HttpsSubnetA",
+    "ParameterValue": "subnet-REPLACEA"
+  },
+  {
+    "ParameterKey": "HttpsSubnetB",
+    "ParameterValue": "subnet-REPLACEB"
+  },
+  {
+    "ParameterKey": "HttpsScheme",
+    "ParameterValue": "internet-facing"
+  },
+  {
+    "ParameterKey": "HttpsCertificateArn",
+    "ParameterValue": "arn:aws:acm:us-east-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "ParameterKey": "HttpsClientIpv4Cidr",
+    "ParameterValue": "10.20.0.0/24"
+  },
+  {
+    "ParameterKey": "HttpsBackendIpv4Cidr",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "HttpsBackendPortFrom",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "HttpsBackendPortTo",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "HttpsPrivateHostname",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "BootnodeSubnetA",
+    "ParameterValue": "subnet-REPLACEA"
+  },
+  {
+    "ParameterKey": "BootnodeSubnetB",
+    "ParameterValue": "subnet-REPLACEB"
+  },
+  {
+    "ParameterKey": "BootnodeEipAllocationA",
+    "ParameterValue": "eipalloc-REPLACEA"
+  },
+  {
+    "ParameterKey": "BootnodeEipAllocationB",
+    "ParameterValue": "eipalloc-REPLACEB"
+  },
+  {
+    "ParameterKey": "BootnodePeerIpv4Cidr",
+    "ParameterValue": "192.0.2.10/32"
+  },
+  {
+    "ParameterKey": "BootnodeBackendIpv4Cidr",
+    "ParameterValue": "10.0.0.0/16"
+  }
+]

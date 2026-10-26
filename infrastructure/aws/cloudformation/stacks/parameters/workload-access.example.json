@@ -1,0 +1,58 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "OidcIssuer",
+    "ParameterValue": "oidc.eks.us-east-2.amazonaws.com/id/REPLACEWITHISSUERID"
+  },
+  {
+    "ParameterKey": "Namespace",
+    "ParameterValue": "default"
+  },
+  {
+    "ParameterKey": "EthDaKeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "ParameterKey": "FeeOracleKeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000002"
+  },
+  {
+    "ParameterKey": "Sequencer0KeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000003"
+  },
+  {
+    "ParameterKey": "Sequencer1KeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000004"
+  },
+  {
+    "ParameterKey": "BridgeKeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000005"
+  },
+  {
+    "ParameterKey": "ArchiveBucketName",
+    "ParameterValue": "replace-existing-archive-bucket"
+  },
+  {
+    "ParameterKey": "ArchivePrefix",
+    "ParameterValue": "example-chain/blobs"
+  },
+  {
+    "ParameterKey": "ProofBucketName",
+    "ParameterValue": "replace-existing-proof-bucket"
+  },
+  {
+    "ParameterKey": "ProofPrefix",
+    "ParameterValue": "example-chain/proofs"
+  },
+  {
+    "ParameterKey": "WorkloadIdentity",
+    "ParameterValue": "pod-identity"
+  },
+  {
+    "ParameterKey": "ClusterName",
+    "ParameterValue": "REPLACE_EKS_CLUSTER"
+  }
+]

@@ -1,0 +1,34 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-REPLACE"
+  },
+  {
+    "ParameterKey": "ListenerArn",
+    "ParameterValue": "arn:aws:elasticloadbalancing:us-east-2:123456789012:listener/app/example-tso/0000000000000000/0000000000000000"
+  },
+  {
+    "ParameterKey": "Hostname",
+    "ParameterValue": "tso.example.invalid"
+  },
+  {
+    "ParameterKey": "ServiceKind",
+    "ParameterValue": "tso"
+  },
+  {
+    "ParameterKey": "ListenerPriority",
+    "ParameterValue": "100"
+  },
+  {
+    "ParameterKey": "BackendPort",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "HealthCheckPath",
+    "ParameterValue": "/health"
+  }
+]
