@@ -12,6 +12,7 @@ import {WITHDRAWAL_NATIVE_CONFIG_RELPATH} from '../../utils/withdrawal-config.js
 
 export class ExportDeploymentKitCommand extends Command {
   static description = 'Export the signer deployment kit from the selected proof deployment contract and its bound materials receipt; its version is derived from the signer-relevant inputs. Publish it unchanged, then record the publication with --published-url'
+
   static examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --published-url https://downloads.dogeos.example/deployment-kit-k-0123456789ab.tar.gz',
@@ -28,6 +29,9 @@ export class ExportDeploymentKitCommand extends Command {
     spec: Flags.string({description: 'Optional DeploymentSpec proof source; conflicts with doge-config [proof_topology]'}),
     'tso-url': Flags.string({description: 'TSO base URL reachable from signer networks; default: config.toml [ingress].TSO_HOST'}),
   }
+
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
 
   async run(): Promise<void> {
     const {flags} = await this.parse(ExportDeploymentKitCommand)

@@ -18,7 +18,7 @@ import {
 } from '../../utils/proof-worker-image-check.js'
 
 export default class ProofMaterials extends Command {
-  static description = 'Resume the saved proof-materials stage; --generation or --preparation-receipt explicitly selects standalone material preparation'
+  static description = 'Prepare the selected proof materials and compiled topology from the saved deployment plan'
 
   static examples = [
     '$ scrollsdk setup proof-materials --generation mock',

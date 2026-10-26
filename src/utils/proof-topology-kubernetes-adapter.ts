@@ -10,11 +10,6 @@ import type {DogeConfig} from '../types/doge-config.js'
 import type {ProofTopologySpec} from '../types/proof-topology.js'
 
 import {YAML_DUMP_OPTIONS} from '../config/constants.js'
-import {
-  type CompiledProverWorkerBundleResult,
-  PROVER_WORKER_EXECUTABLE,
-  writeCompiledProverWorkerBundle,
-} from './compiled-prover-worker-bundle.js'
 import {proofCoordinatorRpcKeys, readEthereumRpcSecretStore, reconcileEthereumRpcSecrets} from './ethereum-rpc-secrets.js'
 import {buildProofCoordinatorIngress} from './proof-coordinator-ingress.js'
 import {readStagedSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
@@ -47,13 +42,6 @@ const RETIRED_TOPOLOGY_ANNOTATIONS = [
 ] as const
 const WORKER_READINESS_VOLUME = 'prover-worker-readiness'
 const WORKER_TOKEN_VOLUME = 'prover-worker-token'
-/**
- * Secret key holding this Worker's minted credential (dogeos-core #1591). The
- * coordinator's `prover-worker-token` key is the master and must never be
- * mounted here; a Worker handed the master crash-loops at startup anyway.
- */
-export const WORKER_CREDENTIAL_SECRET_KEY = 'prover-worker-credential'
-
 export interface ReconcileCompiledProofTopologyOptions {
   bridge?: ProofTopologyBridgeContext
   /** Test seam for a contract-compatible compiler result. */
@@ -83,7 +71,6 @@ export interface ReconcileCompiledProofTopologyResult {
   files: string[]
   proofArtifactBaseUrl?: string
   worker?: ProverWorkerContractV1
-  workerBundle?: CompiledProverWorkerBundleResult
 }
 
 function readYaml(filePath: string): Record<string, any> {
@@ -354,152 +341,19 @@ function configureRuntimeProofMaterials(
   }
 }
 
-function workerArgument(worker: ProverWorkerContractV1, flag: string): string {
-  const index = worker.argv.indexOf(flag)
-  const value = index >= 0 ? worker.argv[index + 1] : undefined
-  if (!value) throw new Error(`compiler Worker contract is missing ${flag}`)
-  return value
-}
-
-function configureWorkerValues(
-  filePath: string,
-  input: {
-    bundleRevision: string
-    generatedMaterialsRoot: string
-    materialsDir?: string
-    proofCoordinator?: ProofCoordinatorConfig
-    resourceClaim?: string
-    resourcesMountPath: string
-    topology: ProofTopologySpec
-    worker?: ProverWorkerContractV1
-  },
-): void {
+/** Remote worker lifecycle belongs to Capacity Manager, never the local Helm release. */
+function configureWorkerValues(filePath: string, bundleRevision: string): void {
   const values = readYaml(filePath)
-  const local = input.worker?.desired_state === 'local_deployment'
-    && (input.topology.deployment.workerDeploymentBackend || 'docker_compose') === 'kubernetes'
   values.controller ||= {}
-  values.controller.replicas = local ? 1 : 0
-  annotate(values, input.bundleRevision)
-
-  if (!local || !input.worker) {
-    values.command = []
-    values.args = []
-    values.env = []
-    delete values.image?.digest
-    delete values.persistence?.[MATERIALS_VOLUME]
-    delete values.persistence?.[RESOURCES_VOLUME]
-    delete values.persistence?.[WORKER_READINESS_VOLUME]
-    delete values.persistence?.[WORKER_TOKEN_VOLUME]
-    delete values.configMaps?.[MATERIALS_CONFIG_MAP]
-    delete values.nodeSelector
-    delete values.resources
-    delete values.runtimeClassName
-    delete values.tolerations
-    writeYaml(filePath, values)
-    return
-  }
-
-  const {worker} = input
-  values.image ||= {}
-  values.image.repository = worker.image.repository
-  values.image.digest = worker.image.digest
-  delete values.image.tag
-  values.command = [PROVER_WORKER_EXECUTABLE]
-  values.args = worker.argv
-  values.env = worker.environment
-  // Pod termination grace is operator-owned Helm configuration. Preserve it
-  // across regeneration; operators size it above the worker's drain timeout.
-  values.service ||= {}
-  values.service.main ||= {}
-  values.service.main.enabled = false
-  values.automountServiceAccountToken = false
-
-  const deployment = input.topology.deployment || {}
-  const tokenPath = workerArgument(worker, '--worker-token-file')
-  const tokenName = path.posix.basename(tokenPath)
-  // setup proof-worker provisions only this worker credential in a dedicated Secret.
-  const workerSecretName = deployment.workerSecretName || 'prover-worker-credentials'
-  if (workerSecretName === (input.proofCoordinator?.secrets?.name || 'proof-coordinator-secrets')) {
-    throw new Error('workerSecretName must differ from the coordinator master Secret')
-  }
-
-  const tokenKey = WORKER_CREDENTIAL_SECRET_KEY
-  values.persistence ||= {}
-  values.persistence[WORKER_TOKEN_VOLUME] = {
-    enabled: true,
-    items: [{key: tokenKey, path: tokenName}],
-    mountPath: tokenPath,
-    name: workerSecretName,
-    readOnly: true,
-    subPath: tokenName,
-    type: 'secret',
-  }
-  values.persistence['protocol-context'] = {
-    enabled: true,
-    items: [{key: 'protocol_context.json', path: 'protocol_context.json'}],
-    mountPath: deployment.protocolContextPath || '/app/protocol_context.json',
-    name: 'protocol-context-config',
-    readOnly: true,
-    subPath: 'protocol_context.json',
-    type: 'configMap',
-  }
-  const readinessDirectory = path.posix.dirname(worker.readiness_evidence_path)
-  values.persistence[WORKER_READINESS_VOLUME] = {
-    enabled: true,
-    mountPath: readinessDirectory,
-    type: 'emptyDir',
-  }
-
-  configureMaterials(
-    values,
-    input.materialsDir,
-    input.generatedMaterialsRoot,
-  )
-  configureProofResources(
-    values,
-    input.resourceClaim,
-    input.resourcesMountPath,
-  )
-  values.probes ||= {}
-  for (const probe of ['readiness', 'startup']) {
-    values.probes[probe] = {
-      custom: true,
-      enabled: true,
-      spec: {
-        exec: {command: ['test', '-s', worker.readiness_evidence_path]},
-        failureThreshold: probe === 'startup' ? 120 : 3,
-        periodSeconds: 5,
-        timeoutSeconds: 2,
-      },
-    }
-  }
-
-  values.probes.liveness = {enabled: false}
-  if (input.topology.generation === 'real') {
-    if (deployment.workerResources) values.resources = deployment.workerResources
-    else if (input.topology.active?.workerLaunch === 'local_cuda') {
-      values.resources = {
-        limits: {'nvidia.com/gpu': 1},
-        requests: {'nvidia.com/gpu': 1},
-      }
-    } else delete values.resources
-
-    if (deployment.workerNodeSelector) values.nodeSelector = deployment.workerNodeSelector
-    else delete values.nodeSelector
-    if (deployment.workerTolerations) values.tolerations = deployment.workerTolerations
-    else delete values.tolerations
-    if (deployment.workerRuntimeClassName) {
-      values.runtimeClassName = deployment.workerRuntimeClassName
-    } else delete values.runtimeClassName
-  } else {
-    // Production GPU placement is dormant in mock mode. Mock must remain
-    // schedulable on the ordinary cluster nodes used before production cutover.
-    delete values.nodeSelector
-    delete values.resources
-    delete values.runtimeClassName
-    delete values.tolerations
-  }
-
+  values.controller.replicas = 0
+  annotate(values, bundleRevision)
+  values.command = []
+  values.args = []
+  values.env = []
+  delete values.image?.digest
+  for (const key of [MATERIALS_VOLUME, RESOURCES_VOLUME, WORKER_READINESS_VOLUME, WORKER_TOKEN_VOLUME]) delete values.persistence?.[key]
+  delete values.configMaps?.[MATERIALS_CONFIG_MAP]
+  for (const key of ['nodeSelector', 'resources', 'runtimeClassName', 'tolerations']) delete values[key]
   writeYaml(filePath, values)
 }
 
@@ -645,9 +499,10 @@ export function configureEagerMaterializerValues(
     const config = toml.parse(content) as Record<string, any>
     values.eagerMaterializer = {config: content}
     // The producer uses the same proof object namespace as the coordinator.
-    // Reuse its provisioned IRSA identity unless the operator supplied one.
+    // Reuse its provisioned workload identity unless the operator supplied one.
     if (config.artifact_store?.kind === 's3'
-      && coordinatorAccount?.annotations?.['eks.amazonaws.com/role-arn']
+      && (coordinatorAccount?.name || coordinatorAccount?.annotations?.['eks.amazonaws.com/role-arn'])
+      && (!values.serviceAccount?.name || values.serviceAccount.name === 'eager-materializer')
       && !values.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn']
       && values.serviceAccount?.create !== false) {
       values.serviceAccount = {...values.serviceAccount, create: false, name: coordinatorAccount.name || 'proof-coordinator'}
@@ -900,6 +755,8 @@ export function reconcileCompiledProofTopology(
 ): ReconcileCompiledProofTopologyResult {
   const {proofTopology: topology} = options
   const {mode} = topology
+  if (topology.generation === 'real' && topology.active?.workerLaunch !== 'external') throw new Error('Real proof workers must be external and managed by Capacity Manager')
+  if ('workerDeploymentBackend' in (topology.deployment ?? {})) throw new Error('Standalone worker deployment backends have been removed; use Capacity Manager')
   const valuesDir = path.resolve(options.valuesDir)
   const coordinatorValuesPath = path.join(valuesDir, 'proof-coordinator-production.yaml')
   const workerValuesPath = path.join(valuesDir, 'prover-worker-production.yaml')
@@ -947,13 +804,14 @@ export function reconcileCompiledProofTopology(
     withdrawalProcessorBaseConfig: options.withdrawalConfigPath,
   }
   const bundle = (options.compile || compileProofTopology)(compileOptions)
+  if (bundle.worker && bundle.worker.desired_state !== 'external') throw new Error('Compiler worker contract must select external placement for Capacity Manager')
   if (bundle.manifest.preflight_only) {
     throw new Error('refusing to install a preflight-only proof topology bundle')
   }
 
   if (bundle.manifest.eager_materializer || fs.existsSync(eagerValuesPath)) {
     const account = readYaml(coordinatorValuesPath).serviceAccount
-    configureEagerMaterializerValues(eagerValuesPath, bundle, effectiveTopology, account?.annotations?.['eks.amazonaws.com/role-arn'] ? account : options.proofCoordinator?.serviceAccount)
+    configureEagerMaterializerValues(eagerValuesPath, bundle, effectiveTopology, (account?.name || account?.annotations?.['eks.amazonaws.com/role-arn']) ? account : options.proofCoordinator?.serviceAccount)
   }
 
   const wpSource = path.join(bundle.bundleDir, bundle.manifest.withdrawal_processor)
@@ -1022,57 +880,7 @@ export function reconcileCompiledProofTopology(
     throw new Error(`Prover Worker values template not found: ${workerValuesPath}`)
   }
 
-  configureWorkerValues(workerValuesPath, {
-    bundleRevision: bundle.manifest.bundle_revision,
-    generatedMaterialsRoot,
-    materialsDir,
-    proofCoordinator: options.proofCoordinator,
-    resourceClaim: selectedResourceClaim,
-    resourcesMountPath,
-    topology,
-    worker: bundle.worker,
-  })
-
-  let workerBundle: CompiledProverWorkerBundleResult | undefined
-  const workerDeploymentBackend = topology.deployment.workerDeploymentBackend || 'docker_compose'
-  const composeWorker = bundle.worker && (
-    bundle.worker.desired_state === 'external'
-    || workerDeploymentBackend === 'docker_compose'
-  ) ? bundle.worker : undefined
-  if (composeWorker) {
-    if (!bundle.manifest.prover_worker || !materialsDir) {
-      throw new Error('Docker Compose Worker requires its compiler contract and generated materials')
-    }
-
-    const realScroll = selectedRealScroll(topology)
-    if (!realScroll) throw new Error('Docker Compose Worker requires selected realScroll resources')
-    const deploymentRoot = path.resolve(options.deploymentDir)
-    const selectedResourcesRoot = realScroll.resourcesRoot
-    if (!selectedResourcesRoot) {
-      throw new Error(`Docker Compose ${mode} Worker requires a deployment-relative resources root`)
-    }
-
-    workerBundle = writeCompiledProverWorkerBundle({
-      bundleDir: path.join(deploymentRoot, `prover-worker-${mode}/docker-compose`),
-      contractFile: path.join(bundle.bundleDir, bundle.manifest.prover_worker),
-      generatedMaterialsDir: materialsDir,
-      generatedMaterialsRoot,
-      protocolContextPath: deploymentFile(
-        deploymentRoot,
-        '.data/protocol_context.json',
-        'deployment protocol context',
-      ),
-      protocolContextRuntimePath:
-        topology.deployment?.protocolContextPath || '/app/protocol_context.json',
-      resourcesMountPath,
-      resourcesRoot: deploymentFile(
-        deploymentRoot,
-        selectedResourcesRoot,
-        'proofTopology.active.realScroll.resourcesRoot',
-      ),
-      worker: composeWorker,
-    })
-  }
+  configureWorkerValues(workerValuesPath, bundle.manifest.bundle_revision)
 
   if (!bundle.manifest.eth_da_submitter) {
     throw new Error('compiler bundle is missing the eth-da-submitter projection')
@@ -1100,13 +908,11 @@ export function reconcileCompiledProofTopology(
       submitterValuesPath,
       ...(fs.existsSync(eagerValuesPath) ? [eagerValuesPath] : []),
       ...generatedMaterialFiles,
-      ...(workerBundle?.files || []),
     ],
     proofArtifactBaseUrl: mode === 'active'
       ? readStagedSignerProofArtifactBaseUrl(fs.readFileSync(options.withdrawalConfigPath, 'utf8'))
         ?? argumentValue(bundle.worker, '--artifact-read-base-url')
       : undefined,
     worker: bundle.worker,
-    workerBundle,
   }
 }

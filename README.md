@@ -178,7 +178,15 @@ USAGE
 # Commands
 
 <!-- commands -->
+* [`scrollsdk artifacts access`](#scrollsdk-artifacts-access)
+* [`scrollsdk bridge rotation online EXPORT`](#scrollsdk-bridge-rotation-online-export)
+* [`scrollsdk bridge rotation register EXPORT`](#scrollsdk-bridge-rotation-register-export)
+* [`scrollsdk bridge rotation send EXPORT`](#scrollsdk-bridge-rotation-send-export)
+* [`scrollsdk capacity-manager [ACTION]`](#scrollsdk-capacity-manager-action)
 * [`scrollsdk check prerequisites`](#scrollsdk-check-prerequisites)
+* [`scrollsdk contracts verify`](#scrollsdk-contracts-verify)
+* [`scrollsdk cubesigner checkpoint`](#scrollsdk-cubesigner-checkpoint)
+* [`scrollsdk cubesigner refresh-session`](#scrollsdk-cubesigner-refresh-session)
 * [`scrollsdk doge wallet new`](#scrollsdk-doge-wallet-new)
 * [`scrollsdk doge wallet send`](#scrollsdk-doge-wallet-send)
 * [`scrollsdk doge wallet sync`](#scrollsdk-doge-wallet-sync)
@@ -187,7 +195,9 @@ USAGE
 * [`scrollsdk helper clear-accounts`](#scrollsdk-helper-clear-accounts)
 * [`scrollsdk helper derive-enode NODEKEY`](#scrollsdk-helper-derive-enode-nodekey)
 * [`scrollsdk helper fund-accounts`](#scrollsdk-helper-fund-accounts)
+* [`scrollsdk helper recovery-key`](#scrollsdk-helper-recovery-key)
 * [`scrollsdk helper set-scalars`](#scrollsdk-helper-set-scalars)
+* [`scrollsdk monitoring status-page`](#scrollsdk-monitoring-status-page)
 * [`scrollsdk plugins`](#scrollsdk-plugins)
 * [`scrollsdk plugins add PLUGIN`](#scrollsdk-plugins-add-plugin)
 * [`scrollsdk plugins:inspect PLUGIN...`](#scrollsdk-pluginsinspect-plugin)
@@ -198,61 +208,211 @@ USAGE
 * [`scrollsdk plugins uninstall [PLUGIN]`](#scrollsdk-plugins-uninstall-plugin)
 * [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
 * [`scrollsdk plugins update`](#scrollsdk-plugins-update)
-* [`scrollsdk setup attestation-signer`](#scrollsdk-setup-attestation-signer)
-* [`scrollsdk setup bootnode-public-p2p`](#scrollsdk-setup-bootnode-public-p2p)
-* [`scrollsdk setup bridge-init`](#scrollsdk-setup-bridge-init)
-* [`scrollsdk setup cubesigner-init`](#scrollsdk-setup-cubesigner-init)
+* [`scrollsdk rpc export`](#scrollsdk-rpc-export)
+* [`scrollsdk setup aws`](#scrollsdk-setup-aws)
+* [`scrollsdk setup bridge-funding`](#scrollsdk-setup-bridge-funding)
+* [`scrollsdk setup cubesigner-policy build`](#scrollsdk-setup-cubesigner-policy-build)
+* [`scrollsdk setup cubesigner-policy deploy`](#scrollsdk-setup-cubesigner-policy-deploy)
 * [`scrollsdk setup cubesigner-policy handoff`](#scrollsdk-setup-cubesigner-policy-handoff)
 * [`scrollsdk setup cubesigner-policy import`](#scrollsdk-setup-cubesigner-policy-import)
 * [`scrollsdk setup cubesigner-policy import-acceptance`](#scrollsdk-setup-cubesigner-policy-import-acceptance)
 * [`scrollsdk setup cubesigner-policy prepare`](#scrollsdk-setup-cubesigner-policy-prepare)
 * [`scrollsdk setup cubesigner-policy prepare-input`](#scrollsdk-setup-cubesigner-policy-prepare-input)
+* [`scrollsdk setup cubesigner-policy prepare-runtime-secrets`](#scrollsdk-setup-cubesigner-policy-prepare-runtime-secrets)
 * [`scrollsdk setup cubesigner-policy prepare-session`](#scrollsdk-setup-cubesigner-policy-prepare-session)
 * [`scrollsdk setup cubesigner-policy reconcile`](#scrollsdk-setup-cubesigner-policy-reconcile)
+* [`scrollsdk setup cubesigner-policy resolver`](#scrollsdk-setup-cubesigner-policy-resolver)
 * [`scrollsdk setup cubesigner-policy verify-activation`](#scrollsdk-setup-cubesigner-policy-verify-activation)
-* [`scrollsdk setup cubesigner-refresh`](#scrollsdk-setup-cubesigner-refresh)
-* [`scrollsdk setup db-init`](#scrollsdk-setup-db-init)
 * [`scrollsdk setup deployment-preflight`](#scrollsdk-setup-deployment-preflight)
-* [`scrollsdk setup dstack-config`](#scrollsdk-setup-dstack-config)
-* [`scrollsdk setup doge-config`](#scrollsdk-setup-doge-config)
-* [`scrollsdk setup dogecoin-wallet-import`](#scrollsdk-setup-dogecoin-wallet-import)
-* [`scrollsdk setup domains`](#scrollsdk-setup-domains)
-* [`scrollsdk setup eth-da-submitter`](#scrollsdk-setup-eth-da-submitter)
-* [`scrollsdk setup export-deployment-kit`](#scrollsdk-setup-export-deployment-kit)
-* [`scrollsdk setup gen-keystore`](#scrollsdk-setup-gen-keystore)
-* [`scrollsdk setup gen-l2-artifacts`](#scrollsdk-setup-gen-l2-artifacts)
-* [`scrollsdk setup gen-rpc-package`](#scrollsdk-setup-gen-rpc-package)
-* [`scrollsdk setup gen-secrets`](#scrollsdk-setup-gen-secrets)
-* [`scrollsdk setup generate-from-spec`](#scrollsdk-setup-generate-from-spec)
+* [`scrollsdk setup genesis`](#scrollsdk-setup-genesis)
+* [`scrollsdk setup plan`](#scrollsdk-setup-plan)
 * [`scrollsdk setup policy-prepare`](#scrollsdk-setup-policy-prepare)
-* [`scrollsdk setup prep-charts`](#scrollsdk-setup-prep-charts)
-* [`scrollsdk setup proof-aws-init`](#scrollsdk-setup-proof-aws-init)
-* [`scrollsdk setup proof-bundle-publish`](#scrollsdk-setup-proof-bundle-publish)
-* [`scrollsdk setup proof-config-check`](#scrollsdk-setup-proof-config-check)
-* [`scrollsdk setup proof-image-tools`](#scrollsdk-setup-proof-image-tools)
 * [`scrollsdk setup proof-materials`](#scrollsdk-setup-proof-materials)
 * [`scrollsdk setup proof-publish`](#scrollsdk-setup-proof-publish)
 * [`scrollsdk setup protocol-context`](#scrollsdk-setup-protocol-context)
-* [`scrollsdk setup proof-release-prepare`](#scrollsdk-setup-proof-release-prepare)
-* [`scrollsdk setup proof-topology-compile`](#scrollsdk-setup-proof-topology-compile)
-* [`scrollsdk setup proof-worker`](#scrollsdk-setup-proof-worker)
-* [`scrollsdk setup proof-worker-check`](#scrollsdk-setup-proof-worker-check)
-* [`scrollsdk setup proof-worker-image-check`](#scrollsdk-setup-proof-worker-image-check)
-* [`scrollsdk setup push-secrets`](#scrollsdk-setup-push-secrets)
 * [`scrollsdk setup render`](#scrollsdk-setup-render)
 * [`scrollsdk setup signer-kit`](#scrollsdk-setup-signer-kit)
 * [`scrollsdk setup signer-kit-publish`](#scrollsdk-setup-signer-kit-publish)
-* [`scrollsdk setup tls`](#scrollsdk-setup-tls)
+* [`scrollsdk setup signer-session`](#scrollsdk-setup-signer-session)
 * [`scrollsdk setup upload-secrets`](#scrollsdk-setup-upload-secrets)
-* [`scrollsdk setup verify-contracts`](#scrollsdk-setup-verify-contracts)
 * [`scrollsdk signer init`](#scrollsdk-signer-init)
 * [`scrollsdk signer kms-pubkey`](#scrollsdk-signer-kms-pubkey)
+* [`scrollsdk signer network-check`](#scrollsdk-signer-network-check)
 * [`scrollsdk signer preflight`](#scrollsdk-signer-preflight)
 * [`scrollsdk test contracts`](#scrollsdk-test-contracts)
 * [`scrollsdk test dependencies`](#scrollsdk-test-dependencies)
 * [`scrollsdk test dogeos [CASENAME]`](#scrollsdk-test-dogeos-casename)
 * [`scrollsdk test e2e`](#scrollsdk-test-e2e)
 * [`scrollsdk test ingress`](#scrollsdk-test-ingress)
+
+## `scrollsdk artifacts access`
+
+Plan, explicitly apply, or check the DA archive or bootstrap snapshot bucket: versioning, the keep-forever retention lifecycle rule, TLS-only, a read statement for the cluster's S3 VPC endpoint, an optional public read statement (the DA kill switch), and the writer role's IAM grant. Statements with other Sids are preserved. The proof artifact bucket is managed by setup aws.
+
+```
+USAGE
+  $ scrollsdk artifacts access --store da|snapshot [--allow-bucket-public-policy] [--apply | --check] [--aws-profile
+    <value>] [--deployment-dir <value>] [--doge-config <value>] [--json] [--proof-aws-config <value>] [--public-read]
+    [--vpc-endpoint-id <value>] [--writer-role-arn <value>]
+
+FLAGS
+  --allow-bucket-public-policy  Explicitly allow bucket public policies for --public-read; retain blocked ACLs and
+                                account-level protections
+  --apply                       Apply the displayed changes and verify AWS readback
+  --aws-profile=<value>         AWS CLI profile
+  --check                       Fail if the bucket policy, versioning or retention lifecycle differ from the requested
+                                state or writer IAM simulation denies access; no writes
+  --deployment-dir=<value>      [default: .] Deployment root
+  --doge-config=<value>         [default: .data/doge-config.toml] doge-config holding ethereumDa.blobArchive.s3,
+                                proofArtifacts.s3 and snapshots.s3
+  --json
+  --proof-aws-config=<value>    [default: .data/proof-aws.json] proof-aws-init output; its S3 Gateway VPC endpoint is
+                                reused when --vpc-endpoint-id is omitted
+  --[no-]public-read            Add (--public-read) or remove (--no-public-read) the anonymous GetObject statement;
+                                omitted leaves it unchanged. Removing it on the DA archive is the kill switch: our
+                                services keep reading through the VPC endpoint
+  --store=<option>              (required) Bucket to manage
+                                <options: da|snapshot>
+  --vpc-endpoint-id=<value>     S3 Gateway VPC endpoint the cluster reads through (same region as the bucket)
+  --writer-role-arn=<value>     The only writer: the eth-da-submitter IRSA role (da) or the deploy role (snapshot); its
+                                trust and other policies are preserved
+
+DESCRIPTION
+  Plan, explicitly apply, or check the DA archive or bootstrap snapshot bucket: versioning, the keep-forever retention
+  lifecycle rule, TLS-only, a read statement for the cluster's S3 VPC endpoint, an optional public read statement (the
+  DA kill switch), and the writer role's IAM grant. Statements with other Sids are preserved. The proof artifact bucket
+  is managed by setup aws.
+
+EXAMPLES
+  $ scrollsdk artifacts access --store da --public-read --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter --apply
+
+  $ scrollsdk artifacts access --store da --no-public-read --apply
+
+  $ scrollsdk artifacts access --store snapshot --writer-role-arn arn:aws:iam::123456789012:role/deploy --apply
+```
+
+_See code: [src/commands/artifacts/access.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/artifacts/access.ts)_
+
+## `scrollsdk bridge rotation online EXPORT`
+
+Check that every target signer and at least M live current signers polled the TSO in the last 60 seconds; read-only
+
+```
+USAGE
+  $ scrollsdk bridge rotation online EXPORT [--context <value>] [--dir <value>] [--namespace <value>] [--wp-url <value>]
+    [--tso-url <value>]
+
+ARGUMENTS
+  EXPORT  dogeos/rotation-export/v1 JSON downloaded from the governance portal
+
+FLAGS
+  --context=<value>    Kubernetes context; default: the deployment spec EKS cluster, else the current context
+  --dir=<value>        [default: .] Deployment directory (or its parent with runtime/ or deployment/)
+  --namespace=<value>  Kubernetes namespace; default: the deployment spec namespace, else default
+  --tso-url=<value>    HTTPS or loopback TSO URL serving /metrics; default: a temporary kubectl port-forward
+  --wp-url=<value>     HTTPS or loopback WP URL; default: a temporary kubectl port-forward
+
+DESCRIPTION
+  Check that every target signer and at least M live current signers polled the TSO in the last 60 seconds; read-only
+
+EXAMPLES
+  $ scrollsdk bridge rotation online ./rotation-export.json --dir ./deployment
+```
+
+_See code: [src/commands/bridge/rotation/online.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/bridge/rotation/online.ts)_
+
+## `scrollsdk bridge rotation register EXPORT`
+
+Register every current and target signer of a rotation export with the WP/TSO (merge only, rendered with helm template before any write); never submits a rotation
+
+```
+USAGE
+  $ scrollsdk bridge rotation register EXPORT [--context <value>] [--dir <value>] [--namespace <value>] [--wp-url <value>]
+    [--wait-seconds <value>]
+
+ARGUMENTS
+  EXPORT  dogeos/rotation-export/v1 JSON downloaded from the governance portal
+
+FLAGS
+  --context=<value>       Kubernetes context; default: the deployment spec EKS cluster, else the current context
+  --dir=<value>           [default: .] Deployment directory (or its parent with runtime/ or deployment/)
+  --namespace=<value>     Kubernetes namespace; default: the deployment spec namespace, else default
+  --wait-seconds=<value>  [default: 300] How long to wait for the WP to report every key as registered
+  --wp-url=<value>        HTTPS or loopback WP URL; default: a temporary kubectl port-forward
+
+DESCRIPTION
+  Register every current and target signer of a rotation export with the WP/TSO (merge only, rendered with helm template
+  before any write); never submits a rotation
+
+EXAMPLES
+  $ scrollsdk bridge rotation register ./rotation-export.json --dir ./deployment
+```
+
+_See code: [src/commands/bridge/rotation/register.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/bridge/rotation/register.ts)_
+
+## `scrollsdk bridge rotation send EXPORT`
+
+Submit the rotation export to the WP once (POST /propose), or report the intent already stored under its idempotency key; --preview only builds (POST /build) and stores nothing
+
+```
+USAGE
+  $ scrollsdk bridge rotation send EXPORT [--context <value>] [--dir <value>] [--namespace <value>] [--wp-url <value>]
+    [--tso-url <value>] [--liveness-outpoint <value>] [--preview]
+
+ARGUMENTS
+  EXPORT  dogeos/rotation-export/v1 JSON downloaded from the governance portal
+
+FLAGS
+  --context=<value>            Kubernetes context; default: the deployment spec EKS cluster, else the current context
+  --dir=<value>                [default: .] Deployment directory (or its parent with runtime/ or deployment/)
+  --liveness-outpoint=<value>  Required for a new intent: <txid>:<vout> of a confirmed output of at least 1 DOGE paying
+                               the target P2SH address, from a transaction carrying the bridge-funding marker OP_RETURN
+  --namespace=<value>          Kubernetes namespace; default: the deployment spec namespace, else default
+  --preview                    Run every check and POST /build only; never /propose
+  --tso-url=<value>            HTTPS or loopback TSO URL serving /metrics; default: a temporary kubectl port-forward
+  --wp-url=<value>             HTTPS or loopback WP URL; default: a temporary kubectl port-forward
+
+DESCRIPTION
+  Submit the rotation export to the WP once (POST /propose), or report the intent already stored under its idempotency
+  key; --preview only builds (POST /build) and stores nothing
+
+EXAMPLES
+  $ scrollsdk bridge rotation send ./rotation-export.json --dir ./deployment --liveness-outpoint <txid>:<vout> --preview
+
+  $ scrollsdk bridge rotation send ./rotation-export.json --dir ./deployment --liveness-outpoint <txid>:<vout>
+```
+
+_See code: [src/commands/bridge/rotation/send.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/bridge/rotation/send.ts)_
+
+## `scrollsdk capacity-manager [ACTION]`
+
+Inspect the installed Capacity Manager or probe its dependencies; GPU worker lifecycle is owned by the Core controller
+
+```
+USAGE
+  $ scrollsdk capacity-manager [ACTION] --kube-context <value> [--deployment-dir <value>] [--json] [--namespace
+    <value>]
+
+ARGUMENTS
+  [ACTION]  (status|probe) [default: status] status reads runtime evidence; probe creates and removes a temporary
+            dependency-check Pod
+
+FLAGS
+  --deployment-dir=<value>  [default: .] Prepared deployment directory
+  --json
+  --kube-context=<value>    (required) Explicit Kubernetes context; must match the prepared target when recorded
+  --namespace=<value>       Namespace; defaults to the prepared target and must match it
+
+DESCRIPTION
+  Inspect the installed Capacity Manager or probe its dependencies; GPU worker lifecycle is owned by the Core controller
+
+EXAMPLES
+  $ scrollsdk capacity-manager status --kube-context my-cluster
+
+  $ scrollsdk capacity-manager probe --deployment-dir deployment --kube-context my-cluster
+```
+
+_See code: [src/commands/capacity-manager.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/capacity-manager.ts)_
 
 ## `scrollsdk check prerequisites`
 
@@ -278,6 +438,109 @@ EXAMPLES
 ```
 
 _See code: [src/commands/check/prerequisites.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/check/prerequisites.ts)_
+
+## `scrollsdk contracts verify`
+
+Submit deployed contract sources for explorer verification or inspect verification status
+
+```
+USAGE
+  $ scrollsdk contracts verify [--config-dir <value>] [--image-tag <value>] [--preinstalls | --preinstalls-only]
+    [--preinstalls-image <value>] [--require-verified] [--status-only] [--wait-seconds <value>]
+
+FLAGS
+  --config-dir=<value>         [default: .] Directory containing config.toml and contract verification artifacts
+  --image-tag=<value>          Specify the Docker image tag to use
+  --preinstalls                Also submit preinstalls sources to the configured L2 Blockscout v2 API
+  --preinstalls-image=<value>  Preinstalls image matching the deployed release (default: dogeos69/preinstalls:v0.2.2)
+  --preinstalls-only           Only submit preinstalls sources; skip the DogeOS contracts verifier
+  --require-verified           Fail unless every selected target has full Blockscout verification; submission success is
+                               insufficient
+  --status-only                Read final Blockscout source-verification status without submitting or running Docker
+  --wait-seconds=<value>       Bounded polling window for --status-only or --require-verified
+
+DESCRIPTION
+  Submit deployed contract sources for explorer verification or inspect verification status
+
+EXAMPLES
+  $ scrollsdk contracts verify
+
+  $ scrollsdk contracts verify --image-tag verify-v0.2.0-debug
+
+  $ scrollsdk contracts verify --preinstalls --config-dir ./deployment
+
+  $ scrollsdk contracts verify --preinstalls-only --preinstalls-image dogeos69/preinstalls:v0.2.1
+```
+
+_See code: [src/commands/contracts/verify.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/contracts/verify.ts)_
+
+## `scrollsdk cubesigner checkpoint`
+
+Export/import a private, instance-bound checkpoint of an existing CLI-created CubeSigner identity and signing session without management login or provider mutations
+
+```
+USAGE
+  $ scrollsdk cubesigner checkpoint --action export|import --directory <value> --instance <value> --organization <value>
+    --signer-api-root <value> [--deployment-dir <value>] [--json]
+
+FLAGS
+  --action=<option>          (required)
+                             <options: export|import>
+  --deployment-dir=<value>   [default: .]
+  --directory=<value>        (required) Private checkpoint directory; export requires a new path; keep it outside
+                             version control
+  --instance=<value>         (required) Exact deployment instance binding
+  --json
+  --organization=<value>     (required) Expected CubeSigner organization ID
+  --signer-api-root=<value>  (required) Expected HTTPS signing API origin (for example https://gamma.signer.cubist.dev)
+
+DESCRIPTION
+  Export/import a private, instance-bound checkpoint of an existing CLI-created CubeSigner identity and signing session
+  without management login or provider mutations
+```
+
+_See code: [src/commands/cubesigner/checkpoint.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/cubesigner/checkpoint.ts)_
+
+## `scrollsdk cubesigner refresh-session`
+
+Create a replacement CubeSigner signer session and write its local Secret inputs
+
+```
+USAGE
+  $ scrollsdk cubesigner refresh-session [--doge-config <value>] [--email <value>] [--environment <value>] [--json] [-N]
+    [--org-id <value>]
+
+FLAGS
+  -N, --non-interactive      Run without prompts. Requires --doge-config. If not logged in, also requires --org-id and
+                             --email.
+      --doge-config=<value>  Path to Dogecoin config file
+      --email=<value>        CubeSigner account email (for non-interactive login if not already logged in)
+      --environment=<value>  [default: gamma] CubeSigner environment (default: gamma)
+      --json                 Output in JSON format (stdout for data, stderr for logs)
+      --org-id=<value>       CubeSigner organization ID (for non-interactive login if not already logged in)
+
+DESCRIPTION
+  Create a replacement CubeSigner signer session and write its local Secret inputs
+
+  Generated signer sessions use fixed service lifetimes:
+  session-lifetime=31536000s (365 days), auth-lifetime=7200s (2 hours), refresh-lifetime=604800s (7 days), and
+  grace-lifetime=30s.
+
+  This command writes local files under ./secrets. Push the refreshed secrets with setup push-secrets --cubesigner-only,
+  then restart CubeSigner signer pods after clearing /app/.sessions/main_cs_session.json so the new Secret seed is
+  copied into the active session cache.
+
+EXAMPLES
+  $ scrollsdk cubesigner refresh-session
+
+  $ scrollsdk cubesigner refresh-session --doge-config .data/doge-config.toml
+
+  $ scrollsdk cubesigner refresh-session --non-interactive --doge-config .data/doge-config.toml
+
+  $ scrollsdk cubesigner refresh-session --non-interactive --json --doge-config .data/doge-config.toml --org-id Org#xxx --email user@example.com
+```
+
+_See code: [src/commands/cubesigner/refresh-session.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/cubesigner/refresh-session.ts)_
 
 ## `scrollsdk doge wallet new`
 
@@ -351,27 +614,25 @@ _See code: [src/commands/doge/wallet/send.ts](https://github.com/dogeos69/scroll
 
 ## `scrollsdk doge wallet sync`
 
-Sync wallet UTXOs and balance using Electrs/Esplora.
+Sync wallet UTXOs and balance using Electrs/Esplora
 
-```text
+```
 USAGE
-  $ scrollsdk doge wallet sync [-c <value>] [-p <value>] [--electrs-url <value>]
+  $ scrollsdk doge wallet sync [-c <value>] [--electrs-url <value>] [-p <value>]
 
 FLAGS
   -c, --config=<value>       Path to Dogecoin config file
-  -p, --path=<value>         Wallet file path (overrides wallet.path)
-      --electrs-url=<value> Electrs/Esplora API URL
+  -p, --path=<value>         Wallet file path (overrides wallet.path in config)
+      --electrs-url=<value>  Electrs/Esplora URL; defaults to rpc.electrsAPIUrl or the testnet Electrs endpoint
+
+DESCRIPTION
+  Sync wallet UTXOs and balance using Electrs/Esplora
+
+EXAMPLES
+  $ scrollsdk doge wallet sync --config .data/doge-config.toml --electrs-url http://localhost:3002
 ```
 
-The endpoint comes from `--electrs-url`, optional `rpc.electrsAPIUrl`, or the
-existing testnet Electrs default. Mainnet and regtest require an explicit
-endpoint. Setup does not prompt for or require an indexer configuration.
-
-```bash
-scrollsdk doge wallet sync --config .data/doge-config.toml --electrs-url http://localhost:3002
-```
-
-_See code: [src/commands/doge/wallet/sync.ts](src/commands/doge/wallet/sync.ts)_
+_See code: [src/commands/doge/wallet/sync.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/doge/wallet/sync.ts)_
 
 ## `scrollsdk help [COMMAND]`
 
@@ -382,7 +643,7 @@ USAGE
   $ scrollsdk help [COMMAND...] [-n]
 
 ARGUMENTS
-  COMMAND...  Command to show help for.
+  [COMMAND...]  Command to show help for.
 
 FLAGS
   -n, --nested-commands  Include all nested commands in the output.
@@ -391,7 +652,7 @@ DESCRIPTION
   Display help for scrollsdk.
 ```
 
-_See code: [@oclif/plugin-help](https://github.com/oclif/plugin-help/blob/v6.2.15/src/commands/help.ts)_
+_See code: [@oclif/plugin-help](https://github.com/oclif/plugin-help/blob/v6.2.37/src/commands/help.ts)_
 
 ## `scrollsdk helper activity`
 
@@ -495,6 +756,29 @@ DESCRIPTION
 
 _See code: [src/commands/helper/fund-accounts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/fund-accounts.ts)_
 
+## `scrollsdk helper recovery-key`
+
+Create or inspect a custodian recovery key offline; no Dogecoin node, RPC, AWS or deployment spec required
+
+```
+USAGE
+  $ scrollsdk helper recovery-key --network mainnet|testnet|regtest --output <value> [--action create|inspect] [--json]
+
+FLAGS
+  --action=<option>   [default: create] Create a new key or verify an existing key/backup without changing it
+                      <options: create|inspect>
+  --json              Output public metadata only; never print the private key
+  --network=<option>  (required) Deployment Dogecoin network
+                      <options: mainnet|testnet|regtest>
+  --output=<value>    (required) Custodian-owned directory outside source control; parent must exist, create refuses an
+                      existing directory
+
+DESCRIPTION
+  Create or inspect a custodian recovery key offline; no Dogecoin node, RPC, AWS or deployment spec required
+```
+
+_See code: [src/commands/helper/recovery-key.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/recovery-key.ts)_
+
 ## `scrollsdk helper set-scalars`
 
 Set commit and blob scalars for Scroll SDK
@@ -519,6 +803,40 @@ DESCRIPTION
 
 _See code: [src/commands/helper/set-scalars.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/helper/set-scalars.ts)_
 
+## `scrollsdk monitoring status-page`
+
+Initialize and maintain Instatus page bindings with --plan or --apply; setup render generates local configuration
+
+```
+USAGE
+  $ scrollsdk monitoring status-page [--apply | --plan] [--config <value>] [--create-webhook | --webhook-url-file <value>]
+    [--deployment-dir <value>] [--env-file <value>] [--json] [--probe-values <value>] [--values <value>]
+    [--webhook-component <value> ]
+
+FLAGS
+  --apply                      Apply this network group's component metadata and shared page branding to Instatus using
+                               INSTATUS_API_KEY
+  --config=<value>             [default: config.toml] Chain config, relative to deployment directory
+  --create-webhook             With --plan/--apply, initialize a Grafana integration if no private binding exists;
+                               subsequent applies reuse it
+  --deployment-dir=<value>     [default: .] Deployment root
+  --env-file=<value>           Private NAME=value file for --plan/--apply; defaults to the saved preparation plan
+                               reference, then deployment.env in the deployment directory
+  --json                       Output structured JSON
+  --plan                       Read-only remote comparison; do not write local files or Instatus
+  --probe-values=<value>       Write values for the independent status-page-probe chart; --plan never writes
+  --values=<value>             [default: values/scroll-monitor-production.yaml] Monitor values; source filenames resolve
+                               beside this file
+  --webhook-component=<value>  Component key for --webhook-url-file when using component publication
+  --webhook-url-file=<value>   With --plan/--apply, import private component JSON {integrationId,url}, or a legacy
+                               Grafana URL text file
+
+DESCRIPTION
+  Initialize and maintain Instatus page bindings with --plan or --apply; setup render generates local configuration
+```
+
+_See code: [src/commands/monitoring/status-page.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/monitoring/status-page.ts)_
+
 ## `scrollsdk plugins`
 
 List installed plugins.
@@ -540,7 +858,7 @@ EXAMPLES
   $ scrollsdk plugins
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/index.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/index.ts)_
 
 ## `scrollsdk plugins add PLUGIN`
 
@@ -614,7 +932,7 @@ EXAMPLES
   $ scrollsdk plugins inspect myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/inspect.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/inspect.ts)_
 
 ## `scrollsdk plugins install PLUGIN`
 
@@ -663,7 +981,7 @@ EXAMPLES
     $ scrollsdk plugins install someuser/someplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/install.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/install.ts)_
 
 ## `scrollsdk plugins link PATH`
 
@@ -683,6 +1001,7 @@ FLAGS
 
 DESCRIPTION
   Links a plugin into the CLI for development.
+
   Installation of a linked plugin will override a user-installed or core plugin.
 
   e.g. If you have a user-installed or core plugin that has a 'hello' command, installing a linked plugin with a 'hello'
@@ -693,7 +1012,7 @@ EXAMPLES
   $ scrollsdk plugins link myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/link.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/link.ts)_
 
 ## `scrollsdk plugins remove [PLUGIN]`
 
@@ -704,7 +1023,7 @@ USAGE
   $ scrollsdk plugins remove [PLUGIN...] [-h] [-v]
 
 ARGUMENTS
-  PLUGIN...  plugin to uninstall
+  [PLUGIN...]  plugin to uninstall
 
 FLAGS
   -h, --help     Show CLI help.
@@ -734,7 +1053,7 @@ FLAGS
   --reinstall  Reinstall all plugins after uninstalling.
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/reset.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/reset.ts)_
 
 ## `scrollsdk plugins uninstall [PLUGIN]`
 
@@ -745,7 +1064,7 @@ USAGE
   $ scrollsdk plugins uninstall [PLUGIN...] [-h] [-v]
 
 ARGUMENTS
-  PLUGIN...  plugin to uninstall
+  [PLUGIN...]  plugin to uninstall
 
 FLAGS
   -h, --help     Show CLI help.
@@ -762,7 +1081,7 @@ EXAMPLES
   $ scrollsdk plugins uninstall myplugin
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/uninstall.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/uninstall.ts)_
 
 ## `scrollsdk plugins unlink [PLUGIN]`
 
@@ -773,7 +1092,7 @@ USAGE
   $ scrollsdk plugins unlink [PLUGIN...] [-h] [-v]
 
 ARGUMENTS
-  PLUGIN...  plugin to uninstall
+  [PLUGIN...]  plugin to uninstall
 
 FLAGS
   -h, --help     Show CLI help.
@@ -806,184 +1125,138 @@ DESCRIPTION
   Update installed plugins.
 ```
 
-_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.4/src/commands/plugins/update.ts)_
+_See code: [@oclif/plugin-plugins](https://github.com/oclif/plugin-plugins/blob/v5.4.56/src/commands/plugins/update.ts)_
 
-## `scrollsdk setup attestation-signer`
+## `scrollsdk rpc export`
 
-Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This command consumes only the attestation and transport public keys and never provisions keys, deployments, or network probes. Signers dial out to the TSO, so no signer endpoint is imported. Current dogeos-core runtime preflight occurs after partners install the post-genesis canonical-context bundle.
+Generate configuration files for dogeos-rpc-package to enable external RPC nodes
 
 ```
 USAGE
-  $ scrollsdk setup attestation-signer [--active-signer-ids <value>] [-c <value>] [--descriptor <value>...] [--descriptor-dir
-    <value>] [--json] [--threshold <value>]
+  $ scrollsdk rpc export -d <value> [--aws-profile <value>] [--config-path <value>] [--doge-config <value>] [-n
+    <value>] [--spec <value>] [--values-dir <value>]
 
 FLAGS
-  -c, --config=<value>             Path to doge-config.toml
-      --active-signer-ids=<value>  Comma-separated signer IDs entering initial bridge setup (default: every imported
-                                   descriptor)
-      --descriptor=<value>...      attestation-signer-descriptor JSON file; repeat per signer
-      --descriptor-dir=<value>     Directory whose *.json files are all loaded as descriptors (default: descriptors/
-                                   when it exists and no --descriptor is given)
-      --json                       Output structured JSON
-      --threshold=<value>          Initial bridge attestation threshold (T of the active set)
+  -d, --dogeos-rpc-package-dir=<value>  (required) Path to dogeos-rpc-package project directory (clone from
+                                        https://github.com/dogeos69/dogeos-rpc-package)
+  -n, --namespace=<value>               Kubernetes namespace
+      --aws-profile=<value>             AWS profile for independently managed bootnode NLB discovery
+      --config-path=<value>             [default: ./config.toml] Path to config.toml file containing cluster
+                                        configuration
+      --doge-config=<value>             Path to Dogecoin config file
+      --spec=<value>                    Deployment spec required when values reference independent bootnode NLBs
+      --values-dir=<value>              [default: ./values] Directory containing Helm values files (must include
+                                        genesis.yaml)
 
 DESCRIPTION
-  Import signer-init descriptors from partner-operated attestation-signers and select the bootstrap bridge keyset. This
-  command consumes only the attestation and transport public keys and never provisions keys, deployments, or
-  network probes. Signers dial out to the TSO, so no signer endpoint is imported. Current dogeos-core runtime
-  preflight occurs after partners install the post-genesis canonical-context bundle.
+  Generate configuration files for dogeos-rpc-package to enable external RPC nodes
 
 EXAMPLES
-  $ scrollsdk setup attestation-signer --descriptor partner-a.json --descriptor partner-b.json --descriptor ours.json --threshold 2
+  # Generate RPC package (dogeos-rpc-package directory is required)
 
-  $ scrollsdk setup attestation-signer --descriptor-dir descriptors/ --threshold 3 --active-signer-ids partner-a,partner-b,ours-0
+  $ scrollsdk rpc export -d ~/github/dogeos-rpc-package/
+
+
+
+  # Generate mainnet RPC package with specific config and namespace
+
+  $ scrollsdk rpc export --doge-config .data/doge-config.toml -d ~/github/dogeos-rpc-package/ -n scroll-mainnet
+
+
+
+  # First clone the project: git clone https://github.com/dogeos69/dogeos-rpc-package
+
+  $ scrollsdk rpc export -d ./dogeos-rpc-package/ --namespace default
 ```
 
-_See code: [src/commands/setup/attestation-signer.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/attestation-signer.ts)_
+_See code: [src/commands/rpc/export.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/rpc/export.ts)_
 
-## `scrollsdk setup bootnode-public-p2p`
+## `scrollsdk setup aws`
 
-Update selected bootnode bindings from an explicit spec and discover public enodes.
-See [Reth bootnode public P2P access](docs/bootnode-public-p2p.md).
+Read external AWS resource information before genesis and bind it to production configuration
 
-```text
-Generate selected bootnode P2P bindings from spec and discover public enodes using read-only AWS queries
-
+```
 USAGE
-  $ scrollsdk setup bootnode-public-p2p --spec <value> [--aws-profile <value>] [--dir
-    <value>] [--doge-config <value>] [--dry-run] [--json] [-N] [--values-dir
-    <value>]
+  $ scrollsdk setup aws [--defer-cubesigner] [--dir <value>] [--json]
 
 FLAGS
-  -N, --non-interactive      Compatibility flag; this command never prompts
-  --aws-profile=<value>
-      --dir=<value>          [default: .] Deployment directory; relative paths
-                             resolve here
-      --doge-config=<value>  [default: .data/doge-config.toml] Existing saved
-                             public bootnode identities; never creates keys
-      --dry-run              Validate and show endpoints without writing values
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
+
+DESCRIPTION
+  Read external AWS resource information before genesis and bind it to production configuration
+```
+
+_See code: [src/commands/setup/aws.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/aws.ts)_
+
+## `scrollsdk setup bridge-funding`
+
+Resume Bridge preparation through wallet and marked Bridge funding handoffs
+
+```
+USAGE
+  $ scrollsdk setup bridge-funding [--defer-cubesigner] [--dir <value>] [--json]
+
+FLAGS
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
+
+DESCRIPTION
+  Resume Bridge preparation through wallet and marked Bridge funding handoffs
+```
+
+_See code: [src/commands/setup/bridge-funding.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/bridge-funding.ts)_
+
+## `scrollsdk setup cubesigner-policy build`
+
+Export the CubeSigner policy Wasm and its sha256 from an immutable compiler image, offline
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy build --compiler-image <value> --expected-core-revision <value> --output <value>
+  [--json]
+
+FLAGS
+  --compiler-image=<value>          (required) ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:<digest> (private;
+                                    needs docker login ghcr.io with read:packages)
+  --expected-core-revision=<value>  (required)
   --json
-      --spec=<value>         (required) Editable deployment spec (no implicit
-                             saved-intent fallback)
-      --values-dir=<value>   [default: values] Directory containing existing
-                             indexed bootnode production values
+  --output=<value>                  (required)
 
 DESCRIPTION
-  Generate selected bootnode P2P bindings from spec and discover public enodes
-  using read-only AWS queries
-
-EXAMPLES
-  $ scrollsdk setup bootnode-public-p2p --spec ../deployment-spec.yaml --dry-run
-
-  $ scrollsdk setup bootnode-public-p2p --spec ../deployment-spec.yaml
+  Export the CubeSigner policy Wasm and its sha256 from an immutable compiler image, offline
 ```
 
-## `scrollsdk setup bridge-init`
+_See code: [src/commands/setup/cubesigner-policy/build.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/build.ts)_
 
-Initialize DogeOS bridge after L2 artifacts and CubeSigner keys are ready
+## `scrollsdk setup cubesigner-policy deploy`
+
+Limited initial policy upload/attachment; emits an operation record, not preparation receipts. For an already attached governed policy use setup cubesigner-policy reconcile
 
 ```
 USAGE
-  $ scrollsdk setup bridge-init [--docker-platform <value>] [--image-tag <value>] [--json] [--kube-context <value>]
-    [-N] [-s <value>] [--step <value>]
+  $ scrollsdk setup cubesigner-policy deploy --build-receipt <value> --build-receipt-sha256 <value> --key-id <value> --name <value>
+    --organization <value> --output <value> [--json]
 
 FLAGS
-  -N, --non-interactive
-      Run without prompts. Requires --seed for --step all or --step 1-prepare.
-
-  -s, --seed=<value>
-      seed which will regenerate the sequencer and fee wallet
-
-  --docker-platform=<value>
-      [default: linux/amd64] Docker platform for bridge-genesis-tools image.
-
-  --image-tag=<value>
-      Specify the Docker image tag to use (defaults to dev-20260707-043e7f3)
-
+  --build-receipt=<value>         (required)
+  --build-receipt-sha256=<value>  (required)
   --json
-      Output in JSON format (stdout for data, stderr for logs)
-
-  --kube-context=<value>
-      Explicit Kubernetes context for the Ethereum DA RPC probe (defaults to KUBE_CONTEXT).
-
-  --step=<value>
-      [default: all] Bridge init step to run. all runs 1-prepare, 2-setup, 3-bridge-info, 4-fund, and 5-protocol-context.
-      1-prepare requires values/genesis.yaml, extracts .data/genesis.json, and prepares protocol_seed.toml. 2-setup is NOT
-      idempotent: generate test keys and broadcast the setup transaction. 3-bridge-info is idempotent: generate namespace
-      and bridge.json. 4-fund is NOT idempotent: broadcast the configured bridge-funding and/or deposit-seed transactions.
-      5-protocol-context is idempotent: generate protocol_context.json. Numeric aliases 1, 2, 3, 4, and 5 are accepted.
+  --key-id=<value>                (required)
+  --name=<value>                  (required)
+  --organization=<value>          (required)
+  --output=<value>                (required)
 
 DESCRIPTION
-  Initialize DogeOS bridge after L2 artifacts and CubeSigner keys are ready
-
-EXAMPLES
-  $ scrollsdk setup bridge-init
-
-  $ scrollsdk setup bridge-init --step 1-prepare
-
-  $ scrollsdk setup bridge-init --step 2-setup
-
-  $ scrollsdk setup bridge-init --step 3-bridge-info
-
-  $ scrollsdk setup bridge-init --step 4-fund
-
-  $ scrollsdk setup bridge-init --step 5-protocol-context
-
-  $ scrollsdk setup bridge-init --step 2
-
-  $ scrollsdk setup bridge-init -s 123456
-
-  $ scrollsdk setup bridge-init --seed 123456
-
-  $ scrollsdk setup bridge-init --image-tag dev-20260707-043e7f3
-
-  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260707-043e7f3
-
-  $ scrollsdk setup bridge-init --non-interactive --seed 123456 --image-tag dev-20260707-043e7f3 --docker-platform linux/amd64
-
-  $ scrollsdk setup bridge-init --non-interactive --json --seed 123456
+  Limited initial policy upload/attachment; emits an operation record, not preparation receipts. For an already attached
+  governed policy use setup cubesigner-policy reconcile
 ```
 
-_See code: [src/commands/setup/bridge-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/bridge-init.ts)_
-
-## `scrollsdk setup cubesigner-init`
-
-Setup a CubeSigner TEE key and role, preserving the provider key and dogeos-core compressed identity
-
-```
-USAGE
-  $ scrollsdk setup cubesigner-init [--count <value>] [--doge-config <value>] [--json] [--new] [-N] [--role-prefix <value>]
-    [--roles <value>...] [--threshold <value>]
-
-FLAGS
-  -N, --non-interactive      Run without prompts. Requires --doge-config and either --new (with --role-prefix) or
-                             --roles.
-      --count=<value>        Number of TEE keys/roles to create (must be 1; default 1)
-      --doge-config=<value>  Path to Dogecoin config file
-      --json                 Output in JSON format (stdout for data, stderr for logs)
-      --new                  Create new roles and keys
-      --role-prefix=<value>  Prefix for role names (when using --new)
-      --roles=<value>...     Comma-separated list of existing role names to use
-      --threshold=<value>    Deprecated; ignored because cubesigner-init configures the single TEE key.
-
-DESCRIPTION
-  Setup a CubeSigner TEE key and role, preserving the provider key and dogeos-core compressed identity
-
-EXAMPLES
-  $ scrollsdk setup cubesigner-init --roles tee_role
-
-  $ scrollsdk setup cubesigner-init --new --role-prefix tee
-
-  $ scrollsdk setup cubesigner-init --roles tee_role --doge-config .data/doge-config.toml
-
-  $ scrollsdk setup cubesigner-init
-
-  $ scrollsdk setup cubesigner-init --non-interactive --new --role-prefix tee --doge-config .data/doge-config.toml
-
-  $ scrollsdk setup cubesigner-init --non-interactive --json --roles tee_role --doge-config .data/doge-config.toml
-```
-
-_See code: [src/commands/setup/cubesigner-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-init.ts)_
+_See code: [src/commands/setup/cubesigner-policy/deploy.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/deploy.ts)_
 
 ## `scrollsdk setup cubesigner-policy handoff`
 
@@ -1016,6 +1289,34 @@ DESCRIPTION
 ```
 
 _See code: [src/commands/setup/cubesigner-policy/handoff.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/handoff.ts)_
+
+## `scrollsdk setup cubesigner-policy import`
+
+Import an external policy Wasm for staged preparation; verify hashes and record operator-declared build provenance without publishing or attaching
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy import --build-script-revision <value> --core-revision <value>
+    --expected-protocol-context-sha256 <value> --expected-wasm-sha256 <value> --source-repo <value> --wasm <value>
+    [--dir <value>] [--json]
+
+FLAGS
+  --build-script-revision=<value>             (required) Full Core commit containing tools/cubesigner/build-verifier.sh
+  --core-revision=<value>                     (required) Full policy source commit used for the external build
+  --dir=<value>                               [default: deployment] Saved deployment directory
+  --expected-protocol-context-sha256=<value>  (required) Reviewed SHA-256 of .data/protocol_context.json
+  --expected-wasm-sha256=<value>              (required) Independently agreed Wasm SHA-256
+  --json
+  --source-repo=<value>                       (required) Local Core repository containing both commits; no checkout or
+                                              fetch is performed
+  --wasm=<value>                              (required) Existing Wasm path relative to the deployment directory
+
+DESCRIPTION
+  Import an external policy Wasm for staged preparation; verify hashes and record operator-declared build provenance
+  without publishing or attaching
+```
+
+_See code: [src/commands/setup/cubesigner-policy/import.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/import.ts)_
 
 ## `scrollsdk setup cubesigner-policy import-acceptance`
 
@@ -1084,7 +1385,8 @@ FLAGS
   --live-evidence=<value>             Reviewed real acceptance report, if already available; never generated by this
                                       command
   --materials=<value>                 [default: .data/proof-materials-v1.json]
-  --organization=<value>              (required)
+  --organization=<value>              (required) Organization ID or alias; prepare verifies it and records the canonical
+                                      ID
   --output=<value>                    [default: .scrollsdk/inputs/cubesigner-policy/preparation.json]
   --policy=<value>                    (required) Published concrete name/vN, v1 or later
   --program-identity-digest=<value>   (required) Reviewed release program identity digest; not the VM executable file
@@ -1103,6 +1405,31 @@ DESCRIPTION
 ```
 
 _See code: [src/commands/setup/cubesigner-policy/prepare-input.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/prepare-input.ts)_
+
+## `scrollsdk setup cubesigner-policy prepare-runtime-secrets`
+
+Prepare only CubeSigner SecretStore/ExternalSecret objects and wait for delivery; does not start a signer or authorize activation
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy prepare-runtime-secrets --kube-context <value> --namespace <value> [--chart <value>] [--chart-version <value>]
+    [--dir <value>] [--json] [--values <value>]
+
+FLAGS
+  --chart=<value>          [default: oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer]
+  --chart-version=<value>  [default: 0.1.9]
+  --dir=<value>            [default: deployment]
+  --json
+  --kube-context=<value>   (required)
+  --namespace=<value>      (required)
+  --values=<value>         [default: values/cubesigner-signer-production.yaml]
+
+DESCRIPTION
+  Prepare only CubeSigner SecretStore/ExternalSecret objects and wait for delivery; does not start a signer or authorize
+  activation
+```
+
+_See code: [src/commands/setup/cubesigner-policy/prepare-runtime-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/prepare-runtime-secrets.ts)_
 
 ## `scrollsdk setup cubesigner-policy prepare-session`
 
@@ -1126,33 +1453,55 @@ _See code: [src/commands/setup/cubesigner-policy/prepare-session.ts](https://git
 
 ## `scrollsdk setup cubesigner-policy reconcile`
 
-Read back an already attached immutable policy and generate the release/attachment
-receipts consumed by staged preparation. Preserves the role restriction; performs
-no provider mutation or signing. Requires reviewed release and test evidence.
+Validate reviewed release evidence and read back an already attached policy; write preparation receipts without changing CubeSigner
 
-```sh
-scrollsdk setup cubesigner-policy reconcile --dir deployment --input .data/policy-review.json --json
 ```
-
-See the [external policy runbook](docs/cubesigner-external-policy.md#4-reconcile-an-already-approved-attachment)
-for the input format, permission requirements, validation and resumption steps.
-
-## `scrollsdk setup cubesigner-policy import`
-
-Import an existing externally built policy Wasm into staged preparation without
-building, publishing, attaching, or changing preparation checkpoints.
-
-```text
 USAGE
-  $ scrollsdk setup cubesigner-policy import --dir deployment
-    --wasm <deployment-relative-path> --expected-wasm-sha256 <sha256>
-    --expected-protocol-context-sha256 <sha256> --core-revision <commit>
-    --build-script-revision <commit> --source-repo <core-repository> [--json]
+  $ scrollsdk setup cubesigner-policy reconcile --input <value> [--dir <value>] [--json] [--output <value>]
+  [--session-file <value>]
+
+FLAGS
+  --dir=<value>           [default: deployment]
+  --input=<value>         (required) Reviewed release inputs JSON, relative to deployment; see
+                          docs/cubesigner-external-policy.md
+  --json
+  --output=<value>        [default: .data/cubesigner-policy-reconciled] New evidence directory relative to deployment;
+                          existing output is never overwritten
+  --session-file=<value>  Management session; defaults to the cs CLI session
+
+DESCRIPTION
+  Validate reviewed release evidence and read back an already attached policy; write preparation receipts without
+  changing CubeSigner
+
+EXAMPLES
+  $ scrollsdk setup cubesigner-policy reconcile --dir deployment --input .data/policy-review.json --json
 ```
 
-See the [external policy runbook](docs/cubesigner-external-policy.md) for build
-provenance, Council approval, receipt boundaries, and signer-side acceptance.
-The import checks local evidence; it does not assert governance or live tests passed.
+_See code: [src/commands/setup/cubesigner-policy/reconcile.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/reconcile.ts)_
+
+## `scrollsdk setup cubesigner-policy resolver`
+
+Preview or add a policy resolver to the CubeSigner organization HTTP authority allowlist, preserving its existing configuration
+
+```
+USAGE
+  $ scrollsdk setup cubesigner-policy resolver --base-url <value> --organization <value> [--apply] [--json] [--output <value>]
+    [--session-file <value>]
+
+FLAGS
+  --apply                 Add the resolver authority and verify provider readback
+  --base-url=<value>      (required)
+  --json
+  --organization=<value>  (required)
+  --output=<value>        Write the non-secret resolver configuration receipt to a new file
+  --session-file=<value>  Management session file; defaults to the cs CLI session
+
+DESCRIPTION
+  Preview or add a policy resolver to the CubeSigner organization HTTP authority allowlist, preserving its existing
+  configuration
+```
+
+_See code: [src/commands/setup/cubesigner-policy/resolver.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/resolver.ts)_
 
 ## `scrollsdk setup cubesigner-policy verify-activation`
 
@@ -1181,105 +1530,19 @@ DESCRIPTION
   read-only provider calls, no Helm mutation
 ```
 
-_See code: [src/commands/setup/cubesigner-policy/verify-activation.ts](src/commands/setup/cubesigner-policy/verify-activation.ts)_
-
-## `scrollsdk setup cubesigner-refresh`
-
-Refresh cubesigner session secrets
-
-```
-USAGE
-  $ scrollsdk setup cubesigner-refresh [--doge-config <value>] [--email <value>] [--environment <value>] [--json] [-N]
-    [--org-id <value>]
-
-FLAGS
-  -N, --non-interactive      Run without prompts. Requires --doge-config. If not logged in, also requires --org-id and
-                             --email.
-      --doge-config=<value>  Path to Dogecoin config file
-      --email=<value>        CubeSigner account email (for non-interactive login if not already logged in)
-      --environment=<value>  [default: gamma] CubeSigner environment (default: gamma)
-      --json                 Output in JSON format (stdout for data, stderr for logs)
-      --org-id=<value>       CubeSigner organization ID (for non-interactive login if not already logged in)
-
-DESCRIPTION
-  Refresh cubesigner session secrets
-
-  Generated signer sessions use fixed service lifetimes:
-  session-lifetime=31536000s (365 days), auth-lifetime=7200s (2 hours), refresh-lifetime=604800s (7 days), and
-  grace-lifetime=30s.
-
-  This command writes local files under ./secrets. Push the refreshed secrets with setup push-secrets --cubesigner-only,
-  then restart CubeSigner signer pods after clearing /app/.sessions/main_cs_session.json so the new Secret seed is
-  copied into the active session cache.
-
-EXAMPLES
-  $ scrollsdk setup cubesigner-refresh
-
-  $ scrollsdk setup cubesigner-refresh --doge-config .data/doge-config.toml
-
-  $ scrollsdk setup cubesigner-refresh --non-interactive --doge-config .data/doge-config.toml
-
-  $ scrollsdk setup cubesigner-refresh --non-interactive --json --doge-config .data/doge-config.toml --org-id Org#xxx --email user@example.com
-```
-
-_See code: [src/commands/setup/cubesigner-refresh.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-refresh.ts)_
-
-## `scrollsdk setup db-init`
-
-Initialize Blockscout and dstack PostgreSQL databases, or update their permissions
-
-```
-USAGE
-  $ scrollsdk setup db-init [-c] [-d] [--json] [-N] [-u] [--update-port <value>]
-    [--databases blockscout|dstack] [--doge-config <value>]
-    [--ssl-ca <value>] [--ssl-mode verify-full|disable]
-
-FLAGS
-  -N, --non-interactive      Run without prompts, using config.toml values. Requires [db.admin] section with
-                             PUBLIC_HOST, PUBLIC_PORT, USERNAME, PASSWORD (or $ENV: refs)
-  -c, --clean                Recreate selected databases and reset their user passwords
-  -d, --debug                Show debug output including SQL queries
-  -u, --update-permissions   Update permissions for existing users
-      --json                 Output in JSON format (stdout for data, stderr for logs)
-      --databases=<option>   Initialize only selected services; repeat to select both
-      --doge-config=<value>  Doge config containing dstackController; defaults to .data/doge-config.toml
-      --ssl-ca=<value>       PEM CA bundle for administrator connections; overrides [db.admin].SSL_CA
-      --ssl-mode=<option>    Administrator TLS mode; overrides [db.admin].SSL_MODE (default: verify-full)
-      --update-port=<value>  Update the port of current database values
-
-DESCRIPTION
-  Initialize Blockscout and dstack PostgreSQL databases, or update their permissions
-
-EXAMPLES
-  $ scrollsdk setup db-init
-
-  $ scrollsdk setup db-init --update-permissions
-
-  $ scrollsdk setup db-init --update-permissions --debug
-
-  $ scrollsdk setup db-init --clean
-
-  $ scrollsdk setup db-init --update-port=25061
-
-  $ scrollsdk setup db-init --non-interactive
-
-  $ scrollsdk setup db-init --databases dstack --non-interactive
-
-  $ scrollsdk setup db-init --non-interactive --json --clean
-```
-
-_See code: [src/commands/setup/db-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/db-init.ts)_
+_See code: [src/commands/setup/cubesigner-policy/verify-activation.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/cubesigner-policy/verify-activation.ts)_
 
 ## `scrollsdk setup deployment-preflight`
 
-Check deployment inputs, with explicit optional cluster/RPC probes and isolated local Reth startup
+Check prepared application inputs before Helm installation; optionally check installed workloads
 
 ```
 USAGE
   $ scrollsdk setup deployment-preflight [--deployment-dir <value>] [--doge-config <value>] [--dogecoin-rpc-env <value>
     --signer-container <value>] [--dstack-deployment <value>] [--ethereum-chain-id <value>] [--ethereum-rpc-env
-    <value>...] [--ethereum-rpc-quorum <value>] [--json] [--namespace <value>] [--rendered-manifest <value>...
-    --kube-context <value>] [--require-dstack] [--reth-image <value>]
+    <value>...] [--ethereum-rpc-quorum <value>] [--json] [--namespace <value>] [--proof] [--proof-live --kube-context
+    <value>] [--proof-scope activation|preparation] [--rendered-manifest <value>... ] [--require-dstack] [--reth-image
+    <value>] [--spec <value>]
 
 FLAGS
   --deployment-dir=<value>        [default: .]
@@ -1291,653 +1554,74 @@ FLAGS
                                   finalized-block quorum
   --ethereum-rpc-quorum=<value>   [default: 1]
   --json
-  --kube-context=<value>          Explicit context for optional read-only dstack runtime check; omitted means no
-                                  Kubernetes calls
-  --namespace=<value>             [default: default]
+  --kube-context=<value>          Explicit context for optional cluster checks
+  --namespace=<value>             Namespace for application checks; defaults to default
+  --proof                         Require proof contract validation; automatic when proof configuration or a contract is
+                                  present
+  --proof-live                    After rollout: also require fresh authenticated TSO polls from every registered signer
+  --proof-scope=<option>          [default: activation] Proof evidence scope; preparation does not authorize signer
+                                  installation
+                                  <options: activation|preparation>
   --rendered-manifest=<value>...  Rendered Helm manifest to check against cluster resources and ALB prerequisites;
                                   repeat for each release
-  --require-dstack                Treat missing controller configuration/values as an error
+  --require-dstack                Require controller configuration; with kube-context also require its installed
+                                  Deployment to be available
   --reth-image=<value>            Run an isolated local startup canary for this exact Reth image with the deployment
                                   genesis; no network or persistent data
   --signer-container=<value>      Probe Dogecoin RPC from this running container network namespace using a disposable
                                   curl container
+  --spec=<value>                  Spec path for selected checks, relative to deployment-dir; defaults to saved intent or
+                                  deployment-spec.yaml
 
 DESCRIPTION
-  Check deployment inputs, with explicit optional cluster/RPC probes and isolated local Reth startup
+  Check prepared application inputs before Helm installation; optionally check installed workloads
 ```
 
-_See code: [src/commands/setup/deployment-preflight.ts](src/commands/setup/deployment-preflight.ts)_
+_See code: [src/commands/setup/deployment-preflight.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/deployment-preflight.ts)_
 
-## `scrollsdk setup doge-config`
+## `scrollsdk setup genesis`
 
-Configure Dogecoin/DA settings and optionally initialize compiler-backed proof topology
-
-The base configuration flow also configures Grafana's admin username (default
-`admin`) and password. It offers secure password generation or masked manual
-entry, and preserves an existing password unless you choose to replace it.
-Non-interactive runs generate a password only when none is configured. The
-`--proof-topology` shortcut for an existing configuration leaves these credentials
-unchanged.
-
-Credentials are stored in the selected doge-config file under `[grafana]` as
-`adminUser` and `adminPassword`. You can set `adminPassword = "$ENV:GRAFANA_ADMIN_PASSWORD"`
-to keep an environment reference in the configuration; it is resolved by
-`setup gen-secrets`. Local credential files use mode `0600`, are excluded from Git
-before writing, and cannot overwrite Git-tracked files.
-
-The normal `setup gen-secrets` flow generates `secrets/grafana-admin.yaml`, matching
-the scroll-monitor example's `grafana.admin.existingSecret: grafana-admin`, with
-keys `admin-user` and `admin-password`. `setup prep-charts` writes that reference
-into scroll-monitor values and removes inline admin credentials. Optional
-`[grafana]` fields `existingSecret`, `userKey`, and `passwordKey` customize both
-outputs. Configurations without `[grafana]` retain their existing behavior.
-
-Apply the generated Secret in the scroll-monitor release namespace before
-installation, for example `kubectl -n <monitoring-namespace> apply -f secrets/grafana-admin.yaml`.
-This YAML is applied directly; `setup push-secrets` handles ENV/JSON files and does
-not publish it. These commands prepare bootstrap credentials and do not reset the
-password in an already running Grafana database.
+Generate and pin local genesis artifacts after validating existing AWS resources
 
 ```
 USAGE
-  $ scrollsdk setup doge-config [-c <value>] [--json] [-N] [--proof-artifact-source existing-s3|prepared-aws
-    --proof-topology] [--proof-bucket <value> ] [--proof-coordinator-url <value> ] [--proof-endpoint-url <value> ]
-    [--proof-enforcement observe|enforce ] [--proof-force-path-style ] [--proof-generation mock|real ]
-    [--proof-key-prefix <value> ] [--proof-materials <value> ] [--proof-mode active|disabled ]
-    [--proof-observe-real-proof-deadline-ms <value> ] [--proof-public-s3-endpoint <value> ] [--proof-region <value> ]
-    [--proof-topology-compiler-binary <value> ] [--proof-witness-dir <value> ] [--proof-witness-rpc-url <value> ]
-    [--proof-witness-source block_witness_dir|rpc ] [--proof-worker-deployment-backend docker_compose|kubernetes ]
-    [--proof-worker-launch external|local_cpu|local_cuda ]
+  $ scrollsdk setup genesis [--defer-cubesigner] [--dir <value>] [--json]
 
 FLAGS
-  -N, --non-interactive                               Run without prompts, using existing config values
-  -c, --config=<value>                                Path to config file
-      --json                                          Output in JSON format (stdout for data, stderr for logs)
-      --proof-artifact-source=<option>                Artifact resource source used by --proof-topology
-                                                      <options: existing-s3|prepared-aws>
-      --proof-bucket=<value>                          Existing S3-compatible proof artifact bucket
-      --proof-coordinator-url=<value>                 HTTPS Proof Coordinator URL reachable by production Workers
-      --proof-endpoint-url=<value>                    Worker-visible S3-compatible endpoint root
-      --proof-enforcement=<option>                    Proof enforcement switch; keep observe until real proofs are
-                                                      validated
-                                                      <options: observe|enforce>
-      --[no-]proof-force-path-style                   Use path-style S3 object URLs for an existing compatible store
-      --proof-generation=<option>                     Proof generation implementation selected for active services
-                                                      <options: mock|real>
-      --proof-key-prefix=<value>                      Base proof artifact key prefix before compiler digest scoping
-      --proof-materials=<value>                       Prepared proof-materials-v1.json receipt
-      --proof-mode=<option>                           Initial proof mode (default: existing value or disabled)
-                                                      <options: active|disabled>
-      --proof-observe-real-proof-deadline-ms=<value>  Required positive observe fallback deadline in milliseconds; also
-                                                      required for mock (no default)
-      --proof-public-s3-endpoint=<value>              External Worker/signer-visible S3 endpoint when different from the
-                                                      store endpoint
-      --proof-region=<value>                          Existing S3-compatible proof artifact region
-      --proof-topology                                Initialize or replace compiler-backed proof topology
-      --proof-topology-compiler-binary=<value>        Development-only local dogeos-proof-topology binary used for both
-                                                      initialization preflights
-      --proof-witness-dir=<value>                     Production block witness directory relative to the prepared
-                                                      material root
-      --proof-witness-rpc-url=<value>                 Scroll witness RPC URL used when --proof-witness-source=rpc
-      --proof-witness-source=<option>                 Chunk witness source used by real materialization
-                                                      <options: block_witness_dir|rpc>
-      --proof-worker-deployment-backend=<option>      Deployment adapter backend for local_cpu/local_cuda Workers
-                                                      <options: docker_compose|kubernetes>
-      --proof-worker-launch=<option>                  Staged real Worker compute/ownership placement from the
-                                                      dogeos-core contract
-                                                      <options: external|local_cpu|local_cuda>
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
 
 DESCRIPTION
-  Configure Dogecoin/DA settings and optionally initialize compiler-backed proof topology
-
-EXAMPLES
-  $ scrollsdk setup doge-config
-
-  $ scrollsdk setup doge-config --config .data/doge-config.toml
-
-  $ scrollsdk setup doge-config --proof-topology
-
-  $ scrollsdk setup doge-config --proof-topology --proof-mode disabled --proof-generation mock --proof-enforcement observe
-
-  $ scrollsdk setup doge-config --proof-topology --proof-mode active --proof-generation mock
-
-  $ scrollsdk setup doge-config --non-interactive
-
-  $ scrollsdk setup doge-config --non-interactive --json
+  Generate and pin local genesis artifacts after validating existing AWS resources
 ```
 
-_See code: [src/commands/setup/doge-config.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/doge-config.ts)_
+_See code: [src/commands/setup/genesis.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/genesis.ts)_
 
-## `scrollsdk setup dogecoin-wallet-import`
+## `scrollsdk setup plan`
 
-Dogecoin wallet import
+Plan a fresh spec deployment preparation; save a private plan without cloud or chain mutations
 
 ```
 USAGE
-  $ scrollsdk setup dogecoin-wallet-import [--all-replicas] [--doge-config <value>] [--image-tag <value>] [--namespace <value>]
-    [--replicas <value>] [--rpc-password <value>] [--rpc-port <value>] [--rpc-url <value>] [--rpc-user <value>]
-    [--service-name <value>]
+  $ scrollsdk setup plan [--env-file <value>] [--json] [--output <value>] [--sdk-dir <value>] [--spec <value>]
 
 FLAGS
-  --all-replicas          Import watch-only addresses into every Dogecoin StatefulSet replica using in-cluster pod DNS
-  --doge-config=<value>   Path to Dogecoin config file
-  --image-tag=<value>     Docker image tag
-  --namespace=<value>     [default: default] Kubernetes namespace for --all-replicas mode
-  --replicas=<value>      Dogecoin replica count for --all-replicas mode. Defaults to the StatefulSet replica count.
-  --rpc-password=<value>  Dogecoin RPC password
-  --rpc-port=<value>      Dogecoin RPC port for --all-replicas mode
-  --rpc-url=<value>       Dogecoin RPC URL
-  --rpc-user=<value>      Dogecoin RPC username
-  --service-name=<value>  Stable Dogecoin Kubernetes service name for --all-replicas mode
-
-DESCRIPTION
-  Dogecoin wallet import
-```
-
-_See code: [src/commands/setup/dogecoin-wallet-import.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/dogecoin-wallet-import.ts)_
-
-## `scrollsdk setup domains`
-
-Set up domain configurations for external services
-
-```
-USAGE
-  $ scrollsdk setup domains [--json] [-N] [--values-dir <value>]
-
-FLAGS
-  -N, --non-interactive         Run without prompts, using config.toml values
-      --json                    Output in JSON format (stdout for data, stderr for logs)
-      --values-dir=<value>      [default: values] Directory containing Helm values files to prepare for bootstrap charts
-
-DESCRIPTION
-  Set up domain configurations for external services
-
-EXAMPLES
-  $ scrollsdk setup domains
-
-  $ scrollsdk setup domains --non-interactive
-
-  $ scrollsdk setup domains --non-interactive --json
-```
-
-_See code: [src/commands/setup/domains.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/domains.ts)_
-
-## `scrollsdk setup eth-da-submitter`
-
-```text
-Configure the eth-da-submitter S3 archive and optional writer IAM permissions
-
-USAGE
-  $ scrollsdk setup eth-da-submitter [--archive-bucket <value>]
-    [--archive-key-prefix <value>] [--archive-public-base-url <value>]
-    [--archive-region <value>] [--aws-profile <value>] [--aws-region <value>]
-    [--create-archive-bucket] [--disable-archive] [--doge-config <value>]
-    [--json] [-N] [--role-arn <value>]
-
-FLAGS
-  -N, --non-interactive
-      --archive-bucket=<value>           S3 blob archive bucket.
-      --archive-key-prefix=<value>       Deployment prefix for raw DA blobs; proof sidecars use proofArtifacts.s3.
-                                        Core owns the relative object paths.
-      --archive-public-base-url=<value>  Public HTTPS base URL used by blob
-                                         consumers.
-      --archive-region=<value>           Region owning the archive bucket.
-      --aws-profile=<value>              AWS profile for archive resource
-                                         operations.
-      --aws-region=<value>               Fallback archive region; existing
-                                         archive region takes precedence.
-      --[no-]create-archive-bucket       Create/reuse the bucket. Defaults to
-                                         enabled for a configured AWS KMS
-                                         submitter, disabled for a local signer.
-      --disable-archive                  Disable archive configuration without
-                                         deleting buckets or IAM policies.
-      --doge-config=<value>              Dogecoin configuration file.
+  --env-file=<value>  Private NAME=value file (default: ./deployment.env when present); saved for stage commands, never
+                      executed as shell
   --json
-      --role-arn=<value>                 Existing archive writer IAM role.
-                                         Defaults to the submitter signer
-                                         service-account role.
+  --output=<value>    [default: deployment] New private deployment directory
+  --sdk-dir=<value>   [default: ../scroll-sdk] SDK checkout; plan locks committed HEAD unless templates.sdkRevision
+                      overrides it
+  --spec=<value>      [default: deployment-spec.yaml] DeploymentSpec YAML; environment references must resolve in this
+                      process
 
 DESCRIPTION
-  Configure the eth-da-submitter S3 archive and optional writer IAM permissions
-
-EXAMPLES
-  $ scrollsdk setup eth-da-submitter --archive-bucket dogeos-da --archive-region us-east-1 --archive-key-prefix devnet -N
-
-  $ scrollsdk setup eth-da-submitter --no-create-archive-bucket --role-arn arn:aws:iam::123456789012:role/archive-writer -N
-
-  $ scrollsdk setup eth-da-submitter --disable-archive -N
+  Plan a fresh spec deployment preparation; save a private plan without cloud or chain mutations
 ```
 
-See [deployment signing identities](docs/keystore.md) for scope, repeat execution,
-and the separate archive workflow.
-
-## `scrollsdk setup export-deployment-kit`
-
-Export the signer deployment kit from the selected proof deployment contract and its bound materials receipt; its version is derived from the signer-relevant inputs. Publish it unchanged, then record the publication with --published-url
-
-```
-USAGE
-  $ scrollsdk setup export-deployment-kit [-c <value>] [--contract <value>] [--json] [--out <value>]
-    [--protocol-context <value>] [--published-url <value>] [--signer-proof-artifact-base-url <value>] [--spec <value>]
-    [--tso-url <value>]
-
-FLAGS
-  -c, --config=<value>                          Path to doge-config.toml
-      --contract=<value>                        [default: .data/proof-deployment.json] Selected deployment contract;
-                                                binds the materials receipt and protocol context
-      --json                                    Output structured JSON
-      --out=<value>                             Kit output directory [default: deployment-kit-<kit version>]; an
-                                                existing one must already hold this exact kit
-      --protocol-context=<value>                [default: .data/protocol_context.json] Canonical protocol_context.json
-                                                produced by setup bridge-init
-      --published-url=<value>                   https URL where this exact kit is published; records it in
-                                                doge-config [attestationSigner.deploymentKit]. Uses the deployment
-                                                inputs only: not with --out, --tso-url or
-                                                --signer-proof-artifact-base-url
-      --signer-proof-artifact-base-url=<value>  Public GET base used by signers; default: compiler output in
-                                                withdrawal-processor/WithdrawalProcessor.toml
-      --spec=<value>                            Optional DeploymentSpec proof source; conflicts with doge-config
-                                                [proof_topology]
-      --tso-url=<value>                         TSO base URL reachable from signer networks; default: config.toml
-                                                [ingress].TSO_HOST
-
-DESCRIPTION
-  Export the signer deployment kit from the selected proof deployment contract and its bound materials receipt; its
-  version is derived from the signer-relevant inputs. Publish it unchanged, then record the publication with
-  --published-url
-
-EXAMPLES
-  $ scrollsdk setup export-deployment-kit
-
-  $ scrollsdk setup export-deployment-kit --published-url https://downloads.dogeos.example/deployment-kit-k-0123456789ab.tar.gz
-```
-
-The kit directory holds `deployment-kit.json`, `deployment-kit.env`,
-`protocol_context.json`, `advance-l2-agg-verifying-key.bin` and
-`deployment-kit-manifest.json`. Its identity is the SHA-256 of
-`deployment-kit-manifest.json`, which the command prints with the network,
-`protocol_instance_id` and kit version for the deployment record. The version,
-`k-<12 hex>`, is derived from the signer-relevant fields (network, protocol
-instance, TSO URL, artifact origin, policy mode, protocol context and verifier
-material), so the same inputs always give the same kit and a rerun is a no-op;
-a changed endpoint or verifier gives a new version. The kit holds no signer
-roster, current Bridge key or rotation material, so an ordinary attestation
-rotation needs no new kit. `setup apply` produces the same kit for enforcing
-deployments.
-
-_See code: [src/commands/setup/export-deployment-kit.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/export-deployment-kit.ts)_
-
-## `scrollsdk setup gen-keystore`
-
-```text
-Prepare Reth node and service signing identities using local keys or AWS KMS
-
-USAGE
-  $ scrollsdk setup gen-keystore [--aws-profile <value>] [--aws-region <value>]
-    [--doge-config <value>] [--eks-cluster <value>] [-i <value>] [--json]
-    [--kms-key-id <value>] [--namespace <value>] [--network-alias <value>]
-    [--nodekey <value>] [--nodekey-secret-mode external-secret|plain] [-N]
-    [--role-arn <value>] [--service-account <value>] [--signer-mode
-    aws-kms|external-secret|plain] [--signer-private-key <value>] [--accounts]
-    [--activity-helper] [--bootnode-count <value>] [--from-spec <value>]
-    [--secret-mode external-secret|plain] [--sequencer-count <value>] [--service
-    sequencer-reth|bootnode-reth|fee-oracle|eth-da-submitter] [--signer-backend
-    local|aws-kms]
-
-FLAGS
-  -N, --non-interactive               Run without prompts. Generates missing
-                                      local keys.
-  -i, --index=<value>                 One sequencer index; requires --service
-                                      sequencer-reth.
-      --[no-]accounts                 Also prepare/reuse the deployer account in
-                                      config.toml and validate an existing
-                                      OWNER_ADDR.
-      --activity-helper               Also prepare the optional testnet activity
-                                      account in config.toml.
-      --aws-profile=<value>           AWS CLI profile to use for KMS signer
-                                      provisioning.
-      --aws-region=<value>            AWS region for the EKS cluster and KMS
-                                      key.
-      --bootnode-count=<value>        Prepare Reth bootnode indices 0 through
-                                      count-1; never deletes existing
-                                      identities.
-      --doge-config=<value>           Path to Dogecoin config file (defaults to
-                                      .data/doge-config.toml)
-      --eks-cluster=<value>           EKS cluster name or ARN used for IRSA
-                                      trust binding.
-      --from-spec=<value>             Use DeploymentSpec node counts after
-                                      generating doge-config from that spec.
-      --json                          Output in JSON format (stdout for data,
-                                      stderr for logs)
-      --kms-key-id=<value>            Existing KMS key id, ARN, or alias for the
-                                      reth sequencer signer.
-      --namespace=<value>             [default: default] Kubernetes namespace
-                                      for the KMS signer service account.
-      --network-alias=<value>         Resource alias used to derive
-                                      deterministic KMS aliases and IAM role
-                                      names.
-      --nodekey=<value>               Existing reth P2P nodekey private key as
-                                      64 hex chars, with or without 0x.
-      --nodekey-secret-mode=<option>  How P2P nodekey material is referenced
-                                      from values YAML. AWS KMS signer mode
-                                      only; local signer mode uses
-                                      --signer-mode.
-                                      <options: external-secret|plain>
-      --role-arn=<value>              Existing IAM role ARN to annotate on the
-                                      sequencer service account.
-      --secret-mode=<option>          Secret reference mode for the selected
-                                      Reth node.
-                                      <options: external-secret|plain>
-      --sequencer-count=<value>       Prepare Reth sequencer indices 0 through
-                                      count-1; never deletes existing
-                                      identities.
-      --service=<option>              Prepare only this service. Omit to select
-                                      services interactively; -N/--json
-                                      processes declared identities.
-                                      <options: sequencer-reth|bootnode-reth|fee
-                                      -oracle|eth-da-submitter>
-      --service-account=<value>       Kubernetes service account used by this
-                                      sequencer.
-      --signer-backend=<option>       Backend for the selected signing identity;
-                                      otherwise reuse its configured backend.
-                                      <options: local|aws-kms>
-      --signer-mode=<option>          How the reth sequencer block signer is
-                                      configured.
-                                      <options: aws-kms|external-secret|plain>
-      --signer-private-key=<value>    Existing local sequencer signer private
-                                      key, with or without 0x.
-
-DESCRIPTION
-  Prepare Reth node and service signing identities using local keys or AWS KMS
-
-EXAMPLES
-  $ scrollsdk setup gen-keystore
-
-  $ scrollsdk setup gen-keystore -N
-
-  $ scrollsdk setup gen-keystore --service sequencer-reth --index 0 --signer-backend aws-kms --aws-region us-east-1 --eks-cluster dogeos-devnet --network-alias devnet -N
-
-  $ scrollsdk setup gen-keystore --service bootnode-reth --bootnode-count 2 -N
-
-  $ scrollsdk setup gen-keystore --service fee-oracle --signer-backend local -N
-
-  $ scrollsdk setup gen-keystore --service eth-da-submitter -N
-
-  $ scrollsdk setup gen-keystore --accounts -N
-```
-
-See [deployment signing identities](docs/keystore.md) for scope, repeat execution,
-and the separate archive workflow.
-
-## `scrollsdk setup gen-l2-artifacts`
-
-For development without Docker, run from a prepared deployment directory:
-
-```bash
-scrollsdk setup gen-l2-artifacts --contracts-source /path/to/scroll-contracts \
-  --non-interactive --json --skip-deployment-salt-update --skip-l1-fee-vault-update
-```
-
-Requires Foundry, bash, jq and installed contract dependencies. `--contracts-source`
-is mutually exclusive with `--image-tag`. Source `volume/` is preserved; compiler
-caches are reused in `.data/contracts-build/`. See the [operation guide](docs/config-cleanup.md#developing-contract-generation-without-docker).
-
-
-Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values
-
-Artifact generation does not require `sequencer.L2GETH_SIGNER_ADDRESS` or a
-configured Reth signer. Current contracts initialize SystemConfig with the zero
-signer and generate empty genesis `extraData`; configure the Reth runtime signer
-separately with `setup l2-sequencer-reth`.
-
-The command no longer prompts for or updates `L1_PLONK_VERIFIER_ADDR`. The old
-`--l1-plonk-verifier-addr` and `--skip-l1-plonk-verifier-update` flags are accepted
-for script compatibility and ignored. `--doge-config` is only used for legacy
-contracts placeholder validation.
-
-```
-USAGE
-  $ scrollsdk setup gen-l2-artifacts [--base-fee-per-gas <value>] [--configs-dir <value>] [--contracts-source <value>] [--deployment-salt <value>]
-    [--doge-config <value>] [--image-tag <value>] [--json] [--l1-fee-vault-addr <value>]
-    [--l2-bridge-fee-recipient-addr <value>] [-N] [--skip-deployment-salt-update] [--skip-l1-fee-vault-update]
-
-FLAGS
-  -N, --non-interactive                       Run without prompts. Uses config values or sensible defaults.
-      --base-fee-per-gas=<value>              Base fee per gas (non-interactive mode). Uses existing config value if not
-                                              provided.
-      --configs-dir=<value>                   [default: values] Directory name to copy configs to
-      --contracts-source=<value>              Local scroll-contracts checkout; use Foundry instead of Docker.
-      --deployment-salt=<value>               Deployment salt value (non-interactive mode). If not provided, keeps
-                                              existing or auto-increments.
-      --doge-config=<value>                   Path to Dogecoin config containing the Reth genesis signer (defaults to
-                                              .data/doge-config.toml when present)
-      --image-tag=<value>                     Specify the Docker image tag to use
-      --json                                  Output in JSON format (stdout for data, stderr for logs)
-      --l1-fee-vault-addr=<value>             L1 fee vault address (non-interactive mode). Defaults to OWNER_ADDR.
-      --l2-bridge-fee-recipient-addr=<value>  L2 bridge fee recipient address (non-interactive mode). Defaults to zero
-                                              address.
-      --skip-deployment-salt-update           Skip deployment salt update (non-interactive mode)
-      --skip-l1-fee-vault-update              Skip L1 fee vault address update (non-interactive mode)
-
-DESCRIPTION
-  Generate L2 deployment artifacts, including genesis, public config, contract config, and Helm config values
-
-EXAMPLES
-  $ scrollsdk setup gen-l2-artifacts
-
-  $ scrollsdk setup gen-l2-artifacts --image-tag gen-configs-v0.2.0-debug
-
-  $ scrollsdk setup gen-l2-artifacts --configs-dir ./configs-override
-```
-
-_See code: [src/commands/setup/gen-l2-artifacts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-l2-artifacts.ts)_
-
-## `scrollsdk setup gen-rpc-package`
-
-Generate configuration files for dogeos-rpc-package to enable external RPC nodes
-
-```
-USAGE
-  $ scrollsdk setup gen-rpc-package -d <value> [--config-path <value>] [--doge-config <value>] [-n <value>] [--values-dir
-    <value>]
-
-FLAGS
-  -d, --dogeos-rpc-package-dir=<value>  (required) Path to dogeos-rpc-package project directory (clone from
-                                        https://github.com/dogeos69/dogeos-rpc-package)
-  -n, --namespace=<value>               Kubernetes namespace
-      --config-path=<value>             [default: ./config.toml] Path to config.toml file containing cluster
-                                        configuration
-      --doge-config=<value>             Path to Dogecoin config file
-      --values-dir=<value>              [default: ./values] Directory containing Helm values files (must include
-                                        genesis.yaml)
-
-DESCRIPTION
-  Generate configuration files for dogeos-rpc-package to enable external RPC nodes
-
-EXAMPLES
-  # Generate RPC package (dogeos-rpc-package directory is required)
-
-  $ scrollsdk setup gen-rpc-package -d ~/github/dogeos-rpc-package/
-
-
-
-  # Generate mainnet RPC package with specific config and namespace
-
-  $ scrollsdk setup gen-rpc-package --doge-config .data/doge-config.toml -d ~/github/dogeos-rpc-package/ -n scroll-mainnet
-
-
-
-  # First clone the project: git clone https://github.com/dogeos69/dogeos-rpc-package
-
-  $ scrollsdk setup gen-rpc-package -d ./dogeos-rpc-package/ --namespace default
-```
-
-_See code: [src/commands/setup/gen-rpc-package.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/gen-rpc-package.ts)_
-
-## `scrollsdk setup dstack-config`
-
-```text
-Import Vast.ai/GCP credentials locally and configure dstack controller Secret references
-
-USAGE
-  $ scrollsdk setup dstack-config [--doge-config <value> | --spec <value>]
-    [--gcp-project-id <value>] [--gcp-service-account <value>] [--json] [-N]
-    [--project <value>] [--provider vastai|gcp...] [--vastai-api-key-file
-    <value>]
-
-FLAGS
-  -N, --non-interactive              Use supplied files and existing state; fail
-                                     on missing credentials
-      --doge-config=<value>          Public TOML configuration to update
-                                     (default .data/doge-config.toml)
-      --gcp-project-id=<value>       GCP project to provision in (default
-                                     service account project_id)
-      --gcp-service-account=<value>  Path to GCP service-account JSON; imported
-                                     into private local state
-      --json                         Output metadata as JSON; never print
-                                     credentials
-      --project=<value>              Dstack project name (default main on first
-                                     import)
-      --provider=<option>...         Exact enabled provider set; repeat for
-                                     multiple providers. Omit to retain existing
-                                     and add supplied providers.
-                                     <options: vastai|gcp>
-      --spec=<value>                 Update an existing DeploymentSpec YAML
-                                     instead of doge-config TOML
-      --vastai-api-key-file=<value>  Path to a file containing only the Vast.ai
-                                     API key; avoids credentials in command
-                                     arguments
-
-DESCRIPTION
-  Import Vast.ai/GCP credentials locally and configure dstack controller Secret
-  references
-
-EXAMPLES
-  $ scrollsdk setup dstack-config
-
-  $ scrollsdk setup dstack-config --vastai-api-key-file /private/vastai-key --gcp-service-account /private/service-account.json -N
-
-  $ scrollsdk setup dstack-config --spec deployment-spec.yaml --provider vastai --vastai-api-key-file /private/vastai-key -N
-```
-
-_See code: [src/commands/setup/dstack-config.ts](src/commands/setup/dstack-config.ts)_
-
-See [dstack controller credential setup](docs/dstack-controller.md) for the Vast.ai/GCP workflow.
-
-## `scrollsdk setup gen-secrets`
-
-```text
-Generate local secret files from config.toml, Dogecoin config, and bridge initialization outputs
-
-USAGE
-  $ scrollsdk setup gen-secrets [--doge-config <value>] [--dogecoin-only |
-    --dstack-only] [--json] [-N] [--spec <value>]
-
-FLAGS
-  -N, --non-interactive      Run without prompts. Uses config values or fails
-                             fast.
-      --doge-config=<value>  Path to Dogecoin config file (defaults to
-                             .data/doge-config.toml)
-      --dogecoin-only        Generate only the Dogecoin RPC Secret; no config.toml
-                             or bridge initialization required
-      --dstack-only          Generate only dstack controller Secrets; no bridge
-                             initialization required
-      --json                 Output in JSON format (stdout for data, stderr for
-                             logs)
-      --spec=<value>         DeploymentSpec YAML for --dstack-only
-
-DESCRIPTION
-  Generate local secret files from config.toml, Dogecoin config, and bridge
-  initialization outputs
-
-EXAMPLES
-  $ scrollsdk setup gen-secrets
-
-  $ scrollsdk setup gen-secrets --doge-config .data/doge-config.toml
-
-  $ scrollsdk setup gen-secrets --non-interactive --json --doge-config .data/doge-config.toml
-
-  $ scrollsdk setup gen-secrets --dstack-only --non-interactive
-
-  $ scrollsdk setup gen-secrets --dogecoin-only --non-interactive
-```
-
-_See code: [src/commands/setup/gen-secrets.ts](src/commands/setup/gen-secrets.ts)_
-
-Before Dogecoin is deployed, use `scrollsdk setup gen-secrets --dogecoin-only -N`.
-This reads `dogecoinClusterRpc.username` and `password` from the selected Dogecoin
-config and writes only `secrets/dogecoin-secret.env` with mode `0600`. `$ENV:NAME`
-references are resolved locally. It does not connect to Dogecoin, read bridge-init
-outputs, generate other services' Secrets, or upload anything. Missing credentials
-fail before writing. The option is mutually exclusive with `--dstack-only`.
-After deploying Dogecoin and completing `bridge-init`, run the full command to
-generate the remaining service Secrets.
-
-See [dstack controller credential setup](docs/dstack-controller.md) for the Vast.ai/GCP workflow.
-
-## `scrollsdk setup generate-from-spec`
-
-Generate configuration files from a DeploymentSpec YAML file
-
-```
-USAGE
-  $ scrollsdk setup generate-from-spec [-s <value>] [--config-only] [--dry-run] [--env-file <value>] [-f] [--json] [-o <value>]
-    [--values-only] [--with-values]
-
-FLAGS
-  -f, --force             Overwrite existing files without warning
-  -o, --output=<value>    [default: .] Output directory for generated files
-  -s, --spec=<value>      [default: deployment-spec.yaml] Path to DeploymentSpec YAML file
-      --config-only       Only generate config.toml and .data/*.toml. This is the default.
-      --dry-run           Validate spec and show what would be generated without writing files
-      --env-file=<value>  Private NAME=value file (default: ./deployment.env when present);
-                          process environment takes precedence.
-      --json              Output in JSON format (stdout for data, stderr for logs)
-      --values-only       Only generate values/*.yaml Helm files
-      --with-values       Also generate values/*.yaml Helm files
-
-DESCRIPTION
-  Generate configuration files from a DeploymentSpec YAML file
-
-EXAMPLES
-  # Generate configs in current directory
-
-  $ scrollsdk setup generate-from-spec
-
-
-
-  # Generate configs to specific output directory
-
-  $ scrollsdk setup generate-from-spec --output ./my-deployment
-
-
-
-  # Generate with JSON output for automation
-
-  $ scrollsdk setup generate-from-spec --json
-
-
-
-  # Load private keys/passwords from an env file before deriving account addresses
-
-  $ scrollsdk setup generate-from-spec --env-file custom.env
-
-
-
-  # Dry run - validate and show what would be generated
-
-  $ scrollsdk setup generate-from-spec --dry-run
-
-
-
-  # Generate Helm values files explicitly
-
-  $ scrollsdk setup generate-from-spec --with-values
-
-  $ scrollsdk setup generate-from-spec --values-only
-```
-
-_See code: [src/commands/setup/generate-from-spec.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/generate-from-spec.ts)_
+_See code: [src/commands/setup/plan.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/plan.ts)_
 
 ## `scrollsdk setup policy-prepare`
 
@@ -1959,315 +1643,9 @@ DESCRIPTION
 
 _See code: [src/commands/setup/policy-prepare.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/policy-prepare.ts)_
 
-## `scrollsdk setup prep-charts`
-
-```text
-Validate Makefile and prepare Helm charts for Scroll SDK
-
-USAGE
-  $ scrollsdk setup prep-charts [--doge-config <value>] [--dogecoin-only | --dstack-only]
-    [--github-token <value>] [--github-username <value>] [--json] [-N]
-    [--proof-materials-receipt <value>] [--proof-publication-receipt <value>]
-    [--proof-topology-compiler-binary <value> | --proof-topology-compiler-image
-    <value>] [--skip-auth-check] [--skip-l2-contract-deployment-block] [--spec
-    <value>] [--values-dir <value>]
-
-FLAGS
-      --dogecoin-only          Prepare only Dogecoin production values without bridge initialization
-  -N, --non-interactive                         Run without prompts.
-                                                Auto-applies all detected
-                                                changes.
-      --doge-config=<value>                     Path to Dogecoin config file
-      --dstack-only                             Generate only dstack controller
-                                                production values without chain
-                                                initialization or registry
-                                                checks
-      --github-token=<value>                    GitHub Personal Access Token
-      --github-username=<value>                 GitHub username
-      --json                                    Output in JSON format (stdout
-                                                for data, stderr for logs)
-      --proof-materials-receipt=<value>         Selected real proof-materials
-                                                receipt to bind into the
-                                                deployment contract
-      --proof-publication-receipt=<value>       Selected program-publication
-                                                receipt to bind into the
-                                                deployment contract
-      --proof-topology-compiler-binary=<value>  Development-only local
-                                                dogeos-proof-topology binary;
-                                                production uses the
-                                                digest-pinned configured image
-      --proof-topology-compiler-image=<value>   Override the digest-pinned
-                                                proof-topology compiler image
-      --skip-auth-check                         Skip authentication check for
-                                                individual charts
-      --skip-l2-contract-deployment-block       Do not overwrite L2GETH_L1_CONTR
-                                                ACT_DEPLOYMENT_BLOCK in L2
-                                                production values files
-      --spec=<value>                            Optional DeploymentSpec for
-                                                proof topology and dstack
-                                                controller values; proof
-                                                topology conflicts with
-                                                doge-config [proof_topology]
-      --values-dir=<value>                      [default: ./values] Directory
-                                                containing values files; must be
-                                                inside the deployment root for
-                                                transactional generation
-
-DESCRIPTION
-  Validate Makefile and prepare Helm charts for Scroll SDK
-
-EXAMPLES
-  $ scrollsdk setup prep-charts
-
-  $ scrollsdk setup prep-charts --spec deployment-spec.yaml
-
-  $ scrollsdk setup prep-charts --dstack-only --non-interactive
-
-  $ scrollsdk setup prep-charts --github-username=your-username --github-token=your-token
-
-  $ scrollsdk setup prep-charts --values-dir=./custom-values
-
-  $ scrollsdk setup prep-charts --skip-auth-check
-
-  $ scrollsdk setup prep-charts --skip-l2-contract-deployment-block
-```
-
-_See code: [src/commands/setup/prep-charts.ts](src/commands/setup/prep-charts.ts)_
-
-See [dstack controller credential setup](docs/dstack-controller.md) for the Vast.ai/GCP workflow.
-
-For the initial Dogecoin deployment, run:
-
-```bash
-scrollsdk setup gen-secrets --dogecoin-only -N
-scrollsdk setup prep-charts --dogecoin-only -N
-```
-
-The chart preparation command updates only `values/dogecoin-production.yaml`
-from the selected Dogecoin config. Copy this production values template into
-place first. It supports `--doge-config` and `--values-dir`, reuses the full
-command's network and port rules, and preserves unrelated files. Both modes
-preserve all Dogecoin storage settings, including `storage.size`; they do not
-fill in a missing size or resize storage based on the selected network.
-`config.toml` is optional; when present, `ingress.DOGECOIN_HOST` updates the
-existing Dogecoin ingress. Bridge initialization, L2 artifacts, Makefile and
-registry checks are not required. This mode cannot be combined with
-`--dstack-only`, `--spec` or proof compiler inputs. It prepares local values;
-installing Dogecoin and uploading its Secret remain separate operations.
-
-## `scrollsdk setup proof-aws-init`
-
-Provision proof AWS resources and persist their non-secret resource facts as prep-charts input; never read or modify generated Helm values
-
-```
-USAGE
-  $ scrollsdk setup proof-aws-init [--artifact-public-endpoint-url <value>] [--artifact-public-read-mode
-    direct-s3|existing-public-s3|existing-gateway] [--artifact-read-route-table-id <value>...]
-    [--artifact-read-vpc-endpoint-id <value>] [--aws-profile <value>] [--aws-region <value>] [--bucket <value>]
-    [--config <value>] [--coordinator-service-account <value>] [--deployment-alias <value>] [--doge-config <value>]
-    [--eks-cluster <value>] [--json] [--key-prefix <value>] [--namespace <value>] [-N] [--rotate-tokens] [--secret-name
-    <value>] [--skip-vpc-endpoint] [--withdrawal-service-account <value>] [-y]
-
-FLAGS
-  -N, --non-interactive                          Run without prompts; missing values must be discoverable, already
-                                                 configured, or passed as flags
-  -y, --yes                                      Apply the displayed AWS resource plan without confirmation
-      --artifact-public-endpoint-url=<value>     Existing credential-free HTTPS S3-compatible gateway root; used only
-                                                 with --artifact-public-read-mode=existing-gateway
-      --artifact-public-read-mode=<option>       Public proof artifact delivery: CLI-managed direct S3, operator-managed
-                                                 public S3, or an existing HTTPS gateway backed by private S3
-                                                 <options: direct-s3|existing-public-s3|existing-gateway>
-      --artifact-read-route-table-id=<value>...  Advanced override: EKS subnet route table to associate with the S3
-                                                 gateway endpoint (repeatable; normally auto-discovered)
-      --artifact-read-vpc-endpoint-id=<value>    Advanced override: existing S3 Gateway VPC endpoint (normally
-                                                 auto-discovered or created)
-      --aws-profile=<value>                      AWS CLI profile used for provisioning
-      --aws-region=<value>                       AWS region containing EKS and the proof token secret (auto-detected
-                                                 when omitted)
-      --bucket=<value>                           Advanced consistency assertion for the proof artifact bucket; the
-                                                 value is read from doge-config proofArtifacts.s3
-      --config=<value>                           [default: .data/proof-aws.json] Output config file consumed by setup
-                                                 prep-charts
-      --coordinator-service-account=<value>      Kubernetes service account used by proof-coordinator (default:
-                                                 proof-coordinator)
-      --deployment-alias=<value>                 Unique deployment instance alias used to derive deterministic bucket
-                                                 and IAM role names
-      --doge-config=<value>                      [default: .data/doge-config.toml] DogeOS config containing the
-                                                 canonical proofArtifacts.s3 store
-      --eks-cluster=<value>                      EKS cluster name used by the IRSA trust policies (selected
-                                                 interactively when omitted)
-      --json                                     Output structured JSON
-      --key-prefix=<value>                       Advanced consistency assertion for the proof artifact key prefix; the
-                                                 value is read from doge-config proofArtifacts.s3
-      --namespace=<value>                        Kubernetes namespace of the proof workloads (default: default)
-      --rotate-tokens                            Replace the proof-work/prover-worker tokens in an existing secret (both
-                                                 workloads must be restarted afterwards)
-      --secret-name=<value>                      Secrets Manager secret holding proof-work-token and prover-worker-token
-                                                 (default: scroll/<deployment-alias>/proof-coordinator-secrets)
-      --skip-vpc-endpoint                        Do not auto-discover or create an S3 Gateway VPC endpoint for
-                                                 EKS-internal S3 traffic
-      --withdrawal-service-account=<value>       Kubernetes service account used by withdrawal-processor (default:
-                                                 withdrawal-processor)
-
-DESCRIPTION
-  Provision proof AWS resources and persist their non-secret resource facts as prep-charts input; never read or modify
-  generated Helm values
-
-EXAMPLES
-  $ scrollsdk setup proof-aws-init
-
-  $ scrollsdk setup proof-aws-init --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N
-
-  $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-public-s3
-
-  $ scrollsdk setup proof-aws-init --artifact-public-read-mode existing-gateway --artifact-public-endpoint-url https://objects.example.com
-
-  $ scrollsdk setup proof-aws-init --rotate-tokens
-```
-
-_See code: [src/commands/setup/proof-aws-init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-aws-init.ts)_
-
-## `scrollsdk setup proof-bundle-publish`
-
-Plan or publish the complete content-addressed 11-file real-proof program bundle; shared bucket policy is never modified
-
-```
-USAGE
-  $ scrollsdk setup proof-bundle-publish --core-dir <value> [--apply] [--aws-profile <value>] [--deployment-dir <value>]
-    [--json] [--materials <value>] [--output <value>] [--proof-aws-config <value>] [--topology-bundle <value>]
-
-FLAGS
-  --apply                     Perform S3 writes and anonymous readback; omission prints a read-only plan
-  --aws-profile=<value>       AWS profile used by the dogeos-core publisher
-  --core-dir=<value>          (required) Clean dogeos-core checkout matching the materials source revision
-  --deployment-dir=<value>    [default: .] Deployment root
-  --json                      Output structured JSON
-  --materials=<value>         [default: .data/proof-materials-v1.json] Real proof-materials-v1.json
-  --output=<value>            [default: .data/proof-program-publication-v1.json] New publication receipt written only
-                              after all public GET checks pass
-  --proof-aws-config=<value>  [default: .data/proof-aws.json] proof-aws.json containing the canonical proof artifact
-                              store
-  --topology-bundle=<value>   [default: .data/generated/proof-topology] Installable active/real compiler bundle
-                              containing the tag-5 manifest
-
-DESCRIPTION
-  Plan or publish the complete content-addressed 11-file real-proof program bundle; shared bucket policy is never
-  modified
-
-EXAMPLES
-  $ scrollsdk setup proof-bundle-publish --core-dir /data/dogeos-core
-
-  $ scrollsdk setup proof-bundle-publish --core-dir /data/dogeos-core --apply --aws-profile devnet
-```
-
-_See code: [src/commands/setup/proof-bundle-publish.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-bundle-publish.ts)_
-
-## `scrollsdk setup proof-config-check`
-
-Validate generated proof configs, bundle revision, two switches, Worker bundle and the published deployment kit; --live also requires every registered Attestation signer to be polling the TSO (the final acceptance check after rollout)
-
-```
-USAGE
-  $ scrollsdk setup proof-config-check [-c <value>] [--contract <value>] [--deployment-dir <value>] [--json] [--kube-context
-    <value> --live] [--namespace <value> ] [--scope activation|preparation] [--spec <value>]
-
-FLAGS
-  -c, --config=<value>          doge-config.toml path
-      --contract=<value>        [default: .data/proof-deployment.json] Proof deployment contract path
-      --deployment-dir=<value>  [default: .] Deployment root
-      --json                    Output structured JSON
-      --kube-context=<value>    Kubernetes context for --live
-      --live                    After rollout: also require a fresh authenticated TSO poll from every Attestation signer
-                                in the WP tsoSigners
-      --namespace=<value>       [default: default] Kubernetes namespace for --live
-      --scope=<option>          [default: activation] Preparation validates expected policy materials; it never
-                                authorizes signer installation
-                                <options: activation|preparation>
-      --spec=<value>            Optional DeploymentSpec proof source
-
-DESCRIPTION
-  Validate generated proof configs, bundle revision, two switches, Worker bundle and the published deployment kit;
-  --live also requires every registered Attestation signer to be polling the TSO (the final acceptance check after
-  rollout)
-```
-
-_See code: [src/commands/setup/proof-config-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-config-check.ts)_
-
-## `scrollsdk setup proof-image-tools`
-
-Run pinned native proof image tools offline; export identities/materializers or derive Scroll identity evidence without deploying Workers
-
-```
-USAGE
-  $ scrollsdk setup proof-image-tools --expected-core-revision <value> --output <value> [--action export|derive-scroll]
-    [--artifact-root <value>] [--coordinator-image <value>] [--deployment-dir <value>] [--json] [--producer-image
-    <value>] [--require-real-materialization] [--worker-image <value>]
-
-FLAGS
-  --action=<option>                 [default: export]
-                                    <options: export|derive-scroll>
-  --artifact-root=<value>           Candidate release directory containing chunk/, batch/ and verifier/aggregate-vk
-  --coordinator-image=<value>       PC image containing the matching materialize-chunk-oneshot and
-                                    scroll-runtime-materializer binaries
-  --deployment-dir=<value>          [default: .]
-  --expected-core-revision=<value>  (required) Full approved core Git SHA; every selected image and compiled Worker
-                                    identity must match
-  --json
-  --output=<value>                  (required) New output directory inside deployment-dir; existing output is never
-                                    replaced
-  --producer-image=<value>          CPU producer image with /usr/local/libexec/dogeos-proof-release-producer
-                                    (derive-scroll only)
-  --require-real-materialization    Reject a placeholder Batch identity during export; use before real-materialization
-                                    activation
-  --worker-image=<value>            CPU Worker/tool image providing --print-identity-json; no Worker service is started
-
-DESCRIPTION
-  Run pinned native proof image tools offline; export identities/materializers or derive Scroll identity evidence
-  without deploying Workers
-```
-
-_See code: [src/commands/setup/proof-image-tools.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-image-tools.ts)_
-
-## `scrollsdk setup proof-publish`
-
-Resume the saved proof-publish stage; runs only its declared effects
-
-```
-USAGE
-  $ scrollsdk setup proof-publish [--defer-cubesigner] [--dir <value>] [--json]
-
-FLAGS
-  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
-                      pending
-  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
-  --json              Output structured stage status and the next command
-
-DESCRIPTION
-  Resume the saved proof-publish stage; runs only its declared effects
-```
-
-_See code: [src/commands/setup/proof-publish.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-publish.ts)_
-
-## `scrollsdk setup protocol-context`
-
-Generate canonical protocol context from completed Bridge funding; stop before policy builds and proof preparation.
-
-```text
-USAGE
-  $ scrollsdk setup protocol-context [--dir <value>] [--json]
-
-FLAGS
-  --dir=<value>  [default: deployment] Saved deployment directory (alias: --deployment-dir).
-  --json         Output structured stage status and the next command.
-```
-
-Saved plans must match the current workflow; older step layouts are not migrated.
-For external policy builds, stop here and follow the approved build/governance procedure.
-See [preparation stage boundaries](docs/spec-preparation.md#commands).
-
 ## `scrollsdk setup proof-materials`
 
-Resume the saved proof-materials stage; --generation or --preparation-receipt explicitly selects standalone material preparation
+Prepare the selected proof materials and compiled topology from the saved deployment plan
 
 ```
 USAGE
@@ -2317,8 +1695,7 @@ FLAGS
                                            required for mock proving with real materialization
 
 DESCRIPTION
-  Resume the saved proof-materials stage; --generation or --preparation-receipt explicitly selects standalone material
-  preparation
+  Prepare the selected proof materials and compiled topology from the saved deployment plan
 
 EXAMPLES
   $ scrollsdk setup proof-materials --generation mock
@@ -2334,242 +1711,45 @@ EXAMPLES
 
 _See code: [src/commands/setup/proof-materials.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-materials.ts)_
 
-## `scrollsdk setup proof-release-prepare`
+## `scrollsdk setup proof-publish`
 
-Validate and capture native dogeos-core real-proof preparation output as one immutable local handoff receipt
-
-```
-USAGE
-  $ scrollsdk setup proof-release-prepare --artifact-root <value> --expected-core-revision <value> [--batch-materializer <value>]
-    [--chunk-materializer <value>] [--deployment-dir <value>] [--identity-env <value>] [--json] [--output <value>]
-    [--producer-manifest <value>] [--protocol-context <value>]
-
-FLAGS
-  --artifact-root=<value>           (required) Native preparation root containing identity-full.env, manifest, protocol
-                                    context and bridge/
-  --batch-materializer=<value>      Override artifact-root/bin/scroll-runtime-materializer
-  --chunk-materializer=<value>      Override artifact-root/bin/materialize-chunk-oneshot
-  --deployment-dir=<value>          [default: .] Deployment root used to resolve the output receipt
-  --expected-core-revision=<value>  (required) Full approved dogeos-core Git SHA
-  --identity-env=<value>            Override artifact-root/identity-full.env
-  --json                            Output structured JSON
-  --output=<value>                  [default: .data/proof-release-preparation-v1.json] New local preparation receipt;
-                                    existing files are never replaced
-  --producer-manifest=<value>       Override artifact-root/real-proving-artifacts.json
-  --protocol-context=<value>        Override artifact-root/protocol_context.json
-
-DESCRIPTION
-  Validate and capture native dogeos-core real-proof preparation output as one immutable local handoff receipt
-
-EXAMPLES
-  $ scrollsdk setup proof-release-prepare --artifact-root /build/release --expected-core-revision <40-hex-sha>
-
-  $ scrollsdk setup proof-release-prepare --artifact-root /build/release --chunk-materializer /build/materialize-chunk-oneshot --batch-materializer /build/scroll-runtime-materializer --expected-core-revision <40-hex-sha>
-```
-
-_See code: [src/commands/setup/proof-release-prepare.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-release-prepare.ts)_
-
-## `scrollsdk setup proof-topology-compile`
-
-Compile the selected proof topology through the pinned dogeos-core compiler without touching Kubernetes
+Resume the saved proof-publish stage; runs only its declared effects
 
 ```
 USAGE
-  $ scrollsdk setup proof-topology-compile [--compiler-binary <value> | --compiler-image <value>] [--deployment-dir <value>]
-    [--doge-config <value>] [--eth-da-submitter-config <value>] [--json] [--output <value>] [--preflight mock|real]
-    [--proof-coordinator-config <value>] [--spec <value>] [--withdrawal-processor-config <value>]
+  $ scrollsdk setup proof-publish [--defer-cubesigner] [--dir <value>] [--json]
 
 FLAGS
-  --compiler-binary=<value>              Development-only local dogeos-proof-topology binary
-  --compiler-image=<value>               Override the configured digest-pinned compiler image
-  --deployment-dir=<value>               [default: .] Deployment root
-  --doge-config=<value>                  doge-config.toml path
-  --eth-da-submitter-config=<value>      Deployment-relative eth-da-submitter native base config
-  --json                                 Output structured JSON
-  --output=<value>                       [default: .data/generated/proof-topology] Deployment-relative output directory
-  --preflight=<option>                   Validate the staged active profile for this generation
-                                         <options: mock|real>
-  --proof-coordinator-config=<value>     [default: proof-coordinator/ProofCoordinator.toml] Proof Coordinator base
-                                         config
-  --spec=<value>                         Optional DeploymentSpec proof source
-  --withdrawal-processor-config=<value>  [default: withdrawal-processor/WithdrawalProcessor.toml] Withdrawal Processor
-                                         base config
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
 
 DESCRIPTION
-  Compile the selected proof topology through the pinned dogeos-core compiler without touching Kubernetes
-
-EXAMPLES
-  $ scrollsdk setup proof-topology-compile --deployment-dir .
-
-  $ scrollsdk setup proof-topology-compile --preflight mock
+  Resume the saved proof-publish stage; runs only its declared effects
 ```
 
-_See code: [src/commands/setup/proof-topology-compile.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-topology-compile.ts)_
+_See code: [src/commands/setup/proof-publish.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-publish.ts)_
 
-## `scrollsdk setup proof-worker`
+## `scrollsdk setup protocol-context`
 
-Provision a per-worker credential for a compiler-generated Compose bundle or local Kubernetes worker (never the coordinator master)
+Generate canonical protocol context from completed Bridge funding; stop before policy builds and proof preparation
 
 ```
 USAGE
-  $ scrollsdk setup proof-worker [--aws-profile <value>] [--aws-region <value>]
-    [--deployment-dir <value>] [--json] [--kube-context <value>] [--namespace
-    <value>] [--secret-name <value>] [--worker-token-env <value>]
+  $ scrollsdk setup protocol-context [--defer-cubesigner] [--dir <value>] [--json]
 
 FLAGS
-  --aws-profile=<value>       AWS CLI profile used to read the worker-credential
-                              master (only the minted credential is written)
-  --aws-region=<value>        AWS region of the proof coordinator secret;
-                              inferred from .data/proof-aws.json when omitted
-  --deployment-dir=<value>    [default: .] Deployment root containing
-                              .data/proof-deployment.json
-  --json                      Output structured JSON
-  --kube-context=<value>      Explicit Kubernetes context for a compiled-local
-                              worker
-  --namespace=<value>         Explicit Kubernetes namespace for a compiled-local
-                              worker
-  --secret-name=<value>       Secrets Manager secret containing
-                              prover-worker-master; inferred from
-                              .data/proof-aws.json when omitted
-  --worker-token-env=<value>  [default: DOGEOS_PROVER_WORKER_TOKEN] Environment
-                              variable containing an already minted credential
-                              for this Worker id; when unset, mint one from the
-                              Secrets Manager master
+  --defer-cubesigner  Defer signer session creation and upload; other preparation may proceed, signer activation remains
+                      pending
+  --dir=<value>       [default: deployment] Saved deployment directory created by setup plan
+  --json              Output structured stage status and the next command
 
 DESCRIPTION
-  Provision a per-worker credential for a compiler-generated Compose bundle or
-  local Kubernetes worker (never the coordinator master)
-
-EXAMPLES
-  $ scrollsdk setup proof-worker
-
-  $ scrollsdk setup proof-worker --deployment-dir /srv/dogeos/testnet --aws-profile staging
+  Generate canonical protocol context from completed Bridge funding; stop before policy builds and proof preparation
 ```
 
-_See code: [src/commands/setup/proof-worker.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-worker.ts)_
-
-## `scrollsdk setup proof-worker-check`
-
-Verify a compiler-generated Docker Compose prover-worker bundle, selected resources, secret-file mode, and optional expected bundle ID
-
-```
-USAGE
-  $ scrollsdk setup proof-worker-check --bundle-dir <value> [--expected-bundle-id <value>] [--json] [--resources-root
-  <value>]
-
-FLAGS
-  --bundle-dir=<value>          (required) Compiler-generated Worker Compose bundle directory
-  --expected-bundle-id=<value>  Expected bundle ID written by prep-charts; use on the worker host to reject a stale
-                                synchronized bundle
-  --json                        Output structured JSON
-  --resources-root=<value>      Compiler-backed Worker resources root on this host; defaults to PROOF_RESOURCES_ROOT
-                                from the bundle .env
-
-DESCRIPTION
-  Verify a compiler-generated Docker Compose prover-worker bundle, selected resources, secret-file mode, and optional
-  expected bundle ID
-
-EXAMPLES
-  $ scrollsdk setup proof-worker-check --bundle-dir /srv/dogeos/prover-worker-production/docker-compose --resources-root /srv/dogeos/proof-resources --expected-bundle-id <sha256>
-```
-
-_See code: [src/commands/setup/proof-worker-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-worker-check.ts)_
-
-## `scrollsdk setup proof-worker-image-check`
-
-Validate a digest-pinned production CUDA Worker image against native preparation identities without requiring a GPU
-
-```
-USAGE
-  $ scrollsdk setup proof-worker-image-check --image <value> [--deployment-dir <value>] [--expected-core-revision <value>]
-    [--identity-env <value>] [--json] [--output <value>] [--preparation-receipt <value>]
-
-FLAGS
-  --deployment-dir=<value>          [default: .] Deployment root
-  --expected-core-revision=<value>  Full approved dogeos-core Git SHA; implied by --preparation-receipt
-  --identity-env=<value>            Native full identity env; excludes --preparation-receipt
-  --image=<value>                   (required) Production CUDA Worker tag or immutable digest
-  --json                            Output structured JSON
-  --output=<value>                  [default: .data/proof-worker-image-check-v1.json] New image-check receipt; existing
-                                    files are never replaced
-  --preparation-receipt=<value>     Validated proof-release-preparation-v1.json
-
-DESCRIPTION
-  Validate a digest-pinned production CUDA Worker image against native preparation identities without requiring a GPU
-
-EXAMPLES
-  $ scrollsdk setup proof-worker-image-check --image dogeos69/prover-worker-cuda:TAG --preparation-receipt .data/proof-release-preparation-v1.json
-
-  $ scrollsdk setup proof-worker-image-check --image repo/worker@sha256:... --identity-env /build/identity-full.env --expected-core-revision <40-hex-sha>
-```
-
-_See code: [src/commands/setup/proof-worker-image-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-worker-image-check.ts)_
-
-## `scrollsdk setup push-secrets`
-
-Upload configured service secrets, including enabled dstack Secrets; does not deploy services or start GPU workers
-
-```
-USAGE
-  $ scrollsdk setup push-secrets [--aws-prefix <value>] [--aws-region <value>] [--aws-service-account <value>] [-d]
-    [--doge-config <value> | --spec <value>] [--dry-run] [--dstack-only | -c | -f <value>] [--exclude-cubesigner |  | ]
-    [--json] [--kube-context <value>] [--namespace <value>] [-N] [--provider aws|vault|kubernetes] [--skip-yaml-update]
-    [--values-dir <value>] [--values-file <value>] [--vault-path <value>] [--vault-server <value>]
-    [--vault-token-secret-key <value>] [--vault-token-secret-name <value>] [--vault-version <value>]
-
-FLAGS
-  -N, --non-interactive                  Run without prompts. Auto-overrides existing secrets.
-  -c, --cubesigner-only                  Only push CubeSigner related secrets (cubesigner-signer-* files)
-  -d, --debug                            Show debug output
-  -f, --secret-file=<value>              Local secret file to push (supports .env and .json files)
-      --aws-prefix=<value>               AWS Secrets Manager path prefix (defaults to generated deployment
-                                         configuration; no shared fallback)
-      --aws-region=<value>               AWS region for secrets (e.g., us-east-1)
-      --aws-service-account=<value>      [default: external-secrets] AWS IAM service account
-      --doge-config=<value>              Dstack public TOML configuration (default .data/doge-config.toml)
-      --dry-run                          Plan selected Secret uploads and validate dstack files locally; no remote
-                                         requests or changes
-      --dstack-only                      Upload only dstack Secrets to Kubernetes; omit to include all configured
-                                         services
-      --exclude-cubesigner               Defer CubeSigner runtime Secret upload; exclude even stale signer files
-      --json                             Output in JSON format (stdout for data, stderr for logs)
-      --kube-context=<value>             Explicit Kubernetes context required when uploading dstack Secrets
-      --namespace=<value>                Existing Kubernetes namespace required when uploading dstack Secrets
-      --provider=<option>                [default: aws] Destination for .env/.json secrets (aws or vault); kubernetes
-                                         accepts dstack bundles. Dstack always uses Kubernetes.
-                                         <options: aws|vault|kubernetes>
-      --skip-yaml-update                 Skip updating production YAML files with new secret provider
-      --spec=<value>                     Dstack DeploymentSpec YAML
-      --values-dir=<value>               [default: values] Directory containing the values files
-      --values-file=<value>              Specific Helm values YAML file to update after pushing secrets
-      --vault-path=<value>               [default: scroll] Vault path prefix
-      --vault-server=<value>             [default: http://vault.default.svc.cluster.local:8200] Vault server URL
-      --vault-token-secret-key=<value>   [default: token] Vault token secret key
-      --vault-token-secret-name=<value>  [default: vault-token] Vault token secret name
-      --vault-version=<value>            [default: v2] Vault version
-
-DESCRIPTION
-  Upload configured service secrets, including enabled dstack Secrets; does not deploy services or start GPU workers
-
-EXAMPLES
-  $ scrollsdk setup push-secrets
-
-  $ scrollsdk setup push-secrets --debug
-
-  $ scrollsdk setup push-secrets --values-dir custom-values
-
-  $ scrollsdk setup push-secrets --secret-file secrets/l2-reth-bootnode-0-secret.env --values-file values/l2-reth-bootnode-production-0.yaml
-
-  $ scrollsdk setup push-secrets --cubesigner-only
-
-  $ scrollsdk setup push-secrets -c --debug
-
-  $ scrollsdk setup push-secrets --provider kubernetes --dstack-only --kube-context isolated-e2e --namespace default --dry-run -N
-
-  $ scrollsdk setup push-secrets --provider aws --aws-region us-east-1 --kube-context isolated-e2e --namespace default -N
-```
-
-_See code: [src/commands/setup/push-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/push-secrets.ts)_
+_See code: [src/commands/setup/protocol-context.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/protocol-context.ts)_
 
 ## `scrollsdk setup render`
 
@@ -2589,7 +1769,7 @@ DESCRIPTION
   Render configuration and private Secrets without creating remote signer sessions; run signer-session separately
 ```
 
-_See code: [src/commands/setup/render.ts](src/commands/setup/render.ts)_
+_See code: [src/commands/setup/render.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/render.ts)_
 
 ## `scrollsdk setup signer-kit`
 
@@ -2649,33 +1829,7 @@ DESCRIPTION
   Validate/reuse or explicitly create the CubeSigner runtime session; completed steps are skipped on retry
 ```
 
-_See code: [src/commands/setup/signer-session.ts](src/commands/setup/signer-session.ts)_
-
-## `scrollsdk setup tls`
-
-Configure ACM TLS on enabled AWS ALB ingresses in local deployment values.
-Requires an issued certificate in the ALB region covering the enabled hosts.
-No Kubernetes access, cert-manager or ingress-nginx is required.
-
-```text
-USAGE
-  $ scrollsdk setup tls [--certificate-arn <value>] [-N] [--json] [--values-dir <value>]
-
-FLAGS
-  -N, --non-interactive          Require an explicit certificate ARN without prompting
-      --certificate-arn=<value> Issued ACM certificate ARN(s), comma-separated
-      --json                    Output updated file paths as JSON
-      --values-dir=<value>      [default: values] Deployment Helm values directory
-```
-
-```bash
-scrollsdk setup tls --certificate-arn "$ACM_CERTIFICATE_ARN" --non-interactive
-```
-
-Disabled ingresses remain disabled. Set individual certificates in values when
-a single certificate set does not cover every enabled host. Review and install
-these values through the normal Helm process; DNS/controller migration is an
-operator action.
+_See code: [src/commands/setup/signer-session.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/signer-session.ts)_
 
 ## `scrollsdk setup upload-secrets`
 
@@ -2696,79 +1850,6 @@ DESCRIPTION
 ```
 
 _See code: [src/commands/setup/upload-secrets.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/upload-secrets.ts)_
-
-## `scrollsdk setup verify-contracts`
-
-Set up contracts verification
-
-```
-USAGE
-  $ scrollsdk setup verify-contracts [--config-dir <value>] [--image-tag <value>] [--preinstalls | --preinstalls-only]
-    [--preinstalls-image <value>] [--require-verified] [--status-only] [--wait-seconds <value>]
-
-FLAGS
-  --config-dir=<value>         [default: .] Directory containing config.toml and contract verification artifacts
-  --image-tag=<value>          Specify the Docker image tag to use
-  --preinstalls                Also submit preinstalls sources to the configured L2 Blockscout v2 API
-  --preinstalls-image=<value>  Preinstalls image matching the deployed release (default: dogeos69/preinstalls:v0.2.2)
-  --preinstalls-only           Only submit preinstalls sources; skip the DogeOS contracts verifier
-  --require-verified           Fail unless every selected target has full Blockscout verification; submission success is
-                               insufficient
-  --status-only                Read final Blockscout source-verification status without submitting or running Docker
-  --wait-seconds=<value>       Bounded polling window for --status-only or --require-verified
-
-DESCRIPTION
-  Set up contracts verification
-
-EXAMPLES
-  $ scrollsdk setup verify-contracts
-
-  $ scrollsdk setup verify-contracts --image-tag verify-v0.2.0-debug
-
-  $ scrollsdk setup verify-contracts --preinstalls --config-dir ./deployment
-
-  $ scrollsdk setup verify-contracts --preinstalls-only --preinstalls-image dogeos69/preinstalls:v0.2.1
-```
-
-_See code: [src/commands/setup/verify-contracts.ts](src/commands/setup/verify-contracts.ts)_
-
-Use `--require-verified --wait-seconds 120` to require full Blockscout verification
-following submission, or `--status-only` to read final results without Docker or
-resubmission. Both status modes fail for partial, pending or unavailable targets.
-Without a status flag, final verification is reported as `not-checked`. See the
-[operator examples](docs/deployment-preflight.md#8-check-final-contract-verification).
-
-Without a status or preinstalls flag, this command retains the existing DogeOS contracts
-verification behavior. `--preinstalls` runs that verifier first, then submits the
-standard preinstalls sources; `--preinstalls-only` retries only the latter. A
-failure in either selected verifier makes the command fail. Preinstalls settings
-are validated before either container starts.
-
-The preinstalls path reads `[contracts.verification]` in `config.toml` under
-`--config-dir`: `VERIFIER_TYPE_L2` must be `blockscout`, `EXPLORER_URI_L2` must be a
-Blockscout site URL or its `/api` root, and `EXPLORER_API_KEY_L2` must be empty.
-For example, `https://explorer.example/chain/` and
-`https://explorer.example/chain/api/` both select
-`https://explorer.example/chain/api`. The script appends `/v2/...`; do not pass an
-`/api/v2` URL. Credential-bearing URLs, query strings and fragments are rejected.
-This requires a **real Blockscout v2 API**: l2scan or another Etherscan-compatible
-API is not supported even when its Forge verifier type is called `blockscout`.
-
-`--image-tag` selects only the DogeOS contracts verifier. The independent
-`--preinstalls-image` defaults to `dogeos69/preinstalls:v0.2.2`; set it to the
-preinstalls release actually deployed so the source set matches. The CLI
-overrides the image's deployment entrypoint with
-`bash /app/lib/verify-blockscout.sh` and passes the API root as one Docker command
-argument. It does not mount the deployment directory or pass signing keys, RPC
-credentials, or explorer API keys into this container. It uses Docker host
-networking to reach the configured API.
-
-This submits source verification requests and never deploys contracts. A zero
-exit means Blockscout accepted submissions or reported them already verified;
-check the explorer for final asynchronous verification results. Preinstalls
-must already be deployed and indexed. `scrollsdk test contracts` remains the
-separate codehash/runtime check.
-
 
 ## `scrollsdk signer init`
 
@@ -2793,7 +1874,9 @@ FLAGS
                                             <options: local|aws-kms>
   --create-key                              aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account
                                             instead of passing --kms-key-id
-  --force                                   Overwrite an existing env file in the output directory
+  --force                                   Overwrite an existing env file; generates a NEW signing key for the local
+                                            backend. Do not use to preserve a local identity. Partner-owned TOML is
+                                            always retained.
   --id=<value>                              (required) Stable signer identifier (DNS-label shaped, agreed with the
                                             bridge operator)
   --identity=<value>                        File holding the one-line JSON from `attestation_signer --print-identity`;
@@ -2852,6 +1935,25 @@ EXAMPLES
 
 _See code: [src/commands/signer/kms-pubkey.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/kms-pubkey.ts)_
 
+## `scrollsdk signer network-check`
+
+Read-only IPv4 overlap check on the Docker signer host, including unused networks; run before deploying signer Compose
+
+```
+USAGE
+  $ scrollsdk signer network-check --cluster-cidr <value>... [--json] [--proposed-subnet <value>]
+
+FLAGS
+  --cluster-cidr=<value>...  (required) VPC, pod or service IPv4 CIDR; repeat for each route the signer must reach
+  --json
+  --proposed-subnet=<value>  Also check an explicit IPv4 subnet planned for a new Compose network
+
+DESCRIPTION
+  Read-only IPv4 overlap check on the Docker signer host, including unused networks; run before deploying signer Compose
+```
+
+_See code: [src/commands/signer/network-check.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/network-check.ts)_
+
 ## `scrollsdk signer preflight`
 
 Probe your running attestation-signer from your own infrastructure and verify its runtime identity against your descriptor. Signers dial out to the TSO, so the probe targets the signer's local HTTP port. Add --require-production-ready after selecting enforcement=enforce to require dogeos-core attestation_evidence_v2 and all four production capabilities.
@@ -2864,8 +1966,8 @@ USAGE
 FLAGS
   --dir=<value>                  signer init output directory; its descriptor.json provides the expected network and
                                  public key
-  --endpoint=<value>             [default: http://127.0.0.1:4040] Signer local HTTP base URL to probe (the partner-kit
-                                 compose binds 4040 to host loopback; no inbound signer access is required)
+  --endpoint=<value>             [default: http://127.0.0.1:4040] Signer local HTTP base URL to probe (the partner kit
+                                 binds 4040 to host loopback; no inbound signer access is required)
   --expected-public-key=<value>  Fail unless the runtime public key equals this compressed secp256k1 key (with --dir,
                                  defaults to the descriptor publicKey)
   --json                         Output structured JSON
@@ -2900,64 +2002,15 @@ USAGE
   $ scrollsdk test contracts [-c <value>] [-n <value>] [-p] [--preinstalls-image <value>]
 
 FLAGS
-  -c, --config=<value>     [default: ./config.toml] Path to config.toml file
-  -n, --contracts=<value>  [default: ./config-contracts.toml] Path to config-contracts.toml file
-  -p, --pod                Run inside Kubernetes pod
-      --preinstalls-image  [default: dogeos69/preinstalls:v0.2.2] Image for runtime codehash verification
+  -c, --config=<value>             [default: ./config.toml] Path to config.toml file
+  -n, --contracts=<value>          [default: ./config-contracts.toml] Path to config-contracts.toml file
+  -p, --pod                        Run inside Kubernetes pod
+      --preinstalls-image=<value>  [default: dogeos69/preinstalls:v0.2.2] Preinstalls image used for the additional
+                                   runtime codehash check (requires Docker)
 
 DESCRIPTION
   Test L2 contracts and preinstalls by checking deployment, initialization and ownership
 ```
-
-Progress, contract results, and pass/fail/optional-absent counts are grouped by
-repository (`scroll-contracts` and `dogeos-preinstalls`), followed by an overall
-summary. A failed contract check in one group does not skip the other group.
-
-The `scroll-contracts` group checks 16 L2 contracts: the 14 contracts deployed
-or reused and configured by Docker `deploy.sh`, using addresses from
-`config-contracts.toml`, plus the genesis-only NativeDogeToken and EIP-2935
-BlockHashHistory at their fixed canonical addresses. The latter two require no
-config entries and are checked for code presence, without owner or proxy
-initialization checks. This does not compare live storage against genesis.
-Legacy L1 contracts and retired Gateway/Bascule entries are ignored. L1 RPC
-configuration is not required.
-
-Also checks the 21 required canonical addresses from `dogeos-preinstalls`,
-including Multicall3, CreateX, Arachnid, Permit2, nine canonical Safe v1.3.0
-contracts, and EntryPoint/SenderCreator v0.6–v0.9. These fixed addresses do not
-need entries in `config-contracts.toml`. Arachnid is a genesis prerequisite;
-the image does not deploy it. Safe Singleton Factory and the six legacy Safe
-EIP-155 entries remain optional even when the factory exists, matching the
-canonical-only deployment policy in preinstalls v0.2.2.
-
-Deployment checks require nonempty runtime code. Initialization checks inspect
-proxy initialization flags and the queue messenger, oracle whitelist, and fee
-vault adapter references. Ownership checks apply to the eight owned core
-contracts. Missing required addresses/code, failed checks, and unreadable
-initialization/ownership cause exit status 1. Optional missing preinstalls are
-reported separately. These native CLI checks do not compare runtime codehashes.
-
-After both groups, a separate **preinstalls image verification** step runs
-`/app/lib/verify.sh` from `dogeos69/preinstalls:v0.2.2`, overriding the image's
-default deployment entrypoint. It uses the same L2 RPC and verifies runtime
-codehashes using the image's chain-specific expectations. It runs even if the
-native CLI checks report missing or misconfigured contracts; either phase
-failing causes a nonzero command exit. The original CLI catalogs and checks
-remain in place.
-
-Docker must be available. The verifier container uses host networking, so the
-Docker host must be able to reach the chosen RPC, including internal endpoints
-selected with `--pod`. No private key or deployment volume is passed to the
-container. RPC credentials in verifier output are redacted. Use
-`--preinstalls-image <repository:tag-or-digest>` to select the verifier image
-matching your deployment; the default matches the SDK preinstalls production example.
-
-The default image has codehash expectations for chain IDs 1, 31337, 1122005 and
-6281971. An unsupported chain ID fails verification. Confirm that the RPC
-reports the intended chain ID; supporting a new network requires an image with
-expected hashes for Permit2 and EntryPoint v0.8/v0.9.
-This command does not query explorer source-verification status or validate
-every deployment parameter, proxy implementation, or genesis storage value.
 
 _See code: [src/commands/test/contracts.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/test/contracts.ts)_
 
@@ -2988,10 +2041,10 @@ USAGE
     [-c <value>] [-v <value>] [--verbose]
 
 ARGUMENTS
-  CASENAME  The name of the case to run
+  [CASENAME]  The name of the case to run
 
 FLAGS
-  -b, --electrs-url=<value>  Electrs/Esplora API URL (testnet default; explicit URL required for other networks)
+  -b, --electrs-url=<value>   Electrs/Esplora API URL
   -c, --outputcount=<value>   [default: 24] Number of P2PKH outputs when running the multiple-output scenario
   -m, --masterwif=<value>     [default: cftTTdqFUYi3Njx4VLZGATAFCuX8wetJddD71FGmC91wKJ2XidVY] master wif key, provide
                               test dogecoin
@@ -3054,12 +2107,16 @@ Check for required ingress hosts and validate frontend URLs
 
 ```
 USAGE
-  $ scrollsdk test ingress [-c <value>] [-d] [-n <value>]
+  $ scrollsdk test ingress [--aws-profile <value>] [-c <value>] [-d] [-n <value>] [--spec <value>] [--values-dir
+    <value>]
 
 FLAGS
-  -c, --config=<value>     Path to config.toml file
-  -d, --dev                Include development ingresses
-  -n, --namespace=<value>  [default: default] Kubernetes namespace
+  -c, --config=<value>       Path to config.toml file
+  -d, --dev                  Include development ingresses
+  -n, --namespace=<value>    Kubernetes namespace (existing ALB: must match spec)
+      --aws-profile=<value>  AWS profile for existing ALB checks
+      --spec=<value>         Existing ALB deployment spec; defaults to saved intent or deployment-spec.yaml
+      --values-dir=<value>   [default: values]
 
 DESCRIPTION
   Check for required ingress hosts and validate frontend URLs
@@ -3070,11 +2127,12 @@ _See code: [src/commands/test/ingress.ts](https://github.com/dogeos69/scroll-sdk
 
 ## Status-page configuration
 
-Use `scrollsdk setup status-page` for offline generation from a deployment,
-`--plan` for a read-only Instatus comparison, and `--apply` for explicit page/component
-reconciliation. See [the status-page workflow](docs/status-page.md) for configuration,
-Secret ownership and rollout boundaries. `setup prep-charts` also generates enabled
-status-page values during normal preparation.
+Set `monitoring.statusPage.enabled` in the deployment spec; `scrollsdk setup render`
+generates local configuration using `metadata.environment`. Use
+`scrollsdk monitoring status-page --plan` for a read-only Instatus comparison and
+`--apply` for explicit page/component reconciliation. See [the status-page workflow](docs/status-page.md) for configuration,
+Secret ownership and rollout boundaries. `scroll-monitor` owns ongoing health
+evaluation and status publication.
 
 Use `--plan --create-webhook` followed by `--apply --create-webhook` for first
 Grafana webhook initialization. The CLI obtains the URL from Instatus and saves

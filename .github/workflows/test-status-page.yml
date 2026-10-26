@@ -4,20 +4,20 @@ on:
   pull_request:
     paths:
       - src/utils/status-page*.ts
-      - src/commands/setup/status-page.ts
+      - src/commands/monitoring/status-page.ts
       - src/commands/setup/prep-charts.ts
       - test/utils/status-page*.test.ts
-      - test/commands/setup/status-page.test.ts
+      - test/commands/monitoring/status-page.test.ts
       - package.json
       - yarn.lock
       - .github/workflows/test-status-page.yml
   push:
     paths:
       - src/utils/status-page*.ts
-      - src/commands/setup/status-page.ts
+      - src/commands/monitoring/status-page.ts
       - src/commands/setup/prep-charts.ts
       - test/utils/status-page*.test.ts
-      - test/commands/setup/status-page.test.ts
+      - test/commands/monitoring/status-page.test.ts
       - package.json
       - yarn.lock
       - .github/workflows/test-status-page.yml
@@ -59,4 +59,4 @@ jobs:
         env:
           SCROLL_STATUS_RUNTIME_TEST: '1'
           SCROLL_STATUS_CHART: sdk-contract/charts/scroll-monitor
-        run: npx mocha 'test/utils/status-page*.test.ts' 'test/commands/setup/status-page.test.ts'
+        run: npx mocha 'test/utils/status-page*.test.ts' 'test/commands/monitoring/status-page.test.ts'

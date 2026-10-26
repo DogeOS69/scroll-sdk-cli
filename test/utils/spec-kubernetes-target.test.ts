@@ -44,15 +44,16 @@ describe('spec Kubernetes target', () => {
       expect(() => specKubernetesTarget(spec('cluster', namespace))).to.throw('namespace')
     }
   })
-  it('uses one namespace for dstack and injects credential synchronization before manager installation', () => {
+  it('uses one namespace for dstack and removes retired CLI callbacks from manager installation', () => {
     const input = spec('cluster', 'chain')
     input.dstackController = {enabled: true}
     input.capacityManager = {} as any
     expect(specDstackController(input)?.monitoring?.namespace).to.equal('chain')
-    const source = 'DSTACK_NAMESPACE ?= dstack-system\ninstall-capacity-manager:\n\thelm upgrade capacity-manager -n "$(NAMESPACE)"\ninstall-dstack-controller:\n\thelm upgrade dstack -n "$(DSTACK_NAMESPACE)"\n'
+    const source = 'DSTACK_NAMESPACE ?= dstack-system\ninstall-capacity-manager:\n\tscrollsdk setup capacity-manager credentials --dir .\n\thelm upgrade capacity-manager -n "$(NAMESPACE)"\ninstall-dstack-controller:\n\thelm upgrade dstack -n "$(DSTACK_NAMESPACE)"\n'
     const result = bindMakefileTarget(source, input)
     expect(result).not.to.include('DSTACK_NAMESPACE')
-    expect(result).to.include('install-capacity-manager:\n\tscrollsdk setup capacity-manager credentials --dir . --kube-context "$(KUBE_CONTEXT)" --namespace "$(NAMESPACE)"\n\thelm')
+    expect(result).to.include('install-capacity-manager:\n\thelm')
+    expect(result).not.to.include('setup capacity-manager')
     expect(bindMakefileTarget(result, input)).to.equal(result)
     input.dstackController.monitoring = {namespace: 'other'}
     expect(() => specDstackController(input)).to.throw('must match infrastructure.namespace')

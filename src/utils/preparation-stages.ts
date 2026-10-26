@@ -1,19 +1,19 @@
 import type {PreparationStep} from './preparation-plan.js'
 
-export const PREPARATION_STAGES = ['genesis', 'aws', 'bridge-funding', 'protocol-context', 'proof-materials', 'policy-prepare', 'proof-publish', 'signer-kit', 'signer-kit-publish', 'render', 'signer-session', 'upload-secrets'] as const
+export const PREPARATION_STAGES = ['aws', 'genesis', 'bridge-funding', 'protocol-context', 'proof-materials', 'policy-prepare', 'proof-publish', 'signer-kit', 'signer-kit-publish', 'render', 'signer-session', 'upload-secrets'] as const
 export type PreparationStage = typeof PREPARATION_STAGES[number]
 
 /** Stage boundaries are explicit; prerequisites are checked, never executed implicitly. */
 export function stagedPreparationSteps(legacy: PreparationStep[]): PreparationStep[] {
   const order: Record<PreparationStage, string[]> = {
-    aws: ['identities', 'proof-aws', 'archive', 'archive-access', 'bridge-sequencer-kms', 'dstack-aws', 'dstack', 'dstack-db', 'blockscout-db'],
+    aws: ['bootstrap', 'aws-resources', 'identities', 'proof-aws', 'bridge-sequencer-kms', 'dstack-aws', 'dstack-network', 'aws-roles'],
     'bridge-funding': ['bridge-fee-wallet', 'bridge-prepare', 'ethereum-anchor', 'managed-helper-prepare', 'managed-helper-funding', 'managed-helper-setup', 'production-wallets', 'helper-funding', 'helper-setup', 'bridge-info', 'production-funding', 'helper-fund', 'managed-helper-fund', 'managed-helper-verify'],
-    genesis: ['bootstrap', 'genesis-local'],
+    genesis: ['genesis-local'],
     'policy-prepare': ['cubesigner-policy-build'],
-    'proof-materials': ['external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials'],
+    'proof-materials': ['dstack', 'dstack-db', 'blockscout-db', 'external-inputs', 'proof-release-bake', 'proof-materializer-export', 'proof-worker-image-check', 'proof-materials'],
     'proof-publish': ['charts', 'proof-publish', 'charts-published'],
     'protocol-context': ['protocol-context'],
-    render: ['render-final', 'secrets', 'capacity-manager', 'proof-check', 'proof-workers-intent'],
+    render: ['render-final', 'secrets', 'capacity-manager', 'proof-check'],
     'signer-kit': ['deployment-kit'],
     'signer-kit-publish': ['deployment-kit-published'],
     'signer-session': ['cubesigner-session'],

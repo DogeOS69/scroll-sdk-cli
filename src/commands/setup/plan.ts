@@ -22,7 +22,7 @@ export default class SetupPlan extends Command {
       if (!flags.json) {
         output.info(`Preparation plan: ${plan.deploymentName}`)
         for (const step of plan.steps) output.info(`  [${step.stage}/${step.effect}] ${step.id}: ${step.title}`)
-        output.info(`Plan saved. Continue with: scrollsdk setup genesis${flags.output === DEFAULT_DEPLOYMENT ? '' : ` --dir '${flags.output.replaceAll("'", "'\\''")}'`}`)
+        output.info(`Plan saved. Continue with: scrollsdk setup aws${flags.output === DEFAULT_DEPLOYMENT ? '' : ` --dir '${flags.output.replaceAll("'", "'\\''")}'`}`)
       }
 
       output.success(plan)

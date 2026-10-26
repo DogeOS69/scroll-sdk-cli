@@ -7,8 +7,8 @@ export interface ProofTopologyImageReference {
 export type ProofTopologyMode = 'active' | 'disabled'
 export type ProofGeneration = 'mock' | 'real'
 export type ProofEnforcement = 'enforce' | 'observe'
+/** Real deployments require external; local values only describe native mock inputs. */
 export type ProofWorkerLaunch = 'external' | 'local_cpu' | 'local_cuda'
-export type ProofWorkerDeploymentBackend = 'docker_compose' | 'kubernetes'
 
 export interface ProofTopologyCompilerConfig {
   /** Deployment-relative canonical identity input passed to dogeos-core. */
@@ -109,25 +109,8 @@ export interface ProofTopologyDeploymentConfig {
   resourcesMountPath?: string
   /** Existing PVC pre-populated with proof material at resourcesMountPath. */
   resourcesPersistentVolumeClaim?: string
-  /** How scroll-sdk-cli installs adapter-managed local_cpu/local_cuda Workers. */
-  workerDeploymentBackend?: ProofWorkerDeploymentBackend
-  workerNodeSelector?: Record<string, string>
-  workerResources?: {
-    limits?: Record<string, number | string>
-    requests?: Record<string, number | string>
-  }
-  workerRuntimeClassName?: string
-  /** Dedicated Kubernetes worker credential Secret; must differ from the coordinator Secret. */
-  workerSecretName?: string
   /** Coordinator-only master file; workers use /app/secrets/prover-worker-credential. */
   workerTokenFile?: string
-  workerTolerations?: Array<{
-    effect?: 'NoExecute' | 'NoSchedule' | 'PreferNoSchedule'
-    key?: string
-    operator?: 'Equal' | 'Exists'
-    tolerationSeconds?: number
-    value?: string
-  }>
 }
 
 export interface ProofTopologySpec {

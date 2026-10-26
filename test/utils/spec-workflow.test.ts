@@ -18,7 +18,7 @@ import Generate from '../../src/commands/setup/generate-from-spec.js'
 import {generateAllConfigs, validateDeploymentSpec} from '../../src/utils/deployment-spec-generator.js'
 import {KmsSignerProvisioner} from '../../src/utils/kms-signer-provisioner.js'
 import {mergeBootstrapValues, planSpecBootstrap} from '../../src/utils/spec-bootstrap.js'
-import {resolveSpecIdentities} from '../../src/utils/spec-identities.js'
+import {resolveSpecIdentities, specIdentityFlags} from '../../src/utils/spec-identities.js'
 import {createSdkFixture} from '../helpers/sdk-templates.js'
 
 const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -40,12 +40,15 @@ function fixture(): DeploymentSpec {
 describe('spec identity and template workflow', () => {
   let directory: string
   let originalCwd: string
+  let preparationStep: string | undefined
   let logs: sinon.SinonStub
   let cloud: sinon.SinonStub
   const read = (): any => toml.parse(fs.readFileSync('.data/doge-config.toml', 'utf8'))
   const run = (...args: string[]) => GenKeystore.run(['--no-accounts', '-N', '--json', ...args], cliRoot)
   beforeEach(() => {
     originalCwd = process.cwd()
+    preparationStep = process.env.SCROLLSDK_PREPARATION_STEP
+    process.env.SCROLLSDK_PREPARATION_STEP = 'identities'
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'spec-workflow-'))
     process.chdir(directory)
     logs = sinon.stub(console, 'log')
@@ -54,6 +57,8 @@ describe('spec identity and template workflow', () => {
   })
   afterEach(() => {
     sinon.restore()
+    if (preparationStep === undefined) delete process.env.SCROLLSDK_PREPARATION_STEP
+    else process.env.SCROLLSDK_PREPARATION_STEP = preparationStep
     delete process.env.SPEC_WORKFLOW_IMPORT_KEY
     process.chdir(originalCwd)
     fs.rmSync(directory, {force: true, recursive: true})
@@ -94,7 +99,7 @@ describe('spec identity and template workflow', () => {
 
   it('keeps explicit account-only preparation separate from saved service identity intent', async () => {
     const spec = fixture()
-    spec.identities!.feeOracle = {action: 'create', backend: 'aws_kms'}
+    spec.identities!.feeOracle = {action: 'reuse', backend: 'aws_kms', kms: {keyId: 'arn:aws:kms:us-west-2:123456789012:key/test'}}
     await generate(spec)
     await GenKeystore.run(['--accounts', '-N', '--json'], cliRoot)
     expect(cloud.called).to.equal(false)
@@ -116,15 +121,14 @@ describe('spec identity and template workflow', () => {
     expect(cloud.called).to.equal(false)
   })
 
-  it('applies new KMS intent once and passes recorded key/role references on retry', async () => {
+  it('reuses the recorded KMS key on retry and leaves role binding to the AWS stage', async () => {
     const spec = fixture()
-    spec.identities!.feeOracle = {action: 'create', backend: 'aws_kms'}
+    spec.identities!.feeOracle = {action: 'reuse', backend: 'aws_kms', kms: {keyId: 'arn:aws:kms:us-west-2:123456789012:key/test'}}
     const {address} = Wallet.createRandom()
     cloud.callsFake(async (role: any, identity: any, input: any) => {
-      const kmsKeyId = input.kmsKeyId ?? 'alias/dogeos/test/fee-oracle'
-      const roleArn = input.roleArn ?? 'arn:aws:iam::123456789012:role/test-fee-oracle'
-      return {address, keyArn: 'arn:aws:kms:us-west-2:123456789012:key/test', roleArn,
-        signerConfig: {backend: 'aws_kms', eksCluster: identity.eksCluster, expectedAddress: address, kmsKeyId, kmsRegion: identity.awsRegion, namespace: identity.namespace, networkAlias: identity.networkAlias, role: role.role, service: role.service, serviceAccountName: input.serviceAccount, serviceAccountRoleArn: roleArn}}
+      const kmsKeyId = input.kmsKeyId ?? 'arn:aws:kms:us-west-2:123456789012:key/test'
+      return {address, keyArn: kmsKeyId,
+        signerConfig: {backend: 'aws_kms', eksCluster: identity.eksCluster, expectedAddress: address, kmsKeyArn: kmsKeyId, kmsKeyId, kmsRegion: identity.awsRegion, namespace: identity.namespace, networkAlias: identity.networkAlias, role: role.role, service: role.service, serviceAccountName: input.serviceAccount}}
     })
     await generate(spec)
     expect(cloud.called).to.equal(false)
@@ -135,14 +139,26 @@ describe('spec identity and template workflow', () => {
     await run('--service', 'fee-oracle')
     expect(read()).to.deep.equal(first)
     expect(cloud.secondCall.args[2].kmsKeyId).to.equal(first.signers.l2GasOracleSender.kmsKeyId)
-    expect(cloud.secondCall.args[2].roleArn).to.equal(first.signers.l2GasOracleSender.serviceAccountRoleArn)
+    expect(cloud.secondCall.args[2]).not.to.have.property('recordedRoleArn')
+    expect(first.signers.l2GasOracleSender).not.to.have.property('serviceAccountRoleArn')
+  })
+
+  it('derives the signing role and binds a cross-region key to the deployment cluster', () => {
+    const spec = fixture()
+    spec.identities!.feeOracle = {action: 'reuse', backend: 'aws_kms', kms: {keyId: 'existing-key', region: 'eu-west-1'}}
+    const intent = resolveSpecIdentities(spec)!
+    const flags = specIdentityFlags(intent, {service: 'fee-oracle'}, {})
+    expect(flags).to.include({'aws-region': 'eu-west-1', 'eks-cluster': 'test-cluster', 'kms-key-id': 'existing-key'})
+    expect(flags).not.to.have.property('role-arn')
+    const removed = validateDeploymentSpec({...spec, identities: {...spec.identities!, feeOracle: {action: 'reuse', backend: 'aws_kms', kms: {keyId: 'existing-key', roleArn: 'arn:aws:iam::123456789012:role/existing-role', serviceAccount: 'custom'}}}} as any)
+    expect(removed.errors.map(error => `${error.path}: ${error.message}`).join('\n')).to.include('identities.feeOracle.kms.roleArn: has been removed').and.include('identities.feeOracle.kms.serviceAccount: has been removed')
   })
 
   it('requires complete KMS reuse and node declarations, and refuses unknown expected addresses', async () => {
     const spec = fixture()
     spec.identities!.feeOracle = {action: 'reuse', backend: 'aws_kms'}
     expect(validateDeploymentSpec(spec).valid).to.equal(false)
-    spec.identities!.feeOracle.kms = {keyId: 'existing-key', roleArn: 'arn:aws:iam::123456789012:role/existing-role'}
+    spec.identities!.feeOracle.kms = {keyId: 'existing-key'}
     const {address} = Wallet.createRandom()
     spec.identities!.feeOracle.expectedAddress = address
     expect(resolveSpecIdentities(spec)!.feeOracle.kms!.region).to.equal('us-west-2')

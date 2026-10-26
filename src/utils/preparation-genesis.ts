@@ -50,9 +50,9 @@ export async function prepareLocalGenesis(root: string, spec: DeploymentSpec, in
   await invoke(stage, 'genesis-local', ['gen-l2-artifacts', '-N', '--skip-deployment-salt-update', '--skip-l1-fee-vault-update',
     ...(source ? ['--contracts-source', path.resolve(root, source)] : []),
   ])
-  const wrapped = fs.readFileSync(localPath(stage, 'values/genesis.yaml'), 'utf8')
+  let wrapped = fs.readFileSync(localPath(stage, 'values/genesis.yaml'), 'utf8')
   const document = yaml.load(wrapped) as {scrollConfig?: unknown}
-  const genesis = typeof document.scrollConfig === 'string' ? JSON.parse(document.scrollConfig) : document.scrollConfig
+  let genesis = typeof document.scrollConfig === 'string' ? JSON.parse(document.scrollConfig) : document.scrollConfig
   if (!genesis || typeof genesis !== 'object' || !genesis.alloc || genesis.config?.chainId !== spec.network.l2ChainId) throw new Error('Genesis generator returned invalid genesis or the wrong chain ID')
   for (const file of ['genesis.yaml', 'values/genesis.yaml']) privateWrite(localPath(root, file), wrapped)
   const json = JSON.stringify(genesis, null, 2) + '\n'

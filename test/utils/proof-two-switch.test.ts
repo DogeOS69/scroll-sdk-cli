@@ -139,6 +139,7 @@ describe('PR #937 two-switch proof adapter', () => {
     expect(source.proof_topology).to.have.property('active')
     expect(source.proof_topology).not.to.have.property('mock')
     expect(source.proof_topology).not.to.have.property('production')
+    expect(topology.active?.workerLaunch).to.equal('external')
     expect(topology.deployment).not.to.have.property('productionWorkerImage')
     expect(topology.deployment).not.to.have.property('artifactLocalRoot')
     expect(topology.active?.profile).to.equal('withdrawal_mock_prover_real_materialize')
