@@ -12,7 +12,6 @@ export interface PreparationConfig {
       ethereumAnchor: {blockNumber?: number; blockTag?: 'finalized'; transactionIndex?: number}
       /** New plans default to helper distribution; external retains manual wallet funding. */
       funding?: 'external' | 'helper'
-      recoveryPublicKeys: string[]
       /** Local signing inputs; mutually exclusive with sequencerKms. */
       sequencerKeyEnv?: string
       /** Apply resolves and pins the public key; no exported private key is needed. */

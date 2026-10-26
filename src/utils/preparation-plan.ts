@@ -104,7 +104,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   }
 
   add('secrets', 'Generate private runtime Secrets')
-  if (staged && spec.signing?.cubesigner) add('cubesigner-session', 'Validate/reuse or create the scoped CubeSigner runtime session (provider mutation when absent)', 'cloud')
+  if (staged && spec.bridge?.cubesigner) add('cubesigner-session', 'Validate/reuse or create the scoped CubeSigner runtime session (provider mutation when absent)', 'cloud')
   if (spec.proofTopology?.enforcement === 'enforce') {
     add('deployment-kit', 'Export the signer deployment kit')
     if (p.deploymentKitPublication?.mode === 's3') add('deployment-kit-published', 'Publish and verify the signer deployment kit in the selected S3 bucket', 'cloud')
@@ -112,7 +112,7 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   }
 
   add('proof-check', 'Validate proof configuration and required evidence')
-  if (staged && spec.signing?.cubesigner) add('cubesigner-secret-upload', 'Upload only the CubeSigner runtime Secrets', 'cloud')
+  if (staged && spec.bridge?.cubesigner) add('cubesigner-secret-upload', 'Upload only the CubeSigner runtime Secrets', 'cloud')
   if (p.secretUpload) add('secret-upload', 'Upload declared runtime Secrets', 'cloud')
   if (spec.proofWorkers) {
     const workers = resolveProofWorkers(spec.proofWorkers)
@@ -146,8 +146,8 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (!p.bridge.image?.includes('@sha256:')) throw new Error('preparation.bridge.image must select an immutable bridge-genesis-tools digest')
   resolveBridgeGenesisImage(p.bridge.image)
   if (!Number.isSafeInteger(spec.bridge.confirmationsRequired) || spec.bridge.confirmationsRequired < 1) throw new Error('Preparation requires at least one funding confirmation')
-  if ('attestationDescriptors' in p) throw new Error('Remove preparation.attestationDescriptors; declare public identities in attestationSigners')
-  resolveSpecAttestationSigners(spec, true)
+  if ('attestationDescriptors' in p) throw new Error('Remove preparation.attestationDescriptors; declare public identities in bridge.attestation.signers')
+  resolveSpecAttestationSigners(spec)
   if (!['existing', 'mock', 'real'].includes(p.proofMaterials?.mode)) throw new Error('preparation.proofMaterials.mode is required')
   if (p.proofMaterials.mode === 'mock' && !p.proofMaterials.mockWorkerImage) throw new Error('Mock material preparation requires mockWorkerImage')
   if (p.proofRelease && (p.proofMaterials.mode !== 'real' || spec.proofTopology?.generation !== 'real')) throw new Error('proofRelease requires real proof material preparation and real topology generation')
@@ -200,7 +200,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
     }
 
     if ('feeWalletPublicKey' in policy || 'feeWalletKeyEnv' in policy) throw new Error('Remove feeWalletPublicKey and feeWalletKeyEnv from spec; apply derives the fee-wallet identity from DOGECOIN_FEE_WALLET_KEY in deployment.env')
-    publicKey(spec.bridge.teePubkey)
+    publicKey(spec.bridge.cubesigner?.publicKey)
     if (policy.sequencerKms) {
       const kms = policy.sequencerKms
       if (policy.sequencerPublicKey !== undefined || policy.sequencerKeyEnv !== undefined) throw new Error('sequencerKms replaces sequencerPublicKey and sequencerKeyEnv; remove the local sequencer inputs')
@@ -216,9 +216,9 @@ export function validatePreparation(spec: DeploymentSpec): void {
       if (!policy.sequencerKeyEnv || !/^[A-Z_a-z]\w*$/.test(policy.sequencerKeyEnv)) throw new Error('Production wallet key references must name environment variables')
     }
 
-    if (!Array.isArray(policy.recoveryPublicKeys) || new Set(policy.recoveryPublicKeys.map(key => key.toLowerCase())).size !== policy.recoveryPublicKeys.length || policy.recoveryPublicKeys.length < spec.bridge.thresholds.recovery || spec.bridge.thresholds.recovery < 1) throw new Error('Recovery keys must be unique and satisfy the threshold')
-    policy.recoveryPublicKeys.forEach(value => publicKey(value))
-    if (!Number.isSafeInteger(spec.bridge.timelock) || spec.bridge.timelock <= 100 || spec.bridge.timelock >= 500_000_000) throw new Error('Production Bridge needs an explicit recovery timelock block height')
+    if (!Array.isArray(spec.bridge.recovery.publicKeys) || new Set(spec.bridge.recovery.publicKeys.map(key => key.toLowerCase())).size !== spec.bridge.recovery.publicKeys.length || spec.bridge.recovery.publicKeys.length < spec.bridge.recovery.threshold || spec.bridge.recovery.threshold < 1) throw new Error('Recovery keys must be unique and satisfy the threshold')
+    spec.bridge.recovery.publicKeys.forEach(value => publicKey(value))
+    if (!Number.isSafeInteger(spec.bridge.recovery.timelock) || spec.bridge.recovery.timelock <= 100 || spec.bridge.recovery.timelock >= 500_000_000) throw new Error('Production Bridge needs an explicit recovery timelock block height')
   }
 
   for (const item of p.inputs ?? []) {

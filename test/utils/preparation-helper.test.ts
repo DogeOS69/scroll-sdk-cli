@@ -24,10 +24,10 @@ const image = 'dogeos69/bridge-genesis-tools@sha256:27e646fd5d9c340926df82f47f7d
 const publicKey = () => new bitcore.PrivateKey().toPublicKey().toString()
 function fixture(root: string): DeploymentSpec {
   const spec = {
-    attestationSigners: [{attestationPubkey: publicKey(), name: 'a', transportPubkey: publicKey()}], bridge: {confirmationsRequired: 2, teePubkey: publicKey(), thresholds: {attestation: 1, recovery: 1}, timelock: 500_000},
+    bridge: {attestation: {signers: [{attestationPubkey: publicKey(), name: 'a', transportPubkey: publicKey()}], threshold: 1}, confirmationsRequired: 2, cubesigner: {publicKey: publicKey()}, recovery: {publicKeys: [publicKey()], threshold: 1, timelock: 500_000}},
     dogecoin: {network: 'regtest'}, infrastructure: {aws: {eksClusterName: 'test', region: 'us-east-1'}, namespace: 'test', provider: 'aws'},
     metadata: {name: 'helper-test'},
-    preparation: {bridge: {image, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, funding: 'helper', recoveryPublicKeys: [publicKey()], sequencerKms: {action: 'reuse', keyId: 'nonfunctional-test-key', roleArn: 'arn:aws:iam::111111111111:role/test'}}}, proofMaterials: {mode: 'existing'}},
+    preparation: {bridge: {image, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, funding: 'helper', sequencerKms: {action: 'reuse', keyId: 'nonfunctional-test-key'}}}, proofMaterials: {mode: 'existing'}},
   } as DeploymentSpec
   const key = publicKey()
   writeJson(path.join(root, '.data/bridge-sequencer-kms.json'), {
@@ -59,13 +59,28 @@ describe('managed helper funding', () => {
     expect(config.network).to.equal(network === 'mainnet' ? 'dogecoin' : network)
   })
 
+  it('preserves the selected attestation order and recovery order in the Core helper input', () => {
+    spec.bridge.attestation.signers = ['c', 'a'].map(name => ({attestationPubkey: publicKey(), name, transportPubkey: publicKey()}))
+    spec.bridge.attestation.threshold = 2
+    spec.bridge.recovery = {publicKeys: [publicKey(), publicKey(), publicKey()], threshold: 2, timelock: 500_000}
+    prepareManagedHelper(root, spec)
+    const config = toml.parse(fs.readFileSync(path.join(root, '.data/setup_defaults.toml'), 'utf8'))
+    expect(config.attestation_pubkeys).to.deep.equal(spec.bridge.attestation.signers.map(signer => signer.attestationPubkey))
+    expect(config.attestation_key_count).to.equal(2)
+    expect(config.attestation_threshold).to.equal(2)
+    expect(config.recovery_pubkeys).to.deep.equal(spec.bridge.recovery.publicKeys)
+    expect(config.recovery_key_count).to.equal(3)
+    expect(config.recovery_threshold).to.equal(2)
+    expect(config.timelock).to.equal(500_000)
+  })
+
   it('blocks the known incompatible image before helper funding or broadcast', () => {
     expect(() => assertHelperFundingImage(image)).to.throw('invalid 71-byte')
   })
 
   it('rejects a future timelock below the Core recovery delay before requesting helper funding', async () => {
     prepareManagedHelper(root, spec)
-    spec.bridge.timelock = 300_000
+    spec.bridge.recovery.timelock = 300_000
     let failure: unknown
     try {await prepareManagedHelperFunding(root, spec, async method => {
       if (method === 'getblockchaininfo') return {chain: 'regtest'}
@@ -78,7 +93,7 @@ describe('managed helper funding', () => {
   })
 
   it('rechecks the earliest possible anchor at the exact recovery-delay boundary', async () => {
-    spec.bridge.timelock = 466_697
+    spec.bridge.recovery.timelock = 466_697
     await checkHelperRecoveryTimelock(spec, async () => 207_496)
     let failure: unknown
     try {await checkHelperRecoveryTimelock(spec, async () => 207_497)} catch (error) {failure = error}
@@ -95,8 +110,8 @@ describe('managed helper funding', () => {
     expect(fs.statSync(path.join(root, '.data/bridge-helper-seed')).mode % 0o1000).to.equal(0o600)
     expect(config.sequencer_pubkey).to.equal(JSON.parse(fs.readFileSync(path.join(root, '.data/bridge-sequencer-kms.json'), 'utf8')).publicKey)
     expect(config).not.to.have.property('fee_wallet_pubkey')
-    expect(config.tee_pubkey).to.equal(spec.bridge.teePubkey)
-    expect(config.recovery_pubkeys).to.deep.equal(spec.preparation!.bridge.production!.recoveryPublicKeys)
+    expect(config.tee_pubkey).to.equal(spec.bridge.cubesigner!.publicKey)
+    expect(config.recovery_pubkeys).to.deep.equal(spec.bridge.recovery.publicKeys)
     expect(config.enable_deposit_seed_txs).to.equal(false)
     expect(config.bridge_funding_target_amount).to.equal(1_000_000_000)
     expect(helperFundingAmount(config)).to.equal(1_142_925_000)
