@@ -177,6 +177,9 @@ export interface DeploymentMetadata {
 }
 
 export interface InfrastructureConfig {
+  /** Required enforcer for explicit network-policy preflight; infrastructure tooling owns activation. */
+  networkPolicy?: {provider: 'aws-vpc-cni'}
+
   /** AWS-specific configuration */
   aws?: {
     accountId: string

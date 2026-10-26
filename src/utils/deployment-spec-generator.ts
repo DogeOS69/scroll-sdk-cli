@@ -1,3 +1,4 @@
+import {validateNetworkPolicyIntent} from './network-policy-preflight.js'
 import {awsWorkloadIdentity} from './aws-workload-identity.js'
 import {validateBootnodePublicP2p} from './bootnode-public-p2p.js'
 import {validateBridgeHistory} from './bridge-history.js'
@@ -542,6 +543,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   const spec = normalizeDeploymentSpec(rawSpec)
   const errors: ValidationError[] = []
+  try {validateNetworkPolicyIntent(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'infrastructure.networkPolicy'})}
   try {validateExistingAlb(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'infrastructure.aws.alb'})}
   try {
     if (spec.infrastructure) existingNlbEntries(spec)
