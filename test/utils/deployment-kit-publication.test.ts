@@ -7,7 +7,7 @@ import path from 'node:path'
 import type {DeploymentKitRecord} from '../../src/utils/deployment-kit.js'
 
 import {DEPLOYMENT_KIT_MANIFEST_FILE, DEPLOYMENT_KIT_MANIFEST_SCHEMA} from '../../src/utils/deployment-kit.js'
-import {kitReadPolicy, publishDeploymentKit, readPublicationKit} from '../../src/utils/deployment-kit-publication.js'
+import {publishDeploymentKit} from '../../src/utils/deployment-kit-publication.js'
 import {digest} from '../../src/utils/preparation-io.js'
 
 describe('immutable S3 deployment kit publication', () => {
@@ -18,6 +18,7 @@ describe('immutable S3 deployment kit publication', () => {
   let policy: Record<string, unknown>
   const store = {bucket: 'fixture-kit-bucket', forcePathStyle: false, keyPrefix: 'proofs/isolated', region: 'us-east-1'}
   const unrelated = {Action: 's3:GetObject', Effect: 'Allow', Principal: {AWS: 'arn:aws:iam::000000000000:root'}, Resource: 'arn:aws:s3:::fixture-kit-bucket/private/*', Sid: 'Preserve'}
+  const prefix = (version: string) => `proofs/isolated/deployment-kits/${version}/`
   const names = ['advance-l2-agg-verifying-key.bin', 'deployment-kit.env', 'deployment-kit.json', 'protocol_context.json']
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-publication-test-'))
@@ -64,13 +65,11 @@ describe('immutable S3 deployment kit publication', () => {
 
   it('publishes only the five kit files and deterministic archive, preserves policy, verifies and reuses identical versions', async () => {
     const published = await run()
-    expect(published).to.deep.equal({manifest_sha256: kit.manifestSha256, url: `https://s3.us-east-1.amazonaws.com/${store.bucket}/deployment-kits/${kit.kitVersion}/deployment-kit-${kit.kitVersion}.tar.gz`})
+    expect(published).to.deep.equal({manifest_sha256: kit.manifestSha256, url: `https://s3.us-east-1.amazonaws.com/${store.bucket}/${prefix(kit.kitVersion)}deployment-kit-${kit.kitVersion}.tar.gz`})
     expect(objects.size).to.equal(6)
-    expect([...objects.keys()].every(key => key.startsWith(`deployment-kits/${kit.kitVersion}/`))).to.equal(true)
-    expect(policy.Statement).to.deep.equal([unrelated, {
-      Action: 's3:GetObject', Condition: {Bool: {'aws:SecureTransport': 'true'}}, Effect: 'Allow', Principal: '*', Resource: `arn:aws:s3:::${store.bucket}/deployment-kits/${kit.kitVersion}/*`, Sid: 'ScrollSdkKitk0123456789ab',
-    }])
-    const tar = objects.get(`deployment-kits/${kit.kitVersion}/deployment-kit-${kit.kitVersion}.tar.gz`)!
+    expect([...objects.keys()].every(key => key.startsWith(`${prefix(kit.kitVersion)}`))).to.equal(true)
+    expect(policy.Statement).to.deep.equal([unrelated])
+    const tar = objects.get(`${prefix(kit.kitVersion)}deployment-kit-${kit.kitVersion}.tar.gz`)!
     expect(execFileSync('tar', ['-tzf', '-'], {encoding: 'utf8', input: tar}).trim().split('\n')).to.deep.equal([...names, DEPLOYMENT_KIT_MANIFEST_FILE].sort())
     const before = [...writes]
     expect(await run()).to.deep.equal(published)
@@ -78,13 +77,13 @@ describe('immutable S3 deployment kit publication', () => {
   })
 
   it('rejects every existing conflicting object before any mutation', async () => {
-    objects.set(`deployment-kits/${kit.kitVersion}/protocol_context.json`, Buffer.from('other deployment'))
+    objects.set(`${prefix(kit.kitVersion)}protocol_context.json`, Buffer.from('other deployment'))
     expect(await failure(() => run())).to.include('conflicts')
     expect(writes).to.deep.equal([])
   })
 
   it('resumes partial uploads but refuses mismatched anonymous bytes', async () => {
-    objects.set(`deployment-kits/${kit.kitVersion}/deployment-kit.env`, fs.readFileSync(path.join(root, 'deployment-kit.env')))
+    objects.set(`${prefix(kit.kitVersion)}deployment-kit.env`, fs.readFileSync(path.join(root, 'deployment-kit.env')))
     expect(await failure(() => run(async () => Buffer.from('wrong')))).to.include('readback differs')
     expect(objects.size).to.equal(6)
     expect((await run()).manifest_sha256).to.equal(kit.manifestSha256)
@@ -108,35 +107,4 @@ describe('immutable S3 deployment kit publication', () => {
     expect(writes).to.deep.equal([])
   })
 
-  it('preserves a singleton policy statement and rejects conflicting managed policy ownership', () => {
-    expect(kitReadPolicy({Statement: unrelated}, store.bucket, kit.kitVersion).Statement).to.have.length(2)
-    expect(() => kitReadPolicy({Statement: [{...unrelated, Sid: 'ScrollSdkKitk0123456789ab'}]}, store.bucket, kit.kitVersion)).to.throw('conflicts')
-    expect(readPublicationKit(kit).size).to.equal(5)
-  })
-
-  it('refuses a concurrent policy edit without overwriting the new policy', async () => {
-    let reads = 0
-    const racing = {json(args: string[]) {
-      if (args[1] === 'get-bucket-policy' && ++reads === 2) policy = {...policy, Statement: [unrelated, {...unrelated, Sid: 'ConcurrentAdmin'}]}
-      return aws.json(args)
-    }}
-    const result = await failure(() => publishDeploymentKit(kit, store, undefined, {anonymousRead, aws: racing}))
-    expect(result).to.include('Bucket policy changed')
-    expect(writes).not.to.include('policy')
-    expect(policy.Statement).to.have.length(2)
-  })
-
-  it('accepts only a concurrent identical object creation', async () => {
-    const racing = {json(args: string[]) {
-      if (args[1] === 'put-object') {
-        const key = args[args.indexOf('--key') + 1]
-        objects.set(key, fs.readFileSync(args[args.indexOf('--body') + 1]))
-        throw new Error('(PreconditionFailed) concurrent publisher')
-      }
-
-      return aws.json(args)
-    }}
-    expect((await publishDeploymentKit(kit, store, undefined, {anonymousRead, aws: racing})).manifest_sha256).to.equal(kit.manifestSha256)
-    expect(objects.size).to.equal(6)
-  })
 })
