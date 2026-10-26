@@ -12,6 +12,7 @@ import type {PreparationPlan, PreparationRunner, PreparationStep} from './prepar
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {prepareCapacityManager} from './capacity-manager.js'
 import {writeContractsHelmValues} from './contracts-helm-values.js'
+import {cubesignerSessionExpiration} from './cubesigner-session-format.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {resolveEnvValue} from './non-interactive.js'
 import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
@@ -318,7 +319,7 @@ export class CommandPreparationRunner implements PreparationRunner {
             let session: any
             try {session = JSON.parse(fs.readFileSync(localPath(root, files[0]), 'utf8'))} catch {throw new AwaitingInput({message: 'Existing runtime session is invalid; explicit recovery is required, no session was rotated'})}
             const role = config.cubesigner?.roles?.[0]
-            if (!role || session.role_id !== role.role_id || !(session.session_exp > Date.now() / 1000) || !(session.session_info?.refresh_token_exp > Date.now() / 1000)
+            if (!role || session.role_id !== role.role_id || !((cubesignerSessionExpiration(session) ?? 0) > Date.now() / 1000) || !(session.session_info?.refresh_token_exp > Date.now() / 1000)
               || fs.readFileSync(localPath(root, files[1]), 'utf8').trim() !== `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"`) throw new AwaitingInput({message: 'Existing runtime session/key/expiry mismatch; explicit recovery is required, no session was rotated'})
           }
 
