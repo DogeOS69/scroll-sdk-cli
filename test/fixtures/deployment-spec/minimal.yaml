@@ -73,47 +73,31 @@ ethereumDa:
   finalizationDepth: 1
 
 bridge:
-  seedString: "dogeos-devnet-v1"
-  thresholds:
-    attestation: 1
-    recovery: 1
-  keyCounts:
-    attestation: 1
-    recovery: 1
-  initialAttestationKeyset:
-    signerIds: [signer-0]
+  attestation:
+    signers:
+    - name: signer-0
+      attestationPubkey: 03a6edc77459a686e1ebb5d9a5c5e77ece92b8c30b8ebd72075e4812a1f3db0363
+      transportPubkey: 02676da0ab7136916bad82add5eb490b1b5b4e56d39944067f0fba0c80c4521012
     threshold: 1
-  # Optional compressed/uncompressed SEC1 TEE public key. The CLI validates it
-  # and writes dogeos-core's canonical compressed representation.
-  # teePubkey: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
-  timelock: 100
-  feeRateSatsPerKvb: 1000000
-  targetAmountsSats:
-    sequencer: 42069000        # Fixed WF sequencer output: 0.42069 DOGE
-    feeWallet: 100000000       # 1 DOGE
-    bridge: 1000000000         # 10 DOGE
-  confirmationsRequired: 1
-  fees:
-    depositFeeSats: "100000000" # 1 DOGE (Dogecoin uses 8 decimals)
-    withdrawalFeeWei: "100000000000000000" # 0.1 DOGE (L2 uses 18 decimals)
-    minWithdrawalAmountWei: "1000000000000000000" # 1 DOGE
-  feeRecipient: "0x0000000000000000000000000000000000000000"
-
-signing:
-  # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
-  # This devnet example starts in observe mode. Mainnet deployments
-  # must select production_verifier_key_policy and supply policyReceipts.
   cubesigner:
     mode: transport_only
-  # Attestation signers are partner-operated services. For the spec workflow,
-  # declare their public identities in top-level attestationSigners entries:
-  # {name: signer-0, attestationPubkey: <compressed key>, transportPubkey: <compressed key>}.
-  # Repeat for every signer selected by bridge.initialAttestationKeyset.signerIds.
-  # See scroll-sdk/examples/deployment-spec.example.yaml for the production form.
-  # The independent manual workflow can still import partner descriptors with
-  # `scrollsdk setup attestation-signer --threshold <T>` before bridge-init.
-  # Current dogeos-core requires canonical protocol context in every mode, so
-  # runtime preflight occurs after the post-genesis signer bundle is installed.
+  recovery:
+    publicKeys:
+    - 03a8b3bfeecf29706aa9ca206fa19ed017ce23662bff3f4266640d8c563ecd9724
+    threshold: 1
+    timelock: 100
+  seedString: dogeos-devnet-v1
+  feeRateSatsPerKvb: 1000000
+  targetAmountsSats:
+    sequencer: 42069000
+    feeWallet: 100000000
+    bridge: 1000000000
+  confirmationsRequired: 1
+  fees:
+    depositFeeSats: '100000000'
+    withdrawalFeeWei: '100000000000000000'
+    minWithdrawalAmountWei: '1000000000000000000'
+  feeRecipient: '0x0000000000000000000000000000000000000000'
 
 # Use dry_run explicitly for a configuration-only fee-oracle rehearsal.
 feeOracle:
