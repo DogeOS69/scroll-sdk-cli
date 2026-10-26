@@ -1,3 +1,4 @@
+import {awsWorkloadIdentity} from './aws-workload-identity.js'
 import {validateBootnodePublicP2p} from './bootnode-public-p2p.js'
 import {validateBridgeHistory} from './bridge-history.js'
 import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
@@ -661,6 +662,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   // Infrastructure validation
+  if (spec.infrastructure?.provider === 'aws') {
+    try {awsWorkloadIdentity(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'infrastructure.aws.workloadIdentity'})}
+  }
+
   if (!spec.infrastructure?.provider) {
     errors.push({
       code: 'E002_MISSING_REQUIRED_FIELD',
@@ -1540,6 +1545,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   if (spec.monitoring) config.monitoring = {...structuredClone(spec.monitoring), ...(spec.monitoring.statusPage ? {environment: spec.metadata.environment} : {})}
   validateBootnodePublicP2p(spec.bootnodePublicP2p, Array.from({length: spec.infrastructure.bootnodeCount}, (_, index) => index), spec.infrastructure.provider)
   if (spec.bootnodePublicP2p !== undefined) config.bootnodePublicP2p = structuredClone(spec.bootnodePublicP2p)
+  if (spec.infrastructure.provider === 'aws') config.awsWorkloadIdentity = awsWorkloadIdentity(spec)
   config.network = spec.dogecoin.network
   const identityIntent = resolveSpecIdentities(spec)
   if (identityIntent) config.identityIntent = identityIntent

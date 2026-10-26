@@ -9,6 +9,7 @@ import {
   assertNoUnmanagedPublicProofBucketGrant,
   buildProofArtifactStorePolicy,
   denyInsecureTransportStatement,
+  missingPublicArtifactReads,
   normalizeProofArtifactPublicEndpoint,
   normalizeProofBucketName,
   normalizeProofKeyPrefix,
@@ -18,6 +19,25 @@ import {
   upsertProofArtifactPublicReadPolicy,
   upsertProofArtifactVpcEndpointReadPolicy,
 } from '../../src/utils/proof-aws-provisioner.js'
+
+
+/** Serve the retention lifecycle reconciliation from memory; other calls reach the test stub. */
+function withLifecycle<T extends {json(args: string[], options?: AwsCliOptions): any}>(aws: T): T {
+  let configuration: {Rules: unknown[]} | undefined
+  return {...aws, json(args: string[], options: AwsCliOptions = {}): any {
+    if (args[1] === 'get-bucket-lifecycle-configuration') {
+      if (!configuration) throw new Error('An error occurred (NoSuchLifecycleConfiguration)')
+      return configuration
+    }
+
+    if (args[1] === 'put-bucket-lifecycle-configuration') {
+      configuration = {Rules: JSON.parse(args[args.indexOf('--lifecycle-configuration') + 1]).Rules}
+      return {}
+    }
+
+    return aws.json(args, options)
+  }}
+}
 
 const PROJECTION = {
   artifactRegion: 'us-west-2',
@@ -84,7 +104,7 @@ describe('proof-aws-provisioner values projection', () => {
         throw new Error(`unexpected text call: ${args.join(' ')}`)
       },
     }
-    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, withLifecycle(aws))
     const result = provisioner.provision(
       { awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default' },
       {
@@ -98,10 +118,8 @@ describe('proof-aws-provisioner values projection', () => {
           },
         },
         bucket: 'proof-bucket',
-        coordinatorRole: { description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator' },
         keyPrefix: 'proof-topology',
         secretName: 'proof-secret',
-        withdrawalRole: { description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor' },
       }
     )
 
@@ -140,19 +158,8 @@ describe('proof-aws-provisioner values projection', () => {
     const versioning = calls.find(call => call.args[0] === 's3api' && call.args[1] === 'put-bucket-versioning')
     expect(versioning?.args).to.include('Status=Enabled')
 
-    const rolePolicies = calls.filter(call => call.args[0] === 'iam' && call.args[1] === 'put-role-policy')
-    expect(rolePolicies).to.have.length(2)
-    for (const call of rolePolicies) {
-      const policyDocument = JSON.parse(call.args[call.args.indexOf('--policy-document') + 1])
-      expect(policyDocument.Statement[0].Resource).to.equal('arn:aws:s3:::proof-bucket/proof-topology/*')
-      if (call.args[call.args.indexOf('--role-name') + 1] === 'coordinator-role') {
-        expect(policyDocument.Statement[1].Condition.StringLike['s3:prefix']).to.deep.equal(['proof-topology', 'proof-topology/*'])
-        expect(policyDocument.Statement[0].Action).to.include('s3:DeleteObject')
-      } else {
-        expect(policyDocument.Statement).to.have.length(1)
-        expect(policyDocument.Statement[0].Action).to.deep.equal(['s3:GetObject', 's3:PutObject'])
-      }
-    }
+    expect(calls.some(call => call.args[0] === 'iam')).to.equal(false)
+
   })
 
   it('does not mutate bucket policy or Public Access Block for an operator-managed external gateway', () => {
@@ -176,7 +183,7 @@ describe('proof-aws-provisioner values projection', () => {
         throw new Error(`unexpected text call: ${args.join(' ')}`)
       },
     }
-    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, withLifecycle(aws))
     provisioner.provision(
       {awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
       {
@@ -185,10 +192,8 @@ describe('proof-aws-provisioner values projection', () => {
           publicReadMode: 'existing-gateway',
         },
         bucket: 'proof-bucket',
-        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
         keyPrefix: 'proof-topology',
         secretName: 'proof-secret',
-        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
       },
     )
 
@@ -281,7 +286,7 @@ describe('proof-aws-provisioner values projection', () => {
         throw new Error(`unexpected text call: ${args.join(' ')}`)
       },
     }
-    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, withLifecycle(aws))
     const result = provisioner.provision(
       {awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
       {
@@ -291,10 +296,8 @@ describe('proof-aws-provisioner values projection', () => {
           vpcEndpoint: {enabled: true},
         },
         bucket: 'proof-bucket',
-        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
         keyPrefix: 'proof-topology',
         secretName: 'proof-secret',
-        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
       },
     )
 
@@ -370,16 +373,14 @@ describe('proof-aws-provisioner values projection', () => {
         throw new Error(`unexpected text call: ${args.join(' ')}`)
       },
     }
-    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, withLifecycle(aws))
     const result = provisioner.provision(
       {awsRegion: 'us-east-1', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
       {
         artifactRead: {publicReadMode: 'direct-s3'},
         bucket: 'proof-bucket',
-        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
         keyPrefix: 'proof-topology',
         secretName: 'proof-secret',
-        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
       },
     )
 
@@ -426,6 +427,7 @@ describe('proof-aws-provisioner values projection', () => {
       'arn:aws:s3:::proof-bucket/rehearsal/batches/proofs/*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/proof-programs/*',
       'arn:aws:s3:::proof-bucket/rehearsal/batches/signer-policy-evidence/*',
+      'arn:aws:s3:::proof-bucket/rehearsal/batches/deployment-kits/*',
     ])
     expect(JSON.stringify(resources)).not.to.include('scroll-chunk-segmentation-sidecars')
     // DA blobs (0x<versioned hash>) live in the separate DA archive bucket.
@@ -442,7 +444,7 @@ describe('proof-aws-provisioner values projection', () => {
       },
       text(): string { throw new Error('unexpected text call') },
     }
-    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, withLifecycle(aws))
     expect(() => provisioner.provision(
       {
         artifactRegion: 'us-west-2',
@@ -457,10 +459,8 @@ describe('proof-aws-provisioner values projection', () => {
           vpcEndpoint: {enabled: true},
         },
         bucket: 'proof-bucket',
-        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
         keyPrefix: 'rehearsal/batches',
         secretName: 'proof-secret',
-        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
       },
     )).to.throw('cannot configure an us-east-1 S3 Gateway endpoint for artifact bucket region us-west-2')
     expect(calls).to.deep.equal([])
@@ -720,17 +720,20 @@ describe('proof-aws-provisioner values projection', () => {
     }, 'proof-bucket', 'proof-topology')).not.to.throw()
   })
 
-  it('preserves an existing public S3 bucket policy and Public Access Block settings', () => {
+  function existingPublicS3(policy: Record<string, any>, bucketBlock: Record<string, boolean> = {}) {
     const calls: Array<{args: string[]; kind: 'json' | 'run' | 'text'}> = []
+    let current = policy
     const aws = {
       json(args: string[]): any {
         if (args[1] === 'list-role-policies') return {PolicyNames: []}
         if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
         calls.push({args, kind: 'json'})
+        if (args[1] === 'get-public-access-block') return {PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: false, IgnorePublicAcls: true, RestrictPublicBuckets: false, ...(args[0] === 's3api' ? bucketBlock : {})}}
         return {}
       },
       run(args: string[]): string {
         calls.push({args, kind: 'run'})
+        if (args[1] === 'put-bucket-policy') current = JSON.parse(args[args.indexOf('--policy') + 1])
         return ''
       },
       text(args: string[]): string {
@@ -738,11 +741,11 @@ describe('proof-aws-provisioner values projection', () => {
         calls.push({args, kind: 'text'})
         if (args[0] === 'sts') return '123456789012'
         if (args[0] === 'eks') return 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE'
+        if (args[1] === 'get-bucket-policy') return JSON.stringify(current)
         throw new Error(`unexpected text call: ${args.join(' ')}`)
       },
     }
-    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
-    const result = provisioner.provision(
+    const provision = () => new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, withLifecycle(aws)).provision(
       {
         artifactRegion: 'us-west-2',
         awsRegion: 'us-west-2',
@@ -753,22 +756,63 @@ describe('proof-aws-provisioner values projection', () => {
       {
         artifactRead: {publicReadMode: 'existing-public-s3'},
         bucket: 'proof-bucket',
-        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
         keyPrefix: 'batches',
         secretName: 'proof-secret',
-        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
       },
     )
+    const writes = (names: string[]) => calls.filter(call => call.args[0] === 's3api' && names.includes(call.args[1]))
+    return {calls, policy: () => current, provision, writes}
+  }
 
+  const sibling = {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: 'arn:aws:s3:::proof-bucket/other-deployment/proofs/*', Sid: 'SiblingDeployment'}
+  it('adds only this deployment grant to an existing public S3 bucket and never changes its Public Access Block', () => {
+    const fixture = existingPublicS3({Statement: [sibling], Version: '2012-10-17'})
+    const result = fixture.provision()
     expect(result.artifactReadTransport).to.deep.equal({
       publicEndpointUrl: 'https://s3.us-west-2.amazonaws.com',
       publicReadMode: 'existing-public-s3',
-      publicStatus: 'operator-managed-unverified',
+      publicStatus: 'configured-unverified',
     })
-    expect(calls.some(call =>
-      call.args[0] === 's3api'
-      && ['delete-bucket-policy', 'put-bucket-policy', 'put-public-access-block'].includes(call.args[1])
-    )).to.equal(false)
+    expect(fixture.policy().Statement).to.deep.equal([sibling, {
+      Action: 's3:GetObject',
+      Effect: 'Allow',
+      Principal: '*',
+      Resource: publicArtifactObjectResources('proof-bucket', 'batches'),
+      Sid: proofArtifactPolicySid('public', 'proof-bucket', 'batches'),
+    }])
+    expect(fixture.writes(['delete-bucket-policy', 'put-public-access-block'])).to.deep.equal([])
+  })
+
+  it('leaves an existing policy byte-identical when it already grants every external-consumer path', () => {
+    const operator = {Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: 'arn:aws:s3:::proof-bucket/*', Sid: 'OperatorPublicRead'}
+    const fixture = existingPublicS3({Statement: [operator], Version: '2012-10-17'})
+    fixture.provision()
+    expect(fixture.writes(['delete-bucket-policy', 'put-bucket-policy', 'put-public-access-block'])).to.deep.equal([])
+  })
+
+  it('refuses a blocked or denying existing bucket before changing IAM or secrets', () => {
+    const blocked = existingPublicS3({Statement: []}, {BlockPublicPolicy: true})
+    expect(() => blocked.provision()).to.throw('bucket Public Access Block prevents public read')
+    const deny = {Action: 's3:*', Effect: 'Deny', Principal: '*', Resource: 'arn:aws:s3:::proof-bucket/batches/proofs/*', Sid: 'OperatorDeny'}
+    const denied = existingPublicS3({Statement: [deny]})
+    expect(() => denied.provision()).to.throw('denies anonymous HTTPS reads')
+    for (const fixture of [blocked, denied]) {
+      expect(fixture.writes(['put-bucket-policy', 'put-public-access-block'])).to.deep.equal([])
+      expect(fixture.calls.some(call => call.args[0] === 'iam' || call.args[0] === 'secretsmanager')).to.equal(false)
+    }
+  })
+
+  it('counts only unconditional or HTTPS-only anonymous grants that no Deny overrides', () => {
+    const grant = (extra: Record<string, unknown>) => ({Statement: [{Action: 's3:GetObject', Effect: 'Allow', Principal: '*', Resource: 'arn:aws:s3:::proof-bucket/batches/*', ...extra}]})
+    expect(missingPublicArtifactReads(grant({}), 'proof-bucket', 'batches')).to.deep.equal([])
+    expect(missingPublicArtifactReads(grant({Condition: {Bool: {'aws:SecureTransport': 'true'}}}), 'proof-bucket', 'batches')).to.deep.equal([])
+    expect(missingPublicArtifactReads(grant({Condition: {StringEquals: {'aws:SourceVpce': 'vpce-0123456789abcdef0'}}}), 'proof-bucket', 'batches')).to.have.length(8)
+    const tls = denyInsecureTransportStatement('proof-bucket')
+    expect(missingPublicArtifactReads({Statement: [...grant({}).Statement, tls]}, 'proof-bucket', 'batches')).to.deep.equal([])
+    const narrow = {Statement: [{...grant({}).Statement[0], Resource: 'arn:aws:s3:::proof-bucket/batches/proofs/*'}]}
+    const missing = missingPublicArtifactReads(narrow, 'proof-bucket', 'batches')
+    expect(missing).to.include('deployment-kits/*')
+    expect(missing).not.to.include('proofs/*')
   })
 
   it('rejects an overlapping public grant before changing VPC, IAM, or secret resources', () => {
@@ -802,7 +846,7 @@ describe('proof-aws-provisioner values projection', () => {
         throw new Error(`unexpected text call: ${args.join(' ')}`)
       },
     }
-    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, aws)
+    const provisioner = new ProofAwsProvisioner(new JsonOutputContext('test', true), undefined, withLifecycle(aws))
     expect(() => provisioner.provision(
       {awsRegion: 'us-west-2', deploymentAlias: 'deployment-01', eksCluster: 'cluster', namespace: 'default'},
       {
@@ -811,10 +855,8 @@ describe('proof-aws-provisioner values projection', () => {
           vpcEndpoint: {enabled: true},
         },
         bucket: 'proof-bucket',
-        coordinatorRole: {description: 'coordinator', roleName: 'coordinator-role', serviceAccount: 'proof-coordinator'},
         keyPrefix: 'batches',
         secretName: 'proof-secret',
-        withdrawalRole: {description: 'withdrawal', roleName: 'withdrawal-role', serviceAccount: 'withdrawal-processor'},
       },
     )).to.throw('select existing-public-s3')
 

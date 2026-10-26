@@ -10,11 +10,14 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {PreparationPlan, PreparationRunner, PreparationStep} from './preparation-plan.js'
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
+import {discoverAwsResources} from './aws-resource-discovery.js'
 import {prepareCapacityManager} from './capacity-manager.js'
+import {prepareDstackNetworkForSpec} from './capacity-manager-network.js'
 import {writeContractsHelmValues} from './contracts-helm-values.js'
 import {cubesignerSessionExpiration} from './cubesigner-session-format.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {resolveEnvValue} from './non-interactive.js'
+import {prepareAwsRoles} from './preparation-aws-roles.js'
 import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
 import {bindPreparedDstackAws, prepareDstackAws} from './preparation-dstack-aws.js'
@@ -74,6 +77,8 @@ export class CommandPreparationRunner implements PreparationRunner {
     })
     const bridgeArgs = ['-N', '--image', p.bridge.image, '--ethereum-da-probe', 'direct', ...(p.bridge.mode === 'production' ? ['--production'] : [])]
     switch (step.id) {
+      case 'dstack-network': {prepareDstackNetworkForSpec(root, spec); break}
+
       case 'capacity-manager': {prepareCapacityManager(root); break}
 
       case 'bootstrap': {
@@ -84,25 +89,18 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'genesis-local': {await prepareLocalGenesis(root, spec, this.invoke); break}
 
       case 'identities': {
-        await command(['gen-keystore', '-N']); break
+        await command(['gen-keystore', '-N', ...optional('aws-profile', p.awsIam?.awsProfile)]); break
       }
 
       case 'bridge-sequencer-kms': {prepareSequencerKms(root, spec); break}
 
+      case 'aws-roles': {prepareAwsRoles(root, spec); break}
+
       case 'bridge-fee-wallet': {productionFeeWallet(root, spec); break}
 
-      case 'archive': {
-        await command(['eth-da-submitter', '-N', p.archive!.action === 'create' ? '--create-archive-bucket' : '--no-create-archive-bucket', ...optional('aws-profile', p.archive!.awsProfile), ...optional('role-arn', p.archive!.writerRoleArn)]); break
-      }
+      case 'aws-resources': {discoverAwsResources(root, spec); break}
 
-      case 'archive-access': {
-        await command(['artifact-access', '--store', 'da', '--apply', ...(p.archive!.publicRead ? ['--public-read', '--allow-bucket-public-policy'] : ['--no-public-read']), ...optional('aws-profile', p.archive!.awsProfile)]); break
-      }
-
-      case 'proof-aws': {
-        if (p.proofAws!.action === 'reuse') {reuseProofAws(root, spec); break}
-        await command(['proof-aws-init', '-N', '--yes', '--aws-region', spec.infrastructure.aws!.region, '--eks-cluster', spec.infrastructure.aws!.eksClusterName!, '--namespace', spec.infrastructure.namespace ?? 'default', '--deployment-alias', spec.metadata.name, '--artifact-public-read-mode', p.proofAws!.publicReadMode, ...optional('artifact-public-endpoint-url', p.proofAws!.publicEndpointUrl), ...optional('aws-profile', p.proofAws!.awsProfile), ...optional('secret-name', p.proofAws!.secretName), ...optional('coordinator-service-account', spec.proofCoordinator?.serviceAccount?.name), ...optional('withdrawal-service-account', spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name)]); break
-      }
+      case 'proof-aws': {reuseProofAws(root, spec); break}
 
       case 'dstack-aws': {prepareDstackAws(root, spec); break}
 

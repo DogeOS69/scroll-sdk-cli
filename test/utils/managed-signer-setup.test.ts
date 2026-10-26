@@ -165,7 +165,7 @@ describe('managed signer setup', () => {
     )
 
     expect(input.kmsKeyId).to.equal(undefined)
-    expect(input.roleArn).to.equal(undefined)
+    // Passed as the recorded role only; the provisioner claims it solely when it is the derived role.
     expect(getDefaultKmsAlias(role, identity)).to.equal('alias/dogeos/prod/dogeos-testnet-cluster/eth-da-submitter')
     expect(getDefaultKmsRoleName(role, identity)).to.equal('dogeos-prod-dogeos-testnet-cluster-eth-da-submitter-kms')
   })
@@ -197,10 +197,9 @@ describe('managed signer setup', () => {
     )
 
     expect(input.kmsKeyId).to.equal(kmsKeyId)
-    expect(input.roleArn).to.equal(roleArn)
   })
 
-  it('uses explicit eth-da-submitter KMS flags even when existing resources belong to another identity', () => {
+  it('uses an explicit eth-da-submitter KMS key but always the derived role and ServiceAccount', () => {
     const role = MANAGED_SIGNER_ROLES.l1CommitSender
     const identity = {
       awsRegion: 'us-west-2',
@@ -209,11 +208,9 @@ describe('managed signer setup', () => {
       networkAlias: 'prod',
     }
     const explicitKmsKeyId = 'alias/custom/eth-da-submitter'
-    const explicitRoleArn = 'arn:aws:iam::074120976575:role/custom-eth-da-submitter-kms'
     const input = resolveKmsSignerInput(
       signerCommandOptions({
         'kms-key-id': explicitKmsKeyId,
-        'role-arn': explicitRoleArn,
       }),
       role,
       identity,
@@ -224,13 +221,13 @@ describe('managed signer setup', () => {
         kmsRegion: 'us-west-2',
         role: 'L1_COMMIT_SENDER',
         service: 'eth-da-submitter',
-        serviceAccountName: 'eth-da-submitter',
+        serviceAccountName: 'custom-submitter',
         serviceAccountRoleArn: 'arn:aws:iam::074120976575:role/dogeos-shutest-dogeos-devnet-cluster-eth-da-submitter-kms',
       }
     )
 
     expect(input.kmsKeyId).to.equal(explicitKmsKeyId)
-    expect(input.roleArn).to.equal(explicitRoleArn)
+    expect(input.serviceAccount).to.equal('eth-da-submitter')
   })
 
   it('does not reuse existing fee-oracle KMS resources when identity changes', () => {
@@ -261,7 +258,7 @@ describe('managed signer setup', () => {
     )
 
     expect(input.kmsKeyId).to.equal(undefined)
-    expect(input.roleArn).to.equal(undefined)
+    // Passed as the recorded role only; the provisioner claims it solely when it is the derived role.
     expect(getDefaultKmsAlias(role, identity)).to.equal('alias/dogeos/prod/dogeos-testnet-cluster/fee-oracle')
     expect(getDefaultKmsRoleName(role, identity)).to.equal('dogeos-prod-dogeos-testnet-cluster-fee-oracle-kms')
   })

@@ -2,7 +2,6 @@ import {Command, Flags} from '@oclif/core'
 import fs from 'node:fs'
 
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
-import {proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-config.js'
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 import {KmsSignerProvisioner} from '../../utils/kms-signer-provisioner.js'
@@ -10,10 +9,10 @@ import {resolveBlobArchive} from '../../utils/managed-signer-setup.js'
 import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 
 export default class SetupEthDaSubmitter extends Command {
-  static override description = 'Configure the eth-da-submitter S3 archive and optional writer IAM permissions'
+  static override description = 'Prepare the eth-da-submitter S3 archive for the AWS stage'
   static override examples = [
     '<%= config.bin %> <%= command.id %> --archive-bucket dogeos-da --archive-region us-east-1 --archive-key-prefix devnet -N',
-    '<%= config.bin %> <%= command.id %> --no-create-archive-bucket --role-arn arn:aws:iam::123456789012:role/archive-writer -N',
+    '<%= config.bin %> <%= command.id %> --no-create-archive-bucket -N',
     '<%= config.bin %> <%= command.id %> --disable-archive -N',
   ]
 
@@ -29,7 +28,6 @@ export default class SetupEthDaSubmitter extends Command {
     'doge-config': Flags.string({description: 'Dogecoin configuration file.'}),
     json: Flags.boolean({default: false}),
     'non-interactive': Flags.boolean({char: 'N', default: false}),
-    'role-arn': Flags.string({description: 'Existing archive writer IAM role. Defaults to the submitter signer service-account role.'}),
   }
 
   static override hidden = true
@@ -42,21 +40,17 @@ export default class SetupEthDaSubmitter extends Command {
       const {config, configPath} = await loadDogeConfigWithSelection(flags['doge-config'])
       const signer = config.signers?.l1CommitSender
       const archive = await resolveBlobArchive({dogeConfig: config, dogeConfigPath: configPath, flags, hasFlag: name => this.argv.some(arg => arg === `--${name}` || arg.startsWith(`--${name}=`)), jsonCtx: output, jsonMode: flags.json, nonInteractive: flags['non-interactive'], signerKey: 'l1CommitSender'}, flags['aws-region'] || signer?.kmsRegion)
-      const roleArn = flags['role-arn'] || signer?.serviceAccountRoleArn
       const createBucket = flags['create-archive-bucket'] ?? signer?.backend === 'aws_kms'
       if (archive.enabled) {
         assertSeparateDaProofBuckets(config)
-        // With a proof artifact store configured, the writer also gets its
-        // segmentation-sidecar namespace there.
-        const sidecar = config.proofArtifacts?.s3 ? {sidecarStore: proofArtifactStoreFromDogeConfig(config)} : {}
-        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive, {createBucket, roleArn, ...sidecar})
-        if (!roleArn) output.addWarning('No archive writer IAM role selected; writer access must be provided separately.')
+        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive, {createBucket})
+        if (signer?.backend !== 'aws_kms') output.addWarning('The submitter has no CLI-owned AWS workload role; archive writer access must be provided separately.')
       }
 
       fs.writeFileSync(configPath, dogeConfigToToml(config), {mode: 0o600})
       fs.chmodSync(configPath, 0o600)
-      output.logSuccess('Archive configuration saved. Signing identities are managed by setup gen-keystore --service eth-da-submitter.')
-      output.success({archive, dogeConfigPath: configPath, writerRoleArn: roleArn})
+      output.logSuccess('Archive configuration saved. Workload permissions are bound by the AWS stage.')
+      output.success({archive, dogeConfigPath: configPath})
     } catch (error) {
       if (error instanceof CliExitError) throw error
       output.error('E621_ARCHIVE_CONFIGURATION_FAILED', error instanceof Error ? error.message : 'Archive configuration failed', 'CONFIGURATION', true)

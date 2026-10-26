@@ -4,7 +4,8 @@ import * as path from 'node:path'
 
 import {readProofArtifactStore} from '../../utils/artifact-stores.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
-import { sanitizeName, truncateIamRoleName } from '../../utils/kms-signer-provisioner.js'
+import { sanitizeName } from '../../utils/kms-signer-provisioner.js'
+import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 import {
   DEFAULT_PROOF_AWS_CONFIG,
   LEGACY_SHARED_PROOF_SECRET_NAME,
@@ -22,13 +23,10 @@ import {
   proofArtifactS3Endpoint,
 } from '../../utils/proof-aws-provisioner.js'
 
-export const PROOF_AWS_INIT_NEXT_STEPS =
-  'run scrollsdk setup proof-materials, then scrollsdk setup doge-config --proof-topology, '
-  + 'then run scrollsdk setup prep-charts'
+export const PROOF_AWS_INIT_NEXT_STEPS = 'continue setup aws to bind workload roles; follow the next stage reported by setup aws'
 
 export default class ProofAwsInit extends Command {
   static override description = 'Provision proof AWS resources and persist their non-secret resource facts as prep-charts input; never read or modify generated Helm values'
-
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --aws-region us-west-2 --eks-cluster dogeos-testnet --deployment-alias dev0829 --artifact-public-read-mode direct-s3 -N',
@@ -40,7 +38,7 @@ export default class ProofAwsInit extends Command {
   static override flags = {
     'artifact-public-endpoint-url': Flags.string({description: 'Existing credential-free HTTPS S3-compatible gateway root; used only with --artifact-public-read-mode=existing-gateway'}),
     'artifact-public-read-mode': Flags.string({
-      description: 'Public proof artifact delivery: CLI-managed direct S3, operator-managed public S3, or an existing HTTPS gateway backed by private S3',
+      description: 'Public proof artifact delivery: CLI-managed direct S3, an existing public S3 bucket where the CLI adds only this deployment grant, or an existing HTTPS gateway backed by private S3',
       options: ['direct-s3', 'existing-public-s3', 'existing-gateway'],
     }),
     'artifact-read-route-table-id': Flags.string({description: 'Advanced override: EKS subnet route table to associate with the S3 gateway endpoint (repeatable; normally auto-discovered)', multiple: true}),
@@ -64,7 +62,10 @@ export default class ProofAwsInit extends Command {
     yes: Flags.boolean({char: 'y', default: false, description: 'Apply the displayed AWS resource plan without confirmation'}),
   }
 
+  static override hidden = true
+
   public async run(): Promise<void> {
+    requirePreparationStep(['proof-aws'])
     const { flags } = await this.parse(ProofAwsInit)
     const json = new JsonOutputContext('setup proof-aws-init', flags.json)
     try {
@@ -99,7 +100,6 @@ export default class ProofAwsInit extends Command {
         throw new Error('deployment alias must contain at least one ASCII letter or digit')
       }
 
-      const cluster = sanitizeName(eksCluster)
       const bucket = normalizeProofBucketName(shared.bucket)
       if (flags.bucket && normalizeProofBucketName(flags.bucket) !== bucket) {
         throw new Error(`--bucket must match canonical proofArtifacts.s3.bucket (${bucket})`)
@@ -124,7 +124,7 @@ export default class ProofAwsInit extends Command {
                 value: 'direct-s3',
               },
               {
-                name: 'Existing public AWS S3 policy (preserve bucket-wide public access settings)',
+                name: 'Existing public AWS S3 bucket (add only this deployment grant; preserve other statements and public access settings)',
                 value: 'existing-public-s3',
               },
               {
@@ -255,19 +255,9 @@ export default class ProofAwsInit extends Command {
               : {}),
           },
           bucket,
-          coordinatorRole: {
-            description: 'DogeOS proof-coordinator artifact store role',
-            roleName: truncateIamRoleName(`dogeos-${alias}-${cluster}-proof-coordinator`),
-            serviceAccount: coordinatorServiceAccount,
-          },
           keyPrefix,
           rotateTokens: flags['rotate-tokens'],
           secretName,
-          withdrawalRole: {
-            description: 'DogeOS withdrawal-processor proof transport role',
-            roleName: truncateIamRoleName(`dogeos-${alias}-${cluster}-wp-proof`),
-            serviceAccount: withdrawalServiceAccount,
-          },
         }
       )
 
@@ -291,7 +281,7 @@ export default class ProofAwsInit extends Command {
       const publicReadWarning = result.artifactReadTransport.publicReadMode === 'direct-s3'
         ? `anonymous GetObject is limited to the required external-consumer object paths under s3://${result.bucket}/${keyPrefix}; the segmentation sidecar, list/write/delete remain private, but external reachability is unverified`
         : result.artifactReadTransport.publicReadMode === 'existing-public-s3'
-          ? `the existing public S3 policy and bucket-wide Public Access Block settings are operator-managed and were preserved; verify anonymous GetObject for every required external-consumer path under s3://${result.bucket}/${keyPrefix}`
+          ? `the bucket policy grants anonymous GetObject for every required external-consumer path under s3://${result.bucket}/${keyPrefix}; other statements and Public Access Block settings were preserved, and external reachability is unverified`
           : `the partner/external artifact route ${result.artifactReadTransport.publicEndpointUrl} is operator-managed and unverified; scroll-sdk-cli did not change the bucket policy or Public Access Block settings`
       json.addWarning(publicReadWarning)
       json.addWarning(

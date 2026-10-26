@@ -62,8 +62,8 @@ describe('independent NLB RPC peer discovery', () => {
     const f = fixture()
     expect(() => discoverExistingNlbDomains(f.files, undefined, f.aws)).to.throw('--spec')
     expect(f.calls).to.have.length(0)
-    f.responses['elbv2 describe-load-balancers'].LoadBalancers[0].SecurityGroups = []
-    expect(() => discoverExistingNlbDomains(f.files, f.spec, f.aws)).to.throw('exactly match')
+    f.responses['elbv2 describe-load-balancers'].LoadBalancers = []
+    expect(() => discoverExistingNlbDomains(f.files, f.spec, f.aws)).to.throw()
     expect(discoverExistingNlbDomains({}, undefined, f.aws)).to.deep.equal({})
   })
 })

@@ -1,6 +1,8 @@
 import type {DeploymentSpec, ProofCoordinatorConfig} from '../types/deployment-spec.js'
 import type {ProofTopologySpec} from '../types/proof-topology.js'
 
+import {awsWorkloadIdentity} from './aws-workload-identity.js'
+
 /** Expand the one operator-owned proof store into consumer configuration.
  * Keep these projections out of the source spec and saved plan intent.
  */
@@ -23,6 +25,7 @@ export function resolveSpecProofStorage(spec: DeploymentSpec): {
   return {
     ...(coordinator ? {proofCoordinator: {
       ...coordinator,
+      ...(spec.infrastructure.provider === 'aws' && awsWorkloadIdentity(spec) === 'pod-identity' ? {s3AuthMode: 'ambient' as const} : {}),
       artifactStore: {...coordinates, ...coordinator.artifactStore},
     }} : {}),
     ...(topology ? {proofTopology: {

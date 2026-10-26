@@ -17,14 +17,19 @@ import BridgeInit from '../../src/commands/setup/bridge-init.js'
 import SetupGenSecrets from '../../src/commands/setup/gen-secrets.js'
 import PrepCharts from '../../src/commands/setup/prep-charts.js'
 import {generateAllConfigs, normalizeDeploymentSpec} from '../../src/utils/deployment-spec-generator.js'
+import {prepareAwsRoles} from '../../src/utils/preparation-aws-roles.js'
 import {prepareProductionWallets, publicKeyAddress} from '../../src/utils/preparation-funding.js'
 import {AwaitingInput} from '../../src/utils/preparation-io.js'
 import {preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
-import {prepareSequencerKms, productionSequencer} from '../../src/utils/preparation-sequencer-kms.js'
-import {buildProofAwsConfig, writeProofAwsConfig} from '../../src/utils/proof-aws-config.js'
+import {prepareSequencerKms as prepareResources, productionSequencer} from '../../src/utils/preparation-sequencer-kms.js'
 import {generateValuesFiles} from '../../src/utils/values-generator.js'
 import {mergeWithdrawalManagedDeploymentBlock} from '../../src/utils/withdrawal-config.js'
 import {reconcileWithdrawalSignerValues, withdrawalSequencerKms} from '../../src/utils/withdrawal-signers.js'
+
+function prepareSequencerKms(root: string, spec: DeploymentSpec, aws: any): void {
+  prepareResources(root, spec, aws)
+  prepareAwsRoles(root, spec, aws, () => {})
+}
 
 describe('production Bridge sequencer KMS', () => {
   let root: string
@@ -34,6 +39,8 @@ describe('production Bridge sequencer KMS', () => {
   let keyExists: boolean
   let aliasExists: boolean
   let failPolicy: boolean
+  let keyTags: Array<{TagKey: string; TagValue: string}>
+  let keyPolicy: any
   let originalFeeKey: string | undefined
   const account = '123456789012'
   const region = 'us-west-2'
@@ -58,7 +65,16 @@ describe('production Bridge sequencer KMS', () => {
         return {KeyMetadata: metadata()}
       }
 
-      case 'create-key': { keyExists = true; return {KeyMetadata: metadata()}
+      case 'create-key': { keyExists = true; keyTags = JSON.parse(args[args.indexOf('--tags') + 1]); return {KeyMetadata: metadata()}
+      }
+
+      case 'list-resource-tags': { return {Tags: keyTags}
+      }
+
+      case 'get-key-policy': { return {Policy: JSON.stringify(keyPolicy)}
+      }
+
+      case 'tag-role': { return {}
       }
 
       case 'create-alias': { aliasExists = true; return {}
@@ -70,16 +86,17 @@ describe('production Bridge sequencer KMS', () => {
       case 'describe-cluster': { return {cluster: {identity: {oidc: {issuer: `https://${issuer}`}}}}
       }
 
-      case 'get-open-id-connect-provider': { return {}
+      case 'get-open-id-connect-provider': { return {ClientIDList: ['sts.amazonaws.com']}
       }
 
-      case 'get-role': { return {Role: {Arn: `arn:aws:iam::${account}:role/${args[3]}`, AssumeRolePolicyDocument: {Statement: [{Action: 'sts:AssumeRoleWithWebIdentity', Condition: {StringEquals: {[`${issuer}:aud`]: 'sts.amazonaws.com', [`${issuer}:sub`]: 'system:serviceaccount:test:withdrawal-processor'}}, Effect: 'Allow', Principal: {Federated: `arn:aws:iam::${account}:oidc-provider/${issuer}`}}]}}}
+      case 'get-role': { if (failPolicy) throw new Error('Read failed'); return {Role: {Arn: `arn:aws:iam::${account}:role/${args[3]}`, AssumeRolePolicyDocument: {Statement: [{Action: 'sts:AssumeRoleWithWebIdentity', Condition: {StringEquals: {[`${issuer}:aud`]: 'sts.amazonaws.com', [`${issuer}:sub`]: `system:serviceaccount:test:${args[3].endsWith('proof-coordinator') ? 'proof-coordinator' : 'withdrawal-processor'}`}}, Effect: 'Allow', Principal: {Federated: `arn:aws:iam::${account}:oidc-provider/${issuer}`}}]}}}
       }
 
-      case 'put-role-policy': { if (failPolicy) throw new Error('Injected policy failure'); return {}
-      }
-
-      case 'simulate-principal-policy': { return {EvaluationResults: ['kms:GetPublicKey', 'kms:Sign'].map(EvalActionName => ({EvalActionName, EvalDecision: 'allowed', EvalResourceName: keyArn}))}
+      case 'simulate-principal-policy': {
+        if (failPolicy) throw new Error('Injected simulation failure')
+        const actions = args.slice(args.indexOf('--action-names') + 1, args.indexOf('--resource-arns'))
+        const resources = args.slice(args.indexOf('--resource-arns') + 1, args.indexOf('--context-entries'))
+        return {EvaluationResults: actions.flatMap(EvalActionName => resources.map(EvalResourceName => ({EvalActionName, EvalDecision: 'allowed', EvalResourceName})))}
       }
 
       default: { throw new Error(`Unexpected AWS operation ${args[1]}`)
@@ -90,13 +107,14 @@ describe('production Bridge sequencer KMS', () => {
   const runner = () => ({json: response}) as any
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-kms-test-'))
-    calls = []; keyExists = false; aliasExists = false; failPolicy = false
+    calls = []; keyExists = true; aliasExists = true; failPolicy = false; keyTags = []
+    keyPolicy = {Statement: [{Action: 'kms:*', Effect: 'Allow', Principal: {AWS: `arn:aws:iam::${account}:root`}, Resource: '*', Sid: 'Enable IAM User Permissions'}], Version: '2012-10-17'}
     publicDer = generateKeyPairSync('ec', {namedCurve: 'secp256k1'}).publicKey.export({format: 'der', type: 'spki'}).toString('base64')
     originalFeeKey = process.env.DOGECOIN_FEE_WALLET_KEY
     const fee = feeKey()
     process.env.DOGECOIN_FEE_WALLET_KEY = fee.toWIF()
     const publicKey = fee.toPublicKey().toString()
-    spec = {attestationSigners: [{attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: 'partner-a', transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}], bridge: {confirmationsRequired: 6, teePubkey: publicKey, thresholds: {attestation: 1, recovery: 2}, timelock: 100_000}, contracts: {feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString()}, dogecoin: {network: 'testnet'}, images: {services: {withdrawalProcessor: {tag: 'v0.3.0-beta.6-kms'}}}, infrastructure: {aws: {accountId: account, eksClusterName: 'cluster', region}, namespace: 'test', provider: 'aws'}, metadata: {name: 'test'}, preparation: {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, recoveryPublicKeys: [publicKey, feeKey().toPublicKey().toString()], sequencerKms: {action: 'create'}}}, proofMaterials: {mode: 'existing'}}} as DeploymentSpec
+    spec = {bridge: {attestation: {signers: [{attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: 'partner-a', transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}], threshold: 1}, confirmationsRequired: 6, cubesigner: {publicKey}, recovery: {publicKeys: [publicKey, feeKey().toPublicKey().toString()], threshold: 2, timelock: 100_000}}, contracts: {feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString()}, dogecoin: {network: 'testnet'}, images: {services: {withdrawalProcessor: {tag: 'v0.3.0-beta.6-kms'}}}, infrastructure: {aws: {accountId: account, eksClusterName: 'cluster', region, roles: {proofCoordinator: `arn:aws:iam::${account}:role/external-proof-coordinator`, withdrawalProcessor: `arn:aws:iam::${account}:role/external-wp`}}, namespace: 'test', provider: 'aws'}, metadata: {name: 'test'}, preparation: {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, sequencerKms: {action: 'reuse', keyId: keyArn}}}, proofMaterials: {mode: 'existing'}}} as DeploymentSpec
   })
   afterEach(() => {
     fs.rmSync(root, {force: true, recursive: true})
@@ -104,10 +122,16 @@ describe('production Bridge sequencer KMS', () => {
     else process.env.DOGECOIN_FEE_WALLET_KEY = originalFeeKey
   })
 
-  it('plans creation without a sequencer private key, public key or AWS call', () => {
+  it('refuses key creation before AWS access', () => {
+    spec.preparation!.bridge.production!.sequencerKms = {action: 'create'}
+    expect(() => prepareResources(root, spec, runner())).throw('externally')
+    expect(calls).empty
+  })
+
+  it('plans external key reuse without a sequencer private key, public key or AWS call', () => {
     validatePreparation(spec)
     const steps = preparationSteps(spec)
-    expect(steps.find(s => s.id === 'bridge-sequencer-kms')?.effect).to.equal('cloud')
+    expect(steps.find(s => s.id === 'bridge-sequencer-kms')?.effect).to.equal('read')
     expect(steps.findIndex(s => s.id === 'bridge-sequencer-kms')).to.be.lessThan(steps.findIndex(s => s.id === 'production-wallets'))
     expect(calls).to.have.length(0)
     const policy = spec.preparation!.bridge.production!
@@ -125,7 +149,7 @@ describe('production Bridge sequencer KMS', () => {
     spec.infrastructure.aws!.sharedAlb = {enabled: true} as any
     prepareSequencerKms(root, spec, runner())
     expect(productionSequencer(root, spec)).deep.eq(identity)
-    expect(calls.filter(args => args[1] === 'create-key')).length(1)
+    expect(calls.filter(args => args[1] === 'create-key')).length(0)
     for (const field of ['accountId', 'eksClusterName', 'region'] as const) {
       const original = spec.infrastructure.aws![field]
       spec.infrastructure.aws![field] = 'different'
@@ -134,9 +158,9 @@ describe('production Bridge sequencer KMS', () => {
     }
   })
 
-  it('creates once, pins the immutable ARN/public key and resumes after an IAM failure', () => {
+  it('reads an existing key, pins the immutable ARN/public key and resumes after an IAM failure', () => {
     failPolicy = true
-    expect(() => prepareSequencerKms(root, spec, runner())).to.throw('Injected')
+    expect(() => prepareSequencerKms(root, spec, runner())).to.throw('Cannot read AWS resource')
     expect(() => productionSequencer(root, spec)).to.throw('incomplete')
     failPolicy = false
     prepareSequencerKms(root, spec, runner())
@@ -145,64 +169,30 @@ describe('production Bridge sequencer KMS', () => {
     expect(first.publicKey).to.match(/^(02|03)[\da-f]{64}$/)
     prepareSequencerKms(root, spec, runner())
     expect(productionSequencer(root, spec)).to.deep.equal(first)
-    expect(calls.filter(args => args[1] === 'create-key')).to.have.length(1)
-    expect(calls.filter(args => args[1] === 'create-alias')).to.have.length(1)
+    expect(calls.filter(args => args[1] === 'create-key')).to.have.length(0)
+    expect(calls.filter(args => args[1] === 'create-alias')).to.have.length(0)
     expect(JSON.stringify(fs.readFileSync(path.join(root, '.data/bridge-sequencer-kms.json'), 'utf8'))).not.to.include('privateKey')
   })
 
-  it('reuses an existing key and role without AWS writes and rejects a changed public identity', () => {
+  it('reuses an existing key read-only, validates the external WP role and rejects a changed public identity', () => {
     keyExists = true
-    spec.preparation!.bridge.production!.sequencerKms = {action: 'reuse', keyId: keyArn, roleArn: `arn:aws:iam::${account}:role/existing-wp`}
+    spec.preparation!.bridge.production!.sequencerKms = {action: 'reuse', keyId: keyArn}
     validatePreparation(spec)
     prepareSequencerKms(root, spec, runner())
-    expect(calls.some(args => /^(create|put|update|delete)/.test(args[1]))).to.equal(false)
+    expect(calls.some(args => /^(create|update|delete)/.test(args[1]))).to.equal(false)
+    expect(calls.some(args => args[1] === 'put-role-policy')).false
     expect(preparationSteps(spec).find(s => s.id === 'bridge-sequencer-kms')?.effect).to.equal('read')
     publicDer = generateKeyPairSync('ec', {namedCurve: 'secp256k1'}).publicKey.export({format: 'der', type: 'spki'}).toString('base64')
     expect(() => prepareSequencerKms(root, spec, runner())).to.throw('identity changed')
   })
 
-  it('creates a dedicated IRSA role when no proof workload role exists', () => {
-    prepareSequencerKms(root, spec, {json(args: string[]) {
-      if (args[1] === 'get-role') throw new Error('NoSuchEntity')
-      if (args[1] === 'create-role') {
-        calls.push(args)
-        return {Role: {Arn: `arn:aws:iam::${account}:role/${args[3]}`, AssumeRolePolicyDocument: JSON.parse(args[5])}}
-      }
 
-      return response(args)
-    }} as any)
-    const created = calls.find(args => args[1] === 'create-role')!
-    const trust = JSON.parse(created[5]).Statement[0]
-    expect(trust.Condition.StringEquals[`${issuer}:sub`]).to.equal('system:serviceaccount:test:withdrawal-processor')
-    expect(productionSequencer(root, spec).roleArn).to.equal(`arn:aws:iam::${account}:role/${created[3]}`)
-  })
 
-  it('adds KMS permission to the proof workload role without changing its S3 policies or trust', () => {
-    const withdrawalRoleArn = `arn:aws:iam::${account}:role/existing-wp-proof`
-    writeProofAwsConfig(path.join(root, '.data/proof-aws.json'), buildProofAwsConfig({coordinatorServiceAccount: 'proof-coordinator', identity: {awsRegion: region, deploymentAlias: 'test', eksCluster: 'cluster', namespace: 'test'}, keyPrefix: 'proofs', provisioned: {artifactReadTransport: {publicEndpointUrl: `https://s3.${region}.amazonaws.com`, publicReadMode: 'existing-public-s3', publicStatus: 'operator-managed-unverified'}, bucket: 'fixture-proof-bucket', bucketCreated: false, coordinatorRoleArn: `arn:aws:iam::${account}:role/proof`, secretAction: 'reused', secretName: 'fixture-proof', withdrawalRoleArn}, withdrawalServiceAccount: 'withdrawal-processor'}))
-    prepareSequencerKms(root, spec, runner())
-    expect(productionSequencer(root, spec).roleArn).to.equal(withdrawalRoleArn)
-    const grant = calls.find(args => args[1] === 'put-role-policy')!
-    expect(grant[3]).to.equal('existing-wp-proof')
-    expect(grant[5]).to.equal('dogeos-bridge-sequencer-kms')
-    expect(JSON.parse(grant[7]).Statement[0]).to.deep.equal({Action: ['kms:GetPublicKey', 'kms:Sign'], Effect: 'Allow', Resource: keyArn})
-    expect(calls.some(args => args[1] === 'update-assume-role-policy')).to.equal(false)
-  })
 
-  it('rejects wrong AWS accounts, workload trust and denied signing access', () => {
-    keyExists = true
-    spec.preparation!.bridge.production!.sequencerKms = {action: 'reuse', keyId: keyArn, roleArn: `arn:aws:iam::${account}:role/existing-wp`}
-    for (const [operation, replacement, message] of [
-      ['get-caller-identity', {Account: '999999999999'}, 'AWS account differs'],
-      ['get-role', {Role: {Arn: `arn:aws:iam::${account}:role/existing-wp`, AssumeRolePolicyDocument: {Statement: []}}}, 'does not trust'],
-      ['simulate-principal-policy', {EvaluationResults: []}, 'must allow'],
-    ] as const) {
-      expect(() => prepareSequencerKms(root, spec, {json: (args: string[]) => args[1] === operation ? replacement : response(args)} as any)).to.throw(message)
-      expect(() => productionSequencer(root, spec)).to.throw()
-    }
 
-    expect(calls.some(args => /^(create|put|update|delete)/.test(args[1]))).to.equal(false)
-  })
+
+
+
 
   for (const sequencerVout of [0, 1]) it(`validates KMS wallet funding at vout ${sequencerVout} without an opt-in flag`, async () => {
     const fee = feeKey()
@@ -324,7 +314,7 @@ describe('production Bridge sequencer KMS', () => {
       .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
       .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec)
     spec = {...minimal, ...spec, bridge: {...minimal.bridge, ...spec.bridge}, contracts: {...minimal.contracts, ...spec.contracts}, dogecoin: {...minimal.dogecoin, ...spec.dogecoin}}
-    spec.bridge.initialAttestationKeyset = {signerIds: ['partner-a'], threshold: 1}
+    spec.bridge.attestation.threshold = 1
     prepareSequencerKms(root, spec, runner())
     const sequencer = productionSequencer(root, spec)
     spec.contracts.feeVaultDogeRecipientAddress = publicKeyAddress(feeKey().toPublicKey().toString(), 'testnet')

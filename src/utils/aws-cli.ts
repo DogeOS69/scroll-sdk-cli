@@ -9,6 +9,12 @@ export interface AwsCliOptions {
   region?: string
 }
 
+/** Fail closed before spawning AWS during the pre-genesis resource discovery stage. */
+export function assertPreparationAwsReadOnly(args: string[]): void {
+  if (process.env.SCROLLSDK_PREPARATION_STAGE !== 'aws') return
+  if (!/^(describe|get|head|list)-/.test(args[1] ?? '')) throw new Error(`setup aws is read-only; refusing ${args.slice(0, 2).join(' ')}`)
+}
+
 /** Thin `aws` CLI shell-out, mirroring the KmsSignerProvisioner conventions. */
 export class AwsCliRunner {
   constructor(private readonly profile?: string) {}
@@ -18,6 +24,7 @@ export class AwsCliRunner {
   }
 
   run(args: string[], options: AwsCliOptions = {}): any {
+    assertPreparationAwsReadOnly(args)
     const fullArgs = [...args]
     if (options.region) fullArgs.push('--region', options.region)
     if (options.profile || this.profile) fullArgs.push('--profile', options.profile || this.profile as string)

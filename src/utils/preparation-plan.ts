@@ -13,7 +13,9 @@ import {validateDstackAwsBackend} from './dstack-credentials.js'
 import {usesDstackPostgres} from './dstack-database.js'
 import {validateExistingAlb, validateExistingAlbSdk} from './existing-alb.js'
 import {validateExistingNlbSdk} from './existing-nlb.js'
+import {validateExternalAwsRoles} from './external-aws-roles.js'
 import {feeVaultRecipientHash} from './fee-vault-recipient.js'
+import {usesWorkloadRoles} from './preparation-aws-roles.js'
 import {needsPreparationPolicy} from './preparation-cubesigner-policy.js'
 import {dstackAwsIntent} from './preparation-dstack-aws.js'
 import {usesManagedHelper} from './preparation-helper-identity.js'
@@ -49,15 +51,16 @@ export function preparationSteps(spec: DeploymentSpec, staged = false): Preparat
   const add = (id: string, title: string, effect: PreparationStep['effect'] = 'local', retry: PreparationStep['retry'] = 'safe') => steps.push({effect, id, retry, title})
   add('bootstrap', 'Generate configuration from pinned SDK templates')
   if (p.bridge.mode === 'production') add('bridge-fee-wallet', 'Derive and pin the fee-wallet public identity from DOGECOIN_FEE_WALLET_KEY')
-  add('identities', 'Prepare declared service identities and deployment account', JSON.stringify(spec.identities ?? {}).includes('aws_kms') ? 'cloud' : 'local')
-  if (p.proofAws) add('proof-aws', p.proofAws.action === 'reuse' ? 'Discover existing proof artifact store and workload access' : 'Provision proof artifact store and workload access', p.proofAws.action === 'reuse' ? 'read' : 'cloud')
-  // Archive writer access also covers segmentation sidecars in the resolved proof bucket.
-  if (p.archive) add('archive', 'Reconcile declared DA archive resources and writer access', 'cloud')
-  if (p.archive?.publicRead !== undefined) add('archive-access', 'Reconcile explicit DA blob read access', 'cloud')
-  if (p.bridge.production?.sequencerKms) add('bridge-sequencer-kms', 'Prepare and pin the Bridge sequencer KMS key and withdrawal signing access', p.bridge.production.sequencerKms.action === 'create' ? 'cloud' : 'read')
-  if (spec.dstackController && spec.dstackController.enabled !== false) {
-    const dstackAws = dstackAwsIntent(spec)
-    if (dstackAws) add('dstack-aws', dstackAws.action === 'create' ? 'Prepare dstack controller IAM role and inspect existing worker networks' : 'Verify the annotated dstack controller role and inspect existing worker networks', dstackAws.action === 'create' ? 'cloud' : 'read')
+  const workloadRoles = usesWorkloadRoles(spec)
+  if (spec.infrastructure?.provider === 'aws') add('aws-resources', 'Read external resource metadata for production values', 'read')
+  add('identities', 'Prepare declared service identities and deployment account', JSON.stringify(spec.identities ?? {}).includes('aws_kms') ? 'read' : 'local')
+  if (p.proofAws) add('proof-aws', 'Read proof bucket and Secret references', 'read')
+  if (p.bridge.production?.sequencerKms) add('bridge-sequencer-kms', 'Read and pin the existing Bridge signing identity', 'read')
+  const dstack = spec.dstackController && spec.dstackController.enabled !== false
+  if (dstack && dstackAwsIntent(spec)) add('dstack-aws', 'Read the external dstack controller role', 'read')
+  if (dstack && spec.capacityManager?.connection?.mode === 'existing-alb') add('dstack-network', 'Read the existing private dstack endpoint', 'read')
+  if (workloadRoles) add('aws-roles', 'Resolve externally managed workload roles and bind their ARNs', 'read')
+  if (dstack) {
     add('dstack', 'Prepare dstack controller credentials and config')
     if (p.dstack?.initializeDatabase) add('dstack-db', 'Initialize dstack in the existing PostgreSQL server', 'cloud')
   }
@@ -128,6 +131,7 @@ export function validatePreparation(spec: DeploymentSpec): void {
 
   specAwsSecretPrefix(spec)
   if (!p) throw new Error('preparation is required for setup plan; plain generate-from-spec remains available')
+  validateExternalAwsRoles(spec)
   if (p.tsoAlbEdge && typeof p.tsoAlbEdge.enabled !== 'boolean') throw new Error('tsoAlbEdge.enabled must be boolean')
   if (p.tsoAlbEdge?.enabled && (!spec.infrastructure.aws?.region || !spec.infrastructure.aws.eksClusterName || !specKubernetesTarget(spec).kubeContext)) throw new Error('tsoAlbEdge requires explicit AWS region, EKS cluster and Kubernetes context')
   if (p.deploymentKitPublication && !['manual', 's3'].includes(p.deploymentKitPublication.mode)) throw new Error('deploymentKitPublication.mode must be manual or s3')

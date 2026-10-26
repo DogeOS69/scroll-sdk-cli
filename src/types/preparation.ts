@@ -1,6 +1,15 @@
 /** Inputs to the resumable preparation workflow; credentials are file/env references. */
 export interface PreparationConfig {
-  archive?: {action: 'configure' | 'create'; awsProfile?: string; publicRead?: boolean; writerRoleArn?: string}
+  archive?: {action: 'configure' | 'create'; awsProfile?: string; publicRead?: boolean}
+  /** AWS read credentials. Legacy ownership fields are rejected by plan validation. */
+  awsIam?: {
+    /** Operator profile for the resource discovery and role binding steps; defaults to the standard credential chain. */
+    awsProfile?: string
+    path?: string
+    permissionsBoundaryArn?: string
+    roleNamePrefix?: string
+    tags?: Record<string, string>
+  }
   bridge: {
     /** Mutable, operator-supplied outpoints; relative to the deployment directory. */
     fundingFile?: string
@@ -20,8 +29,6 @@ export interface PreparationConfig {
         awsProfile?: string
         keyId?: string
         region?: string
-        /** Defaults to the proof AWS withdrawal role when selected. */
-        roleArn?: string
       }
       sequencerPublicKey?: string
     }
@@ -34,8 +41,6 @@ export interface PreparationConfig {
     aws?: {
       /** Operator profile for controller role preparation; the controller itself uses IRSA. */
       awsProfile?: string
-      /** Created role name; defaults to a deployment/cluster-derived name. An existing role is selected by its annotation. */
-      controllerRoleName?: string
       iamInstanceProfile?: string
       publicIps?: boolean
       vpcIds: Record<string, string>
@@ -58,12 +63,9 @@ export interface PreparationConfig {
   proofAws?: {
     action: 'create' | 'reuse'
     awsProfile?: string
-    /** Existing role names; omitted names are derived from deployment alias and cluster. */
-    coordinatorRoleName?: string
     publicEndpointUrl?: string
     publicReadMode: 'direct-s3' | 'existing-gateway' | 'existing-public-s3'
     secretName?: string
-    withdrawalRoleName?: string
   }
   proofMaterials: {
     batchMaterializer?: string

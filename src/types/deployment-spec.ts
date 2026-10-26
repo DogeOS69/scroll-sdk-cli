@@ -141,8 +141,6 @@ export interface SignerIdentityIntent {
     namespace?: string
     networkAlias?: string
     region?: string
-    roleArn?: string
-    serviceAccount?: string
   }
   /** Name of an environment variable, not its value or an inline $ENV reference. */
   privateKeyEnv?: string
@@ -186,10 +184,22 @@ export interface InfrastructureConfig {
     alb?: ExistingAlbConfig
     eksClusterName: string
     region: string
+    /** Existing workload IAM roles; infrastructure tools own policies and lifecycle. */
+    roles?: {
+      dstackController?: string
+      ethDaSubmitter?: string
+      externalSecrets?: string
+      feeOracle?: string
+      proofCoordinator?: string
+      sequencers?: Record<string, string>
+      withdrawalProcessor?: string
+    }
     /** Secrets Manager prefix */
     secretsPrefix?: string
     /** Opt in public services to one controller-managed HTTPS ALB. */
     sharedAlb?: SharedAlbConfig
+    /** Workload credentials. Existing omitted configurations retain IRSA; new deployments use pod-identity. */
+    workloadIdentity?: 'irsa' | 'pod-identity'
   }
 
   /** Number of bootnode instances */

@@ -15,7 +15,7 @@ import { L1_INTERFACE_RPC_ENDPOINT } from '../../config/constants.js'
 import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
-import {verifyExistingNlb} from '../../utils/existing-nlb.js'
+import {discoverExistingNlb} from '../../utils/existing-nlb.js'
 import { buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import { deriveBootnodeRethEnodeUrl } from '../setup/l2-bootnode-reth.js'
 
@@ -392,10 +392,10 @@ export function discoverExistingNlbDomains(valuesFiles: Record<string, string>, 
     return p2p?.enabled && p2p.mode === 'existing' ? [Number(match[1])] : []
   })
   if (indices.length === 0) return {}
-  if (!spec) throw new Error('Independent bootnode NLB values require --spec for read-only AWS endpoint verification')
-  const verified = verifyExistingNlb(spec, valuesFiles, aws)
-  if (verified.length !== indices.length || verified.some(item => !indices.includes(item.entry.index))) throw new Error('Existing bootnode NLB values differ from spec selection')
-  return Object.fromEntries(verified.map(item => [`l2-reth-bootnode-${item.entry.index}-p2p`, item.publicEndpoints.map(endpoint => endpoint.split(':')[0])]))
+  if (!spec) throw new Error('Independent bootnode NLB values require --spec for AWS endpoint discovery')
+  const discovered = discoverExistingNlb(spec, aws)
+  if (discovered.length !== indices.length || discovered.some(item => !indices.includes(item.entry.index))) throw new Error('Existing bootnode NLB values differ from spec selection')
+  return Object.fromEntries(discovered.map(item => [`l2-reth-bootnode-${item.entry.index}-p2p`, item.publicEndpoints.map(endpoint => endpoint.split(':')[0])]))
 }
 
 export function convertPeersToExternalDomains(peers: string[], loadBalancerDomains: Record<string, string | string[]> = {}): string[] {

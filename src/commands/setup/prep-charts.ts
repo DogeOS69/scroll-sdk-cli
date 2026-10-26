@@ -21,6 +21,8 @@ import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {projectDiscoveredAwsValues} from '../../utils/aws-resource-discovery.js'
+import {bindAwsServiceAccount} from '../../utils/aws-workload-identity.js'
 import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
 import {HISTORY_SERVICE, frontendHistoryEnv, historyConfig} from '../../utils/bridge-history.js'
@@ -1439,6 +1441,7 @@ export default class SetupPrepCharts extends Command {
       if (!this.flags['proof-preparation']) reconcileTsoAlbEdge(transaction.stagingRoot, undefined, path.relative(transaction.stagingRoot, stagedValuesDir))
       generation = await this.generateCharts(stagedValuesDir)
       if (this.albSpec) projectExistingAlbDirectory(stagedValuesDir, this.albSpec, !this.flags['proof-preparation'])
+      if (this.albSpec) projectDiscoveredAwsValues(process.cwd(), stagedValuesDir, this.albSpec)
       if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
       process.chdir(deploymentRoot)
       changedFiles = transaction.commit().changedFiles
@@ -1577,6 +1580,7 @@ export default class SetupPrepCharts extends Command {
       secretName: `${getSequencerRethResourceName(index)}-secret-env`,
       signer: {
         address: signer.address,
+        awsWorkloadIdentity: this.dogeConfig.awsWorkloadIdentity,
         backend: signerMode.signerBackend,
         kmsKeyArn: signer.kmsKeyArn,
         kmsKeyId: signer.kmsKeyId,
@@ -2750,12 +2754,7 @@ export default class SetupPrepCharts extends Command {
 
           productionYaml.serviceAccount ||= {}
           const previousServiceAccount = JSON.stringify(productionYaml.serviceAccount)
-          productionYaml.serviceAccount.create = true
-          productionYaml.serviceAccount.name = signerConfig.serviceAccountName || 'fee-oracle'
-          if (signerConfig.serviceAccountRoleArn) {
-            productionYaml.serviceAccount.annotations ||= {}
-            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = signerConfig.serviceAccountRoleArn
-          }
+          bindAwsServiceAccount(productionYaml, signerConfig.serviceAccountName || 'fee-oracle', signerConfig.serviceAccountRoleArn, this.dogeConfig.awsWorkloadIdentity)
 
           const nextServiceAccount = JSON.stringify(productionYaml.serviceAccount)
           if (previousServiceAccount !== nextServiceAccount) {
@@ -2956,10 +2955,7 @@ export default class SetupPrepCharts extends Command {
             const proofRole = readOptionalProofAwsConfig(process.cwd())?.config.serviceAccounts.withdrawalProcessor
             if (proofRole && (proofRole.roleArn !== prepared.roleArn || proofRole.name !== prepared.serviceAccount)) throw new Error('Withdrawal KMS and proof access must share one service account and IAM role')
             productionYaml.serviceAccount ??= {}
-            productionYaml.serviceAccount.create = true
-            productionYaml.serviceAccount.name = prepared.serviceAccount
-            productionYaml.serviceAccount.annotations ??= {}
-            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = prepared.roleArn
+            bindAwsServiceAccount(productionYaml, prepared.serviceAccount!, prepared.roleArn, this.dogeConfig.awsWorkloadIdentity)
             updated = true
           }
         } else deletePaths.push(['sequencer_signer_kms'])
@@ -3181,12 +3177,7 @@ export default class SetupPrepCharts extends Command {
 
           productionYaml.serviceAccount ||= {}
           const previousServiceAccount = JSON.stringify(productionYaml.serviceAccount)
-          productionYaml.serviceAccount.create = true
-          productionYaml.serviceAccount.name = signerConfig.serviceAccountName || 'eth-da-submitter'
-          if (signerConfig.serviceAccountRoleArn) {
-            productionYaml.serviceAccount.annotations ||= {}
-            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = signerConfig.serviceAccountRoleArn
-          }
+          bindAwsServiceAccount(productionYaml, signerConfig.serviceAccountName || 'eth-da-submitter', signerConfig.serviceAccountRoleArn, this.dogeConfig.awsWorkloadIdentity)
 
           const nextServiceAccount = JSON.stringify(productionYaml.serviceAccount)
           if (previousServiceAccount !== nextServiceAccount) {
