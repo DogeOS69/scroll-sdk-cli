@@ -16,6 +16,7 @@ import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
 import {discoverExistingNlb} from '../../utils/existing-nlb.js'
+import {normalizeNativeRethGenesis} from '../../utils/native-reth-genesis.js'
 import { buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import { deriveBootnodeRethEnodeUrl } from '../setup/l2-bootnode-reth.js'
 
@@ -736,7 +737,7 @@ function requireGenesisAddress(value: unknown, fieldPath: string): string {
 // values/genesis.yaml is canonical and must remain unchanged.
 // Adapt a deep copy at the RPC-package boundary to the stricter Scroll-Reth
 // chainspec schema. Keep this transformation deliberately narrow: normalize
-// integer representations, supply the required buffer flag, bind the system
+// integer representations, retain the legacy buffer flag only for legacy inputs, bind the system
 // contract address already present in the legacy metadata, and bind the L1
 // deployment block supplied by l2-rpc-production.yaml.
 export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1Block?: unknown): Record<string, any> {
@@ -777,7 +778,7 @@ export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1B
       l1Config.startL1Block,
       'config.scroll.l1Config.startL1Block',
     )
-    return normalized
+    return normalizeNativeRethGenesis(normalized)
   }
 
   const systemContract = requireGenesisObject(config.systemContract, 'config.systemContract')

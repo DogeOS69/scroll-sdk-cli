@@ -62,6 +62,20 @@ describe('spec bootnode public P2P allowlist', () => {
     expect(Object.keys(files)).not.to.include('l2-reth-sequencer-production.yaml')
   })
 
+  it('inherits shared sizing overlays for new private/public instances while preserving existing tuning', () => {
+    for (const exposure of [[], [entry()]]) {
+      const files = {'l2-reth-bootnode-production.yaml': yaml.dump({resources: {requests: {cpu: '2', memory: '8Gi'}}, role: 'bootnode'})} as Record<string, string>
+      const spec = {bootnodePublicP2p: exposure, helmValues: {'l2-reth-bootnode-production.yaml': yaml.dump({resources: {requests: {cpu: '500m', memory: '3Gi'}}})}, infrastructure: {bootnodeCount: 2, provider: 'aws'}} as unknown as DeploymentSpec
+      projectBootnodePublicP2p(files, spec, name => name.endsWith('-1.yaml') ? yaml.dump({resources: {requests: {cpu: '750m'}}}) : undefined)
+      const fresh = yaml.load(files['l2-reth-bootnode-production-0.yaml']) as any
+      const existing = yaml.load(files['l2-reth-bootnode-production-1.yaml']) as any
+      expect(fresh.resources.requests).deep.equal({cpu: '500m', memory: '3Gi'})
+      expect(existing.resources.requests).deep.equal({cpu: '750m', memory: '3Gi'})
+      expect(fresh.reth.p2pExternal.enabled).equal(false)
+      expect(existing.reth.p2pExternal.enabled).equal(exposure.length > 0)
+    }
+  })
+
   it('reconciles saved intent through the actual prep-charts bootnode path on repeated runs', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bootnode-allowlist-prep-'))
     try {

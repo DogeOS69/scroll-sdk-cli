@@ -18,6 +18,7 @@ import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {ALB_SERVICES, preserveSharedAlbPaths, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
 import {validateExistingNlbSdk} from '../../utils/existing-nlb.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
+import {validateFinalValues} from '../../utils/final-values-validation.js'
 import {GenerationTransaction} from '../../utils/generation-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {loadPreparationEnv} from '../../utils/preparation-io.js'
@@ -356,6 +357,7 @@ export default class GenerateFromSpec extends Command {
       applyHelmValues(allValues, spec)
       preserveSharedAlbPaths(allValues, spec, existingValues)
       projectExistingAlb(allValues, spec)
+      validateFinalValues(allValues, spec, {deferIngressValidation: flags.bootstrap})
       Object.assign(valuesFiles, allValues)
     }
 

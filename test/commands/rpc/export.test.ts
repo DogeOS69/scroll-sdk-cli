@@ -223,7 +223,11 @@ describe('rpc export env generation', () => {
       gasLimit: '0x989680',
     }
     const before = JSON.stringify(source)
-    expect(normalizeGenesisForReth(source, 62_638_951)).to.deep.equal(source)
+    const expected = JSON.parse(before)
+    delete expected.config.scroll.l1DataFeeBufferCheck
+    expect(normalizeGenesisForReth(source, 62_638_951)).to.deep.equal(expected)
+    expect(normalizeGenesisForReth(expected)).to.deep.equal(expected)
+    expect(() => normalizeGenesisForReth({...source, config: {...source.config, scroll: {...source.config.scroll, l1DataFeeBufferCheck: true}}})).to.throw('refusing to discard')
     expect(JSON.stringify(source)).to.equal(before)
 
     const valuesDir = path.join(tmpDir, 'values')

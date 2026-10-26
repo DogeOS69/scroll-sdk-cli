@@ -1443,6 +1443,7 @@ export default class SetupPrepCharts extends Command {
       if (this.albSpec) projectExistingAlbDirectory(stagedValuesDir, this.albSpec, !this.flags['proof-preparation'])
       if (this.albSpec) projectDiscoveredAwsValues(process.cwd(), stagedValuesDir, this.albSpec)
       if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
+      writeHelmValues(transaction.stagingRoot, this.albSpec ?? {dogecoin: {network: this.dogeConfig.network} as any}, {deferIngressValidation: this.flags['proof-preparation']}, path.relative(transaction.stagingRoot, stagedValuesDir))
       process.chdir(deploymentRoot)
       changedFiles = transaction.commit().changedFiles
     } catch (error) {

@@ -22,14 +22,15 @@ export function createSdkFixture(directory: string): string {
     'l1-devnet-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: false, hosts: [{host: ''}], ingressClassName: 'alb'}}},
     'metrics-exporter-production.yaml': {},
     'proof-coordinator-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: false, ingressClassName: 'alb'}}},
+    'withdrawal-processor-production.yaml': {networkPolicy: {enabled: true, allowFrom: {tso: [{podSelector: {matchLabels: {app: 'tso'}}}], proofCoordinator: [{podSelector: {matchLabels: {app: 'pc'}}}]}}},
     'scroll-monitor-production.yaml': {grafana: {enabled: false}},
-    'tso-service-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: true, ingressClassName: 'alb'}}},
+    'tso-service-production.yaml': {networkPolicy: {enabled: true, allowFrom: {withdrawalProcessor: [{podSelector: {matchLabels: {app: 'wp'}}}], signers: [{podSelector: {matchLabels: {app: 'signer'}}}], edge: [{ipBlock: {cidr: '10.0.10.0/24'}}]}}, ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: true, ingressClassName: 'alb'}}},
   }
   for (const role of ['sequencer', 'bootnode', 'rpc', 'rpc-public']) {
     templates[`l2-reth-${role}-production.yaml`] = {
       resources: {requests: {cpu: '3'}},
       reth: {
-        extraArgs: ['--gpo.maxprice', '420000000000000', '--network.legacy-geth-header-transform', 'true'],
+        extraArgs: [...(role === 'sequencer' ? [] : ['--consensus.exit-on-signer-rotation']), '--gpo.maxprice', '420000000000000'],
         networkId: '<TODO>',
         sequencer: {allowEmptyBlocks: false, blockTimeMs: '2000', payloadBuildingDurationMs: '1400'},
       },

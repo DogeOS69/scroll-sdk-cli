@@ -21,6 +21,13 @@ describe('persistent Helm overrides', () => {
       }
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
+  it('rejects overlays that overwrite spec-owned status-page intent', () => {
+    for (const content of ['statusPage: {enabled: false}', 'statusPage: {environment: mainnet}']) {
+      const files = {'scroll-monitor-production.yaml': 'statusPage: {enabled: true, environment: testnet}'}
+      expect(() => applyHelmValues(files, {helmValues: {'scroll-monitor-production.yaml': content}, monitoring: {statusPage: {enabled: true}}})).throw('spec-owned fields')
+      expect(files['scroll-monitor-production.yaml']).eq('statusPage: {enabled: true, environment: testnet}')
+    }
+  })
   it('rejects unknown files, traversal, malformed mappings and partial updates', () => {
     for (const overlay of [{'missing.yaml': '{}'}, {'../config.yaml': '{}'}, {'a.yaml': '- invalid'}, {'a.yaml': 'bad: ['}] as Array<Record<string, string>>) {
       const files = {'a.yaml': 'enabled: true'}
