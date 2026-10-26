@@ -23,12 +23,14 @@ describe('DeploymentSpec field validation', () => {
   it('rejects unknown fields before normalization can discard them', () => {
     for (const [input, field] of [
       [{ethereumDA: {}}, 'ethereumDA'],
+      [{proofWorkers: {}}, 'proofWorkers'],
+      [{proofTopology: {deployment: {workerDeploymentBackend: 'docker_compose'}}}, 'proofTopology.deployment.workerDeploymentBackend'],
       [{ethereumDa: {confirmationDepht: 5}}, 'ethereumDa.confirmationDepht'],
       [{frontend: {hosts: {tsso: 'tso.invalid'}}}, 'frontend.hosts.tsso'],
       [{frontend: {externalUrls: {l2Rcp: 'https://rpc.invalid'}}}, 'frontend.externalUrls.l2Rcp'],
       [{dstackController: {monitoring: {gpuHosts: {staleAfterSecond: 5}}}}, 'dstackController.monitoring.gpuHosts.staleAfterSecond'],
-      [{signing: {cubesigner: {roles: [{keys: [{keyID: 'placeholder'}]}]}}}, 'signing.cubesigner.roles[0].keys[0].keyID'],
-      [{proofTopology: {deployment: {workerTolerations: [{affect: 'NoSchedule'}]}}}, 'proofTopology.deployment.workerTolerations[0].affect'],
+      [{bridge: {cubesigner: {roles: [{keys: [{keyID: 'placeholder'}]}]}}}, 'bridge.cubesigner.roles[0].keys[0].keyID'],
+      [{proofTopology: {deployment: {workerTolerations: [{affect: 'NoSchedule'}]}}}, 'proofTopology.deployment.workerTolerations'],
     ] as const) {
       expect(validateDeploymentSpecFields(input).map(error => error.path)).to.include(field)
     }
@@ -39,12 +41,27 @@ describe('DeploymentSpec field validation', () => {
     expect(() => normalizeDeploymentSpec(spec)).to.throw('frontend.hosts.tsso')
   })
 
+  it('rejects the old bridge layout with migration guidance', () => {
+    for (const [input, field, target] of [
+      [{attestationSigners: []}, 'attestationSigners', 'bridge.attestation.signers'],
+      [{signing: {cubesigner: {}}}, 'signing', 'bridge.cubesigner'],
+      [{bridge: {initialAttestationKeyset: {}}}, 'bridge.initialAttestationKeyset', 'bridge.attestation.signers'],
+      [{bridge: {attestation: {initialKeyset: {signerIds: ['old'], threshold: 1}}}}, 'bridge.attestation.initialKeyset', 'bridge.attestation.threshold'],
+      [{bridge: {keyCounts: {}}}, 'bridge.keyCounts', 'derived'],
+      [{bridge: {thresholds: {}}}, 'bridge.thresholds', 'bridge.recovery.threshold'],
+      [{bridge: {teePubkey: 'NONFUNCTIONAL_PLACEHOLDER'}}, 'bridge.teePubkey', 'bridge.cubesigner.publicKey'],
+      [{bridge: {timelock: 1000}}, 'bridge.timelock', 'bridge.recovery.timelock'],
+      [{preparation: {bridge: {production: {recoveryPublicKeys: []}}}}, 'preparation.bridge.production.recoveryPublicKeys', 'bridge.recovery.publicKeys'],
+    ] as const) {
+      expect(validateDeploymentSpecFields(input).find(error => error.path === field)?.message).to.include(target)
+    }
+  })
+
   it('preserves dictionary keys and supported optional, legacy and nested inputs', () => {
     const errors = validateDeploymentSpecFields({
       bridge: {feeRateSatPerKvb: 1, fees: {deposit: '0'}},
       dstackController: {serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': 'NONFUNCTIONAL_ROLE_PLACEHOLDER'}}, tolerations: [{key: 'gpu', operator: 'Exists'}]},
       metadata: {tags: {'custom.org/team': 'example'}},
-      proofTopology: {deployment: {workerNodeSelector: {'custom.org/gpu': 'yes'}, workerResources: {limits: {'example.org/device': 1, memory: '1Gi'}}}},
     })
     expect(errors).to.deep.equal([])
     for (const file of ['minimal.yaml', 'full.yaml']) {
@@ -55,7 +72,7 @@ describe('DeploymentSpec field validation', () => {
 
   it('reports malformed containers without including their contents', () => {
     const placeholder = 'NONFUNCTIONAL_SENSITIVE_VALUE'
-    for (const input of [null, [], 'invalid', {signing: {cubesigner: {roles: {privateKey: placeholder}}}}, {ethereumDa: null}, {metadata: {tags: []}}]) {
+    for (const input of [null, [], 'invalid', {bridge: {cubesigner: {roles: {privateKey: placeholder}}}}, {ethereumDa: null}, {metadata: {tags: []}}]) {
       const errors = validateDeploymentSpecFields(input)
       expect(errors).not.to.have.length(0)
       expect(JSON.stringify(errors)).not.to.include(placeholder)
@@ -64,11 +81,11 @@ describe('DeploymentSpec field validation', () => {
 
   it('rejects the unused TSO URL with guidance and keeps public ingress separate from internal consumers', () => {
     const spec = fixture()
-    spec.signing.tsoServiceUrl = 'https://unused.invalid'
+    Object.assign(spec, {signing: {tsoServiceUrl: 'https://unused.invalid'}})
     expect(validateDeploymentSpec(spec).errors.find(error => error.path === 'signing.tsoServiceUrl')?.message).to.include('frontend.hosts.tso')
     expect(() => generateAllConfigs(spec)).to.throw('signing.tsoServiceUrl')
     expect(() => generateValuesFiles(spec)).to.throw('signing.tsoServiceUrl')
-    delete spec.signing.tsoServiceUrl
+    delete (spec as unknown as Record<string, unknown>).signing
     Object.assign(spec.frontend, {hosts: {tso: 'public-tso.invalid'}})
     const files = generateValuesFiles(spec)
     expect(files['tso-service-production.yaml']).to.include('public-tso.invalid')

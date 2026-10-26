@@ -1,5 +1,8 @@
 # dogeos-core PR #1177: proof release tools review
 
+> Historical execution record: removed setup commands below describe the recorded run, not the current interface. Use `setup render`, `setup proof-materials`, `setup proof-publish` and `setup deployment-preflight` for the saved-spec workflow.
+
+
 Reviewed on 2026-09-21 against
 [the CubeSigner/proof configuration design](cubesigner-proof-configuration-design.md)
 and [dogeos-core PR #1177](https://github.com/DogeOS69/dogeos-core/pull/1177).

@@ -28,6 +28,7 @@ import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {importPreparationPolicyReceipts} from './preparation-policy-receipts.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
+import {checkProofDeployment} from './proof-deployment-check.js'
 import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
@@ -45,7 +46,8 @@ export const invokePreparationCommand: Invoke = async (root, step, args, environ
   const fd = fs.openSync(path.join(logs, `${step}.log`), 'a', 0o600)
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(process.execPath, [CLI, 'setup', ...args, '--json'], {cwd: root, env: {...process.env, ...environment}, stdio: ['ignore', fd, fd]})
+      const commandArgs = args[0] === 'cubesigner' ? args : ['setup', ...args]
+      const child = spawn(process.execPath, [CLI, ...commandArgs, '--json'], {cwd: root, env: {...process.env, ...environment, SCROLLSDK_PREPARATION_STEP: step}, stdio: ['ignore', fd, fd]})
       child.once('error', () => reject(new Error(`Unable to start ${step}`)))
       child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Step ${step} failed; inspect .scrollsdk/logs/${step}.log privately`)))
     })
@@ -73,11 +75,6 @@ export class CommandPreparationRunner implements PreparationRunner {
     const bridgeArgs = ['-N', '--image', p.bridge.image, '--ethereum-da-probe', 'direct', ...(p.bridge.mode === 'production' ? ['--production'] : [])]
     switch (step.id) {
       case 'capacity-manager': {prepareCapacityManager(root); break}
-
-      case 'proof-workers-intent': {
-        // Capacity apply runs only after the operator installs the services.
-        break
-      }
 
       case 'bootstrap': {
         await command(['generate-from-spec', '--spec', '.scrollsdk/intent.json', '--output', '.', '--bootstrap', '--sdk-dir', plan.sdkDirectory, '--force'])
@@ -216,7 +213,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         this.exportMaterializers({expectedRevision: selected.manifest.revision, image: selected.manifest.images['proof-coordinator'], outputDir: localPath(root, '.data/proof-release-materializers')}); break
       }
 
-      case 'proof-worker-check': {
+      case 'proof-worker-image-check': {
         const release = p.proofRelease!
         const selected = readProofSoftwareRelease(requiredFile(root, release.manifest, 'approved proof release manifest'), release.sha256!)
         await command(['proof-worker-image-check', '--image', selected.manifest.images['prover-worker-cuda'], '--preparation-receipt', '.data/proof-release-preparation/proof-release-preparation-v1.json', '--output', '.data/proof-worker-image-check-v1.json']); break
@@ -248,8 +245,8 @@ export class CommandPreparationRunner implements PreparationRunner {
         const topology = buildProofTopology({artifactStore: previous.active!.artifactStore, deploymentName: spec.metadata.name, enforcement: previous.enforcement, generation: previous.generation, materials, mode: previous.mode, runtime: {
           artifactKeyPrefix: previous.deployment.artifactKeyPrefix, blockWitnessDir: previous.active!.realScroll.chunkBlockWitnessDir, observeRealProofDeadlineMs: previous.observeRealProofDeadlineMs,
           proofCoordinatorPublicUrl: previous.deployment.proverPublicUrl!, publicS3EndpointUrl: previous.deployment.publicS3EndpointUrl,
-          rpcWitnessUrl: previous.active!.realScroll.chunkWitnessRpcUrl, witnessSource: previous.active!.realScroll.chunkWitnessSource, workerDeploymentBackend: previous.deployment.workerDeploymentBackend,
-          workerLaunch: previous.active!.workerLaunch, workerNodeSelector: previous.deployment.workerNodeSelector, workerResources: previous.deployment.workerResources, workerRuntimeClassName: previous.deployment.workerRuntimeClassName, workerSecretName: previous.deployment.workerSecretName, workerTolerations: previous.deployment.workerTolerations,
+          rpcWitnessUrl: previous.active!.realScroll.chunkWitnessRpcUrl, witnessSource: previous.active!.realScroll.chunkWitnessSource,
+          workerLaunch: previous.active!.workerLaunch,
         }})
         const file = path.join(root, '.data/doge-config.toml')
         const config = toml.parse(fs.readFileSync(file, 'utf8')) as any
@@ -325,7 +322,7 @@ export class CommandPreparationRunner implements PreparationRunner {
 
           if (!files.every(file => fs.existsSync(localPath(root, file)) && fs.statSync(localPath(root, file)).size > 0)) {
             if (files.some(file => fs.existsSync(localPath(root, file)))) throw new AwaitingInput({message: 'Partial CubeSigner session files require explicit recovery; no session was rotated'})
-            await command(['cubesigner-refresh', '-N', '--doge-config', '.data/doge-config.toml'])
+            await command(['cubesigner', 'refresh-session', '-N', '--doge-config', '.data/doge-config.toml'])
           }
         }
 
@@ -334,11 +331,11 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'deployment-kit': {await exportPreparationDeploymentKit(root); break}
       case 'deployment-kit-published': {
-        await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup signer-kit-publish' : 'scrollsdk setup apply'));
+        await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, 'scrollsdk setup signer-kit-publish'));
         break
       }
 
-      case 'proof-check': {await command(['proof-config-check', ...(step.stage ? ['--scope', 'preparation'] : [])]); break}
+      case 'proof-check': {await checkProofDeployment({deploymentDir: root, scope: step.stage ? 'preparation' : 'activation'}); break}
       case 'secret-upload': case 'cubesigner-secret-upload': {
         const signerOnly = step.id === 'cubesigner-secret-upload'
         if (spec.bridge?.cubesigner && (signerOnly || !step.stage)) {

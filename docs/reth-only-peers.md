@@ -13,9 +13,10 @@ There is no longer an empty-array switch or a Geth peer fallback.
 ## Setup flow
 
 For external nodes, also follow [Reth bootnode public P2P access](bootnode-public-p2p.md):
-after base values exist, run `setup bootnode-public-p2p --spec <spec-path>` to
+declare bindings before planning, use `setup render --dir .` and then
+`setup aws` to
 configure selected independent NLB bindings and print public enodes. Deploy those
-releases, then export public peers with `setup gen-rpc-package --spec <spec-path>`.
+releases, then export public peers with `rpc export --spec <spec-path>`.
 
 This is the node-configuration subset of [CLI setup order](setup-order.md),
 not a complete deployment sequence.
@@ -80,7 +81,7 @@ values when needed. See [SDK template and runtime policy ownership](spec-project
 The standalone `dogeos-rpc-package` already includes the flag in
 `scripts/l2reth_entrypoint.sh`. Its `l2reth-node` service uses
 `restart: on-failure`, which restarts the process after exit code `70`.
-`setup gen-rpc-package` exports node configuration; it does not replace the
+`rpc export` exports node configuration; it does not replace the
 package's entrypoint or restart policy. Keep both when adapting that package;
 signer rotation does not require resetting chain data.
 
@@ -103,9 +104,9 @@ signer rotation does not require resetting chain data.
   so old values cannot be picked up as active deployment files. The backup
   directory may contain private keys; retain the same access restrictions as
   the source configuration.
-- `bootnode-public-p2p --spec <spec-path> --doge-config ...` updates only listed
-  indexed Reth values using existing identities and AWS-verified NLB references.
-  Missing values or identities fail without publication. AWS infrastructure
+- `setup render --dir .` projects the saved spec into the selected
+  indexed Reth values using saved identities and declared NLB references.
+  `setup aws` verifies the AWS resources. AWS infrastructure
   provisions NLBs separately and owns partner allowlists.
 
 `gen-rpc-package` reads the L1 endpoint and network ID from

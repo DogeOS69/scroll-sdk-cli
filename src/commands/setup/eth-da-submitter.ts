@@ -7,6 +7,7 @@ import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-co
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 import {KmsSignerProvisioner} from '../../utils/kms-signer-provisioner.js'
 import {resolveBlobArchive} from '../../utils/managed-signer-setup.js'
+import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 
 export default class SetupEthDaSubmitter extends Command {
   static override description = 'Configure the eth-da-submitter S3 archive and optional writer IAM permissions'
@@ -31,7 +32,10 @@ export default class SetupEthDaSubmitter extends Command {
     'role-arn': Flags.string({description: 'Existing archive writer IAM role. Defaults to the submitter signer service-account role.'}),
   }
 
+  static override hidden = true
+
   async run(): Promise<void> {
+    requirePreparationStep(['archive'])
     const {flags} = await this.parse(SetupEthDaSubmitter)
     const output = new JsonOutputContext('setup eth-da-submitter', flags.json)
     try {

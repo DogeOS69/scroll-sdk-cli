@@ -13,6 +13,7 @@ import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-co
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 import {normalizeSignerBackend, setupManagedSigner} from '../../utils/managed-signer-setup.js'
 import {resolveEnvValue} from '../../utils/non-interactive.js'
+import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 import {resolveSpecIdentities, specIdentityFlags} from '../../utils/spec-identities.js'
 import SetupL2BootnodeReth from './l2-bootnode-reth.js'
 import SetupL2SequencerReth, {normalizeSignerMode} from './l2-sequencer-reth.js'
@@ -284,7 +285,10 @@ export default class SetupGenKeystore extends Command {
     'signer-backend': Flags.string({description: 'Backend for the selected signing identity; otherwise reuse its configured backend.', options: ['local', 'aws-kms']}),
   }
 
+  static override hidden = true
+
   public async run(): Promise<void> {
+    requirePreparationStep(['identities', 'charts', 'charts-published', 'render-final'])
     const {flags} = await this.parse(SetupGenKeystore) as any
     const output = new JsonOutputContext('setup gen-keystore', flags.json)
     try {

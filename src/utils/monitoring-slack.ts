@@ -7,6 +7,13 @@ import {writeGrafanaPrivateFile} from './grafana-admin.js'
 
 export interface MonitoringConfig {
   slack?: {enabled: boolean}
+  /** Generate status-page deployment inputs during render; publication policy stays in Helm values. */
+  statusPage?: {enabled: boolean}
+}
+
+export interface MonitoringRuntimeConfig extends MonitoringConfig {
+  /** Derived from deployment metadata, never from the Dogecoin network. */
+  environment?: 'devnet' | 'mainnet' | 'testnet'
 }
 
 export const SLACK_SECRET = 'scroll-monitor-slack'
@@ -23,6 +30,7 @@ function secretReference(values: Record<string, any>): {key: string; name: strin
 }
 
 export function validateMonitoring(config?: MonitoringConfig): void {
+  if (config?.statusPage !== undefined && (config.statusPage === null || typeof config.statusPage.enabled !== 'boolean')) throw new Error('monitoring.statusPage.enabled must be a boolean')
   if (config?.slack && typeof config.slack.enabled !== 'boolean') throw new Error('monitoring.slack.enabled must be a boolean')
 }
 

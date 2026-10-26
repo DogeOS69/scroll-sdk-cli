@@ -552,7 +552,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   const warnings: ValidationWarning[] = []
   try {specAwsSecretPrefix(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'preparation.secretUpload.awsPrefix'})}
-  try {validateMonitoring(spec.monitoring)} catch {errors.push({code: 'E601_INVALID_VALUE', message: 'monitoring.slack.enabled must be a boolean', path: 'monitoring.slack.enabled'})}
+  try {validateMonitoring(spec.monitoring)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: (error as Error).message.split(' ')[0]})}
 
   try {resolveSpecAttestationSigners(spec)} catch (error) {
     errors.push({code: 'E601_INVALID_VALUE', message: error instanceof Error ? error.message : 'Invalid attestation signer identities', path: 'bridge.attestation.signers'})
@@ -711,7 +711,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       warnings.push({
         message: `${key} key is not set in the spec`,
         path: `accounts.${key}`,
-        suggestion: 'Run setup gen-keystore to generate this internal service account before gen-l2-artifacts.'
+        suggestion: 'Follow setup genesis and setup aws to prepare deployment and service identities.'
       })
       continue
     }
@@ -738,7 +738,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       warnings.push({
         message: `${key} address cannot be derived yet`,
         path: `accounts.${key}.address`,
-        suggestion: 'Set the referenced environment variable or let setup gen-keystore generate the account later.'
+        suggestion: 'Set the referenced environment variable or let the staged workflow prepare the account.'
       })
     }
   }
@@ -796,20 +796,20 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   if (!spec.bridge?.cubesigner?.roles || spec.bridge.cubesigner.roles.length === 0) {
     warnings.push({
       message: 'CubeSigner TEE role is not set yet',
-      path: 'signing.cubesigner.roles',
-      suggestion: 'Run setup cubesigner-init to create or select the TEE role before bridge/signing artifacts are finalized',
+      path: 'bridge.cubesigner.roles',
+      suggestion: 'Set bridge.cubesigner.identity.roleId (and keyId for a multi-key role) to an existing CubeSigner identity before setup plan',
     })
   } else if (spec.bridge.cubesigner.roles.length > 1) {
     errors.push({
       code: 'E601_INVALID_VALUE',
       message: 'CubeSigner supports exactly one TEE role and one deployment instance',
-      path: 'signing.cubesigner.roles',
+      path: 'bridge.cubesigner.roles',
     })
   }
 
   const cubesignerPolicy = spec.bridge?.cubesigner?.productionPolicy
   if (cubesignerPolicy) {
-    const policyPath = 'signing.cubesigner.productionPolicy'
+    const policyPath = 'bridge.cubesigner.productionPolicy'
     const digestPattern = /^sha256:[\da-f]{64}$/
     const requiredTextFields = [
       ['policyIdentifier', cubesignerPolicy.policyIdentifier],
@@ -1189,6 +1189,10 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proofTopology.active must be staged even while disabled', path: 'proofTopology.active'})
     }
 
+    if (proofTopology.generation === 'real' && proofTopology.active?.workerLaunch !== 'external') {
+      errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'Real proof workers must be external and managed by Capacity Manager', path: 'proofTopology.active.workerLaunch'})
+    }
+
     if (!proofTopology.deployment?.artifactKeyPrefix?.trim()) {
       errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proofTopology.deployment.artifactKeyPrefix is required', path: 'proofTopology.deployment.artifactKeyPrefix'})
     }
@@ -1533,7 +1537,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   const ethereumDaDefaults = ETHEREUM_DA_DEFAULTS[ethereumDaChain]
 
   validateMonitoring(spec.monitoring)
-  if (spec.monitoring) config.monitoring = structuredClone(spec.monitoring)
+  if (spec.monitoring) config.monitoring = {...structuredClone(spec.monitoring), ...(spec.monitoring.statusPage ? {environment: spec.metadata.environment} : {})}
   validateBootnodePublicP2p(spec.bootnodePublicP2p, Array.from({length: spec.infrastructure.bootnodeCount}, (_, index) => index), spec.infrastructure.provider)
   if (spec.bootnodePublicP2p !== undefined) config.bootnodePublicP2p = structuredClone(spec.bootnodePublicP2p)
   config.network = spec.dogecoin.network
@@ -1663,7 +1667,7 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
           public_key: key.publicKey,
           public_key_compressed: normalizeCompressedSecp256k1PublicKey(
             key.publicKey,
-            `signing.cubesigner role ${role.name} key ${key.keyId} publicKey`
+            `bridge.cubesigner role ${role.name} key ${key.keyId} publicKey`
           ),
         })),
         name: role.name,
@@ -1718,7 +1722,7 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
     const key = spec.bridge.cubesigner.roles[0].keys[0]
     const teePubkey = key?.publicKey
     if (teePubkey) {
-      config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(teePubkey, 'signing.cubesigner.roles[0].keys[0].publicKey')
+      config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(teePubkey, 'bridge.cubesigner.roles[0].keys[0].publicKey')
     }
   }
 

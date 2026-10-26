@@ -46,6 +46,7 @@ import {
 } from '../../utils/kubernetes-endpoints.js'
 import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
 import {reconcileMonitoringSlack} from '../../utils/monitoring-slack.js'
+import {reconcileMonitoringStatusPage} from '../../utils/monitoring-status-page.js'
 import {readPreparedSequencerKms} from '../../utils/preparation-sequencer-kms.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {resolveProofReceiptSelection} from '../../utils/proof-deployment-contract.js'
@@ -64,6 +65,7 @@ import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
+import {writeHelmValues} from '../../utils/spec-helm-values.js'
 import {validateServiceNetworkPolicy} from '../../utils/service-network-policy.js'
 import {
   getRequiredManagedSignerAddress,
@@ -1301,6 +1303,9 @@ export default class SetupPrepCharts extends Command {
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files; must be inside the deployment root for transactional generation' }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   private albSpec?: ReturnType<typeof readExistingAlbSpec>
 
   private bridgeConfig: any = {}
@@ -1490,7 +1495,6 @@ export default class SetupPrepCharts extends Command {
               contract: proof.contract,
               files: proof.files,
               mode: proof.mode,
-              workerBundle: proof.workerBundle,
             }
           : {configured: false},
         totalSkipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances + skippedProduction + skippedConfig,
@@ -2616,11 +2620,12 @@ export default class SetupPrepCharts extends Command {
         const grafanaChanges = [...reconcileScrollMonitorGrafana(productionYaml, this.dogeConfig.grafana), ...reconcileMonitoringSlack(productionYaml, this.dogeConfig.monitoring)]
         changes.push(...grafanaChanges)
         if (grafanaChanges.length > 0) updated = true
-        const monitorChanges = reconcileScrollMonitorBalances(productionYaml, {
+        const monitorChanges = reconcileMonitoringStatusPage(productionYaml, this.dogeConfig.monitoring)
+        monitorChanges.push(...reconcileScrollMonitorBalances(productionYaml, {
           dogeConfig: this.dogeConfig,
           l2ChainId: configuredL2ChainId,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
-        })
+        }))
         if (!this.flags['proof-preparation']) monitorChanges.push(...reconcileScrollMonitorStatusPage(productionYaml, {
           chainId: configuredL2ChainId,
           environment: productionYaml.statusPage?.environment,
@@ -3493,18 +3498,9 @@ export default class SetupPrepCharts extends Command {
     transaction: GenerationTransaction,
     result: ReconcileProofKubernetesResult,
   ): ReconcileProofKubernetesResult {
-    const workerBundle = result.workerBundle
-      ? {
-          ...result.workerBundle,
-          bundleDir: transaction.toOriginalPath(result.workerBundle.bundleDir),
-          files: result.workerBundle.files.map(file => transaction.toOriginalPath(file)),
-          manifestFile: transaction.toOriginalPath(result.workerBundle.manifestFile),
-        }
-      : undefined
     return {
       ...result,
       files: result.files.map(file => transaction.toOriginalPath(file)),
-      ...(workerBundle ? {workerBundle} : {}),
     }
   }
 
@@ -3611,13 +3607,6 @@ export default class SetupPrepCharts extends Command {
     this.jsonCtx.logSuccess(
       `Reconciled ${result.mode} proof K8s configuration; contract ${result.contract.generationId}`,
     )
-    if (result.workerBundle) {
-      this.jsonCtx.addWarning(
-        `Docker Compose worker bundle ${result.workerBundle.bundleId} is credential-pending. `
-        + 'Run setup proof-worker to inject the bearer token, sync the resources and bundle to the worker host, '
-        + 'then run setup proof-worker-check before docker compose up.',
-      )
-    }
 
     return result
   }

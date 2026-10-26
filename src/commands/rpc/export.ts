@@ -1,0 +1,1539 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Dynamic TOML config operations */
+import * as toml from '@iarna/toml'
+import { input } from '@inquirer/prompts'
+import { Command, Flags } from '@oclif/core'
+import chalk from 'chalk'
+import {ZeroAddress, isAddress} from 'ethers'
+import * as yaml from 'js-yaml'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+
+import type {DeploymentSpec} from '../../types/deployment-spec.js'
+import type { DogeConfig } from '../../types/doge-config.js'
+
+import { L1_INTERFACE_RPC_ENDPOINT } from '../../config/constants.js'
+import {AwsCliRunner} from '../../utils/aws-cli.js'
+import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import {readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
+import {verifyExistingNlb} from '../../utils/existing-nlb.js'
+import { buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
+import { deriveBootnodeRethEnodeUrl } from '../setup/l2-bootnode-reth.js'
+
+type EnvVarMap = Record<string, string>
+
+interface EnvFileWriteResult {
+  changed: boolean
+  removedVars: string[]
+  updatedVars: string[]
+}
+
+interface L2NodeEnvGenerationResult {
+  hasUnresolvedExternalPeers: boolean
+  l2rethEnvPath: string
+  removedLegacyPaths: string[]
+}
+
+export interface ComposeInitSyncResult {
+  changed: boolean
+  composePath: string
+  initServices: string[]
+  removedServices: string[]
+  updatedServices: string[]
+}
+
+interface ComposeService {
+  [key: string]: unknown
+}
+
+interface ComposeFile {
+  services?: Record<string, ComposeService>
+  volumes?: Record<string, unknown>
+}
+
+const L1_INTERFACE_LOCAL_ENV_KEYS = new Set([
+  'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__URL',
+  'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__USER',
+  'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__PASS',
+])
+
+const L1_INTERFACE_ENV_ENDPOINT_KEYS = new Set([
+  'DOGEOS_L1_INTERFACE_ETHEREUM_DA__L1_RPC_URL',
+  'DOGEOS_L1_INTERFACE_ETHEREUM_DA__BLOB_SOURCE__BEACON_NODE__URL',
+])
+
+// Keys removed by newer l1-interface releases. Pruned from the generated
+// file so a stale value cannot fail config validation. Example: replay-backed
+// public RPC rejects `scroll_messenger_address` (it is sourced from the
+// committed protocol context instead).
+const L1_INTERFACE_DEPRECATED_ENV_KEYS = new Set([
+  'DOGEOS_L1_INTERFACE_DOGECOIN_RPC__BLOCKBOOK_API_KEY',
+  'DOGEOS_L1_INTERFACE_CHAIN_ID',
+  'DOGEOS_L1_INTERFACE_ETHEREUM_DA__ETH_CHAIN_ID',
+  'DOGEOS_L1_INTERFACE_ETHEREUM_DA__L2_CHAIN_ID',
+  'DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER',
+  'DOGEOS_L1_INTERFACE_L1_CHAIN_ID',
+  'DOGEOS_L1_INTERFACE_L1_MESSAGE_QUEUE_ADDRESS',
+  'DOGEOS_L1_INTERFACE_L1_MESSAGE_QUEUE_V2_ADDRESS',
+  'DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS',
+  'DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS',
+  'DOGEOS_L1_INTERFACE_SCROLL_CHAIN_ADDRESS',
+  'DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS',
+  'DOGEOS_L1_INTERFACE_SYSTEM_CONFIG_ADDRESS',
+])
+
+// Operator-owned keys: external-provider credentials and endpoints. These
+// depend on third-party infrastructure, so the generator must never copy them
+// from the source cluster into the deterministic RPC package. The target RPC
+// package supplies its own Dogecoin topology and shared secrets; explicit
+// external overrides live in l1-interface.local.env, which is loaded last and
+// is never overwritten by rpc export.
+function isUserOwnedL1InterfaceEnvKey(key: string): boolean {
+  return L1_INTERFACE_LOCAL_ENV_KEYS.has(key) || L1_INTERFACE_ENV_ENDPOINT_KEYS.has(key)
+}
+
+// RUST_LOG default for l1-interface. Network-agnostic runtime default that is
+// not derived from the values YAML; baked into the generated env file so each
+// per-network config is self-contained (no shared envs/common layer).
+const L1_INTERFACE_RUNTIME_DEFAULTS: Record<string, string> = {
+  RUST_LOG: 'info',
+}
+
+// Forced overrides for the generated l1-interface.env. These keys are pinned to
+// the value below regardless of what the source values YAML contains — applied
+// AFTER the copy loop so they always win. The RPC package runs l1-interface as a
+// non-sequencer, which requires genesis mode off no matter how the cluster was set.
+const L1_INTERFACE_FORCED_ENV_OVERRIDES: Record<string, string> = {
+  DOGEOS_L1_INTERFACE_SEQUENCER_GENESIS_MODE: 'false',
+}
+
+function parseEnvKey(line: string): string | undefined {
+  const trimmedLine = line.trim()
+  if (!trimmedLine || trimmedLine.startsWith('#') || !trimmedLine.includes('=')) return undefined
+
+  const [key] = trimmedLine.split('=')
+  const normalizedKey = key?.trim()
+  return normalizedKey || undefined
+}
+
+function parsePeerListValue(value: string | undefined): string[] | undefined {
+  if (!value) return undefined
+
+  try {
+    const parsed = JSON.parse(value)
+    if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
+      return parsed
+    }
+  } catch {
+    return undefined
+  }
+
+  return undefined
+}
+
+function isCelestiaEnvKey(key: string): boolean {
+  return key.toUpperCase().includes('CELESTIA')
+}
+
+function isSecretLikeEnvKey(key: string): boolean {
+  return /(?:^|_)(?:user|pass|password|token|api_key|secret)(?:_|$)/i.test(key.replaceAll('__', '_'))
+}
+
+function hasLoadBalancerPlaceholder(value: string | undefined): boolean {
+  return typeof value === 'string' && value.includes('<LoadBalancer-Domain-For-')
+}
+
+function hasClusterLocalPeer(value: string | undefined): boolean {
+  return typeof value === 'string' && /@l2-(?:(?:reth-)?bootnode|(?:reth-)?sequencer)-\d+(?:[.:][^:]+)*:\d+/.test(value)
+}
+
+function hasUnresolvedExternalPeer(value: string | undefined): boolean {
+  return hasLoadBalancerPlaceholder(value) || hasClusterLocalPeer(value)
+}
+
+function resolveL2RethBlobS3Url(dogeConfig: DogeConfig): string | undefined {
+  const s3Archive = dogeConfig.ethereumDa?.blobArchive?.s3
+  const enabled = s3Archive?.enabled === true ||
+    (typeof s3Archive?.enabled === 'string' && s3Archive.enabled.toLowerCase() === 'true')
+  if (!enabled) return undefined
+
+  const blobS3Url = buildS3PublicPrefixUrl(s3Archive ?? {})
+  if (!blobS3Url) {
+    throw new Error(
+      'ethereumDa.blobArchive.s3 must define publicBaseUrl or bucket and region when S3 blob archive is enabled',
+    )
+  }
+
+  return blobS3Url
+}
+
+function composeDump(compose: ComposeFile): string {
+  return yaml.dump(compose, {
+    forceQuotes: false,
+    lineWidth: -1,
+    noRefs: true,
+    quotingType: '"',
+  })
+}
+
+function composeServiceChanged(before: ComposeService | undefined, after: ComposeService): boolean {
+  return JSON.stringify(before ?? null) !== JSON.stringify(after)
+}
+
+function envArrayToComposeEnvironment(env: unknown): Record<string, string> | undefined {
+  if (!Array.isArray(env)) return undefined
+
+  const environment: Record<string, string> = {}
+  for (const item of env) {
+    if (!item || typeof item !== 'object') continue
+    const {name} = item as { name?: unknown }
+    if (typeof name !== 'string' || name.trim() === '') continue
+    const {value} = item as { value?: unknown }
+    environment[name] = value === undefined || value === null ? '' : String(value)
+  }
+
+  return Object.keys(environment).length > 0 ? environment : undefined
+}
+
+function escapeComposeCommandInterpolation(command: string): string {
+  return command.replaceAll('$', '$$$$')
+}
+
+// Split a compose short-syntax volume string on ':' while ignoring colons
+// inside ${...} expansions, e.g. "${DATA_ROOT:?msg}/l1-interface:/data:ro"
+// must yield ["${DATA_ROOT:?msg}/l1-interface", "/data", "ro"].
+function splitComposeVolumeShortSyntax(volume: string): string[] {
+  const parts: string[] = []
+  let current = ''
+  let braceDepth = 0
+
+  for (const char of volume) {
+    if (char === '{') braceDepth++
+    else if (char === '}' && braceDepth > 0) braceDepth--
+
+    if (char === ':' && braceDepth === 0) {
+      parts.push(current)
+      current = ''
+    } else {
+      current += char
+    }
+  }
+
+  parts.push(current)
+  return parts
+}
+
+function findComposeVolumeSourceForMount(targetService: ComposeService, mountPath: string): string | undefined {
+  if (!Array.isArray(targetService.volumes)) return undefined
+
+  for (const volume of targetService.volumes) {
+    if (typeof volume === 'string') {
+      const parts = splitComposeVolumeShortSyntax(volume)
+      if (parts.length >= 2 && parts[1] === mountPath) {
+        return parts[0]
+      }
+    } else if (volume && typeof volume === 'object') {
+      const {target} = volume as { target?: unknown }
+      if (target === mountPath) {
+        const {source} = volume as { source?: unknown }
+        return typeof source === 'string' ? source : undefined
+      }
+    }
+  }
+
+  return undefined
+}
+
+function initContainerVolumeMountsToComposeVolumes(initContainer: unknown, targetService: ComposeService): string[] | undefined {
+  const {volumeMounts} = initContainer as { volumeMounts?: unknown }
+  if (!Array.isArray(volumeMounts)) return undefined
+
+  const volumes: string[] = []
+  for (const mount of volumeMounts) {
+    if (!mount || typeof mount !== 'object') continue
+    const {mountPath} = mount as { mountPath?: unknown }
+    if (typeof mountPath !== 'string' || mountPath.trim() === '') continue
+
+    const source = findComposeVolumeSourceForMount(targetService, mountPath)
+    if (!source) continue
+
+    const {readOnly} = mount as { readOnly?: unknown }
+    volumes.push(`${source}:${mountPath}${readOnly ? ':ro' : ''}`)
+  }
+
+  return volumes.length > 0 ? volumes : undefined
+}
+
+function initContainerCommandToComposeService(initContainer: unknown, service: ComposeService): void {
+  const {command} = initContainer as { command?: unknown }
+  if (!Array.isArray(command) || command.length === 0) return
+
+  const commandParts = command.map(String)
+  if (commandParts.length >= 3 && commandParts[0].endsWith('sh') && commandParts[1] === '-c') {
+    service.entrypoint = [commandParts[0], commandParts[1]]
+    service.command = [escapeComposeCommandInterpolation(commandParts.slice(2).join('\n'))]
+    return
+  }
+
+  service.entrypoint = commandParts
+}
+
+function initContainerSecurityContextToComposeUser(initContainer: unknown): string | undefined {
+  const {securityContext} = initContainer as { securityContext?: unknown }
+  if (!securityContext || typeof securityContext !== 'object') return undefined
+
+  const {runAsGroup, runAsUser} = securityContext as { runAsGroup?: unknown; runAsUser?: unknown }
+  if (runAsUser === undefined && runAsGroup === undefined) return undefined
+
+  return `${runAsUser ?? ''}${runAsGroup === undefined ? '' : `:${runAsGroup}`}`
+}
+
+function normalizeDependsOn(dependsOn: unknown): Record<string, { condition: string }> {
+  if (Array.isArray(dependsOn)) {
+    return Object.fromEntries(dependsOn.map(item => [String(item), { condition: 'service_started' }]))
+  }
+
+  if (dependsOn && typeof dependsOn === 'object') {
+    const normalized: Record<string, { condition: string }> = {}
+    for (const [serviceName, dependencyConfig] of Object.entries(dependsOn)) {
+      const condition = dependencyConfig && typeof dependencyConfig === 'object' && 'condition' in dependencyConfig
+        ? String((dependencyConfig as { condition: unknown }).condition)
+        : 'service_started'
+      normalized[serviceName] = { condition }
+    }
+
+    return normalized
+  }
+
+  return {}
+}
+
+function setDependsOnCondition(service: ComposeService, dependencyName: string, condition: string): void {
+  service.depends_on = {
+    ...normalizeDependsOn(service.depends_on),
+    [dependencyName]: { condition },
+  }
+}
+
+function removeDependsOnService(service: ComposeService, dependencyName: string): boolean {
+  if (Array.isArray(service.depends_on)) {
+    const nextDependsOn = service.depends_on.filter(item => String(item) !== dependencyName)
+    if (nextDependsOn.length === service.depends_on.length) return false
+
+    if (nextDependsOn.length > 0) {
+      service.depends_on = nextDependsOn
+    } else {
+      delete service.depends_on
+    }
+
+    return true
+  }
+
+  if (!service.depends_on || typeof service.depends_on !== 'object') return false
+
+  const dependsOn = service.depends_on as Record<string, unknown>
+  if (!(dependencyName in dependsOn)) return false
+
+  delete dependsOn[dependencyName]
+  if (Object.keys(dependsOn).length === 0) {
+    delete service.depends_on
+  }
+
+  return true
+}
+
+function replaceComposeVolumeSource(service: ComposeService, fromSource: string, toSource: string): boolean {
+  if (!Array.isArray(service.volumes)) return false
+
+  let changed = false
+  service.volumes = service.volumes.map(volume => {
+    if (typeof volume === 'string') {
+      if (!volume.startsWith(`${fromSource}:`)) return volume
+      changed = true
+      return `${toSource}${volume.slice(fromSource.length)}`
+    }
+
+    if (volume && typeof volume === 'object') {
+      const volumeConfig = volume as { source?: unknown }
+      if (volumeConfig.source !== fromSource) return volume
+      changed = true
+      return {...volumeConfig, source: toSource}
+    }
+
+    return volume
+  })
+
+  return changed
+}
+
+function sanitizeComposeServiceName(name: string): string {
+  return name.toLowerCase().replaceAll(/[^\da-z-]+/g, '-').replaceAll(/^-|-$/g, '')
+}
+
+export function normalizeConfigMapEnvData(envData: unknown): EnvVarMap {
+  if (!envData || typeof envData !== 'object' || Array.isArray(envData)) {
+    throw new TypeError('configMaps.env.data not found or invalid')
+  }
+
+  const normalized: EnvVarMap = {}
+  for (const [key, value] of Object.entries(envData)) {
+    if (value === undefined || value === null || isCelestiaEnvKey(key)) continue
+    normalized[key] = String(value)
+  }
+
+  return normalized
+}
+
+/** Independent NLBs have ClusterIP Services; discover endpoints through AWS, never Service status. */
+export function discoverExistingNlbDomains(valuesFiles: Record<string, string>, spec?: DeploymentSpec, aws: Pick<AwsCliRunner, 'json'> = new AwsCliRunner()): Record<string, string[]> {
+  const indices = Object.entries(valuesFiles).flatMap(([name, content]) => {
+    const match = /^l2-reth-bootnode-production-(\d+)\.yaml$/.exec(name)
+    if (!match) return []
+    const p2p = (yaml.load(content) as any)?.reth?.p2pExternal
+    return p2p?.enabled && p2p.mode === 'existing' ? [Number(match[1])] : []
+  })
+  if (indices.length === 0) return {}
+  if (!spec) throw new Error('Independent bootnode NLB values require --spec for read-only AWS endpoint verification')
+  const verified = verifyExistingNlb(spec, valuesFiles, aws)
+  if (verified.length !== indices.length || verified.some(item => !indices.includes(item.entry.index))) throw new Error('Existing bootnode NLB values differ from spec selection')
+  return Object.fromEntries(verified.map(item => [`l2-reth-bootnode-${item.entry.index}-p2p`, item.publicEndpoints.map(endpoint => endpoint.split(':')[0])]))
+}
+
+export function convertPeersToExternalDomains(peers: string[], loadBalancerDomains: Record<string, string | string[]> = {}): string[] {
+  return peers.flatMap(peer => {
+    // External RPC packages should peer through bootnode public p2p LoadBalancers
+    // resolved from Service status or verified independent NLB EIPs.
+    // Format: enode://nodekey@hostname:port
+    const match = peer.match(/@l2-((?:reth-)?bootnode)-(\d+)(?:[.:][^:]+)*:(\d+)/)
+    if (match) {
+      const nodeType = match[1]
+      const nodeIndex = match[2]
+      const port = match[3]
+      const serviceName = `l2-${nodeType}-${nodeIndex}-p2p`
+      const domain = loadBalancerDomains[serviceName]
+
+      // Geth and Reth bootnodes are independently optional. If a configured
+      // internal bootnode has no public p2p service in the discovered cluster
+      // topology, omit that stale peer from the external RPC package.
+      if (!domain) return []
+
+      return (Array.isArray(domain) ? domain : [domain]).map(endpoint => peer.replace(/@l2-(?:reth-)?bootnode-\d+(?:[.:][^:]+)*:\d+/, `@${endpoint}:${port}`))
+    }
+
+    return [peer]
+  })
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)]
+}
+
+function buildComposeInitService(
+  chartName: string,
+  initContainerName: string,
+  initContainer: unknown,
+  targetService: ComposeService,
+): ComposeService {
+  const {image} = initContainer as { image?: unknown }
+  const initServiceName = `${chartName}-init-${sanitizeComposeServiceName(initContainerName)}`
+  const initService: ComposeService = {
+    container_name: initServiceName,
+    image: typeof image === 'string' && image.trim() !== '' ? image : 'alpine:latest',
+    restart: 'no',
+  }
+
+  const {env} = initContainer as { env?: unknown }
+  const environment = envArrayToComposeEnvironment(env)
+  if (environment) {
+    initService.environment = environment
+  }
+
+  const user = initContainerSecurityContextToComposeUser(initContainer)
+  if (user) {
+    initService.user = user
+  }
+
+  const volumes = initContainerVolumeMountsToComposeVolumes(initContainer, targetService)
+  if (volumes) {
+    initService.volumes = volumes
+  }
+
+  initContainerCommandToComposeService(initContainer, initService)
+
+  return initService
+}
+
+function loadYamlIfExists(filePath: string): unknown {
+  if (!fs.existsSync(filePath)) return undefined
+  return yaml.load(fs.readFileSync(filePath, 'utf8')) as unknown
+}
+
+function syncL1InterfaceInitContainers(
+  compose: ComposeFile,
+  valuesYaml: unknown,
+  result: ComposeInitSyncResult,
+): void {
+  const {initContainers} = valuesYaml as { initContainers?: unknown }
+  if (!initContainers || typeof initContainers !== 'object' || Array.isArray(initContainers)) return
+
+  if (!compose.services) {
+    compose.services = {}
+  }
+
+  const {services} = compose
+  const targetService = services['l1-interface']
+  if (!targetService) return
+
+  for (const [initContainerName, initContainer] of Object.entries(initContainers)) {
+    const initServiceName = `l1-interface-init-${sanitizeComposeServiceName(initContainerName)}`
+    const previousInitService = services[initServiceName]
+    const nextInitService = buildComposeInitService('l1-interface', initContainerName, initContainer, targetService)
+    services[initServiceName] = nextInitService
+    setDependsOnCondition(targetService, initServiceName, 'service_completed_successfully')
+
+    if (composeServiceChanged(previousInitService, nextInitService)) {
+      result.initServices.push(initServiceName)
+    }
+  }
+
+  if (!result.updatedServices.includes('l1-interface')) {
+    result.updatedServices.push('l1-interface')
+  }
+}
+
+function collectL1InterfaceInitServiceNames(valuesYaml: unknown): Set<string> {
+  const names = new Set<string>()
+  const {initContainers} = (valuesYaml ?? {}) as { initContainers?: unknown }
+  if (!initContainers || typeof initContainers !== 'object' || Array.isArray(initContainers)) return names
+
+  for (const initContainerName of Object.keys(initContainers)) {
+    names.add(`l1-interface-init-${sanitizeComposeServiceName(initContainerName)}`)
+  }
+
+  return names
+}
+
+// Values are the source of truth for l1-interface init containers: an init
+// service generated by a previous run (possibly for another network) whose
+// init container is absent from the current values must not survive — e.g. a
+// testnet artifact download must not gate a mainnet deployment.
+function removeStaleL1InterfaceInitServices(
+  compose: ComposeFile,
+  expectedInitServiceNames: Set<string>,
+  result: ComposeInitSyncResult,
+): void {
+  const {services} = compose
+  if (!services) return
+
+  const staleServiceNames = Object.keys(services).filter(
+    name => name.startsWith('l1-interface-init-') && !expectedInitServiceNames.has(name),
+  )
+
+  for (const staleServiceName of staleServiceNames) {
+    delete services[staleServiceName]
+    result.removedServices.push(staleServiceName)
+
+    for (const [serviceName, service] of Object.entries(services)) {
+      if (removeDependsOnService(service, staleServiceName) && !result.updatedServices.includes(serviceName)) {
+        result.updatedServices.push(serviceName)
+      }
+    }
+  }
+}
+
+// The wait-for-L1 loop lives in the RPC package's own scripts/l2reth_entrypoint.sh,
+// so startup ordering is daemon-managed inside the l2reth container and survives
+// the compose client (e.g. an SSH session) going away. Older generated compose
+// files used a dedicated client-orchestrated wait service; remove it on sight.
+function removeLegacyWaitForL1ComposeArtifacts(compose: ComposeFile, result: ComposeInitSyncResult): void {
+  const waitServiceName = 'l2-rpc-init-wait-for-l1'
+  const {services} = compose
+  if (!services) return
+
+  if (services[waitServiceName]) {
+    delete services[waitServiceName]
+    result.removedServices.push(waitServiceName)
+  }
+
+  for (const [serviceName, service] of Object.entries(services)) {
+    if (removeDependsOnService(service, waitServiceName) && !result.updatedServices.includes(serviceName)) {
+      result.updatedServices.push(serviceName)
+    }
+  }
+}
+
+function removeCelestiaComposeArtifacts(compose: ComposeFile, result: ComposeInitSyncResult): void {
+  const {services} = compose
+  if (services?.['celestia-light-node']) {
+    delete services['celestia-light-node']
+    result.removedServices.push('celestia-light-node')
+  }
+
+  if (services) {
+    for (const [serviceName, service] of Object.entries(services)) {
+      if (removeDependsOnService(service, 'celestia-light-node') && !result.updatedServices.includes(serviceName)) {
+        result.updatedServices.push(serviceName)
+      }
+    }
+  }
+
+  if (compose.volumes && 'celestia_data' in compose.volumes) {
+    delete compose.volumes.celestia_data
+  }
+}
+
+function removeLegacyL2GethComposeArtifacts(compose: ComposeFile, result: ComposeInitSyncResult): void {
+  const {services} = compose
+  if (services?.['l2geth-node']) {
+    delete services['l2geth-node']
+    result.removedServices.push('l2geth-node')
+  }
+
+  if (services) {
+    for (const [serviceName, service] of Object.entries(services)) {
+      let changed = removeDependsOnService(service, 'l2geth-node')
+      if (serviceName === 'l1-interface') {
+        changed = replaceComposeVolumeSource(
+          service,
+          `./configs/\${NETWORK}/l2geth-genesis.json`,
+          `./configs/\${NETWORK}/l2reth-genesis.json`,
+        ) || changed
+      }
+
+      if (changed && !result.updatedServices.includes(serviceName)) {
+        result.updatedServices.push(serviceName)
+      }
+    }
+  }
+
+  if (compose.volumes && 'l2geth_data' in compose.volumes) {
+    delete compose.volumes.l2geth_data
+  }
+}
+
+export function syncRpcPackageInitContainersToCompose(valuesDir: string, rpcPackageDir: string): ComposeInitSyncResult {
+  const composePath = path.join(rpcPackageDir, 'docker-compose.yml')
+  if (!fs.existsSync(composePath)) {
+    throw new Error(`docker-compose.yml not found at: ${composePath}`)
+  }
+
+  const existingContent = fs.readFileSync(composePath, 'utf8')
+  const compose = yaml.load(existingContent) as ComposeFile
+  if (!compose || typeof compose !== 'object') {
+    throw new Error(`Failed to parse docker-compose.yml at: ${composePath}`)
+  }
+
+  const result: ComposeInitSyncResult = {
+    changed: false,
+    composePath,
+    initServices: [],
+    removedServices: [],
+    updatedServices: [],
+  }
+
+  const l1InterfaceValues = loadYamlIfExists(path.resolve(valuesDir, 'l1-interface-production.yaml'))
+  if (l1InterfaceValues) {
+    syncL1InterfaceInitContainers(compose, l1InterfaceValues, result)
+  }
+
+  removeStaleL1InterfaceInitServices(compose, collectL1InterfaceInitServiceNames(l1InterfaceValues), result)
+  removeLegacyWaitForL1ComposeArtifacts(compose, result)
+  removeCelestiaComposeArtifacts(compose, result)
+  removeLegacyL2GethComposeArtifacts(compose, result)
+
+  const nextContent = composeDump(compose)
+  result.changed = nextContent !== existingContent
+  if (result.changed) {
+    fs.writeFileSync(composePath, nextContent)
+  }
+
+  return result
+}
+
+function mergeEnvFileContent(
+  existingLines: string[],
+  newVars: EnvVarMap,
+  options: {
+    header: string[]
+    removeKey?: (key: string, value: string | undefined) => boolean
+  }
+): { content: string; removedVars: string[]; updatedVars: string[] } {
+  const remainingVars = new Map(Object.entries(newVars))
+  const updatedVars: string[] = []
+  const removedVars: string[] = []
+  const nextLines: string[] = existingLines.length > 0 ? [] : [...options.header]
+
+  for (const existingLine of existingLines) {
+    const key = parseEnvKey(existingLine)
+    if (!key) {
+      nextLines.push(existingLine)
+      continue
+    }
+
+    const existingValue = existingLine.slice(existingLine.indexOf('=') + 1).trim()
+    if (options.removeKey?.(key, existingValue)) {
+      removedVars.push(key)
+      continue
+    }
+
+    if (remainingVars.has(key)) {
+      const newValue = remainingVars.get(key) as string
+      const nextLine = `${key}=${newValue}`
+      if (existingLine.trim() !== nextLine) {
+        updatedVars.push(key)
+      }
+
+      nextLines.push(nextLine)
+      remainingVars.delete(key)
+      continue
+    }
+
+    nextLines.push(existingLine)
+  }
+
+  for (const [key, value] of remainingVars) {
+    nextLines.push(`${key}=${value}`)
+    updatedVars.push(key)
+  }
+
+  return {
+    content: nextLines.join('\n').replace(/\n*$/, '') + '\n',
+    removedVars,
+    updatedVars,
+  }
+}
+
+function requireGenesisObject(value: unknown, fieldPath: string): Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(`genesis field ${fieldPath} must be an object`)
+  }
+
+  return value as Record<string, any>
+}
+
+function normalizeGenesisInteger(value: unknown, fieldPath: string): number {
+  if (typeof value === 'boolean') {
+    throw new TypeError(`genesis field ${fieldPath} must be a non-negative decimal integer, got: ${JSON.stringify(value)}`)
+  }
+
+  if (typeof value === 'number') {
+    if (Number.isSafeInteger(value) && value >= 0) return value
+  } else if (typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value)) {
+    const parsed = Number(value)
+    if (Number.isSafeInteger(parsed)) return parsed
+  }
+
+  throw new TypeError(`genesis field ${fieldPath} must be a non-negative decimal integer, got: ${JSON.stringify(value)}`)
+}
+
+function requireGenesisAddress(value: unknown, fieldPath: string): string {
+  if (typeof value !== 'string' || !/^0x[\dA-Fa-f]{40}$/.test(value)) {
+    throw new TypeError(`genesis field ${fieldPath} must be a 20-byte hex address, got: ${JSON.stringify(value)}`)
+  }
+
+  return value
+}
+
+// values/genesis.yaml is canonical and must remain unchanged.
+// Adapt a deep copy at the RPC-package boundary to the stricter Scroll-Reth
+// chainspec schema. Keep this transformation deliberately narrow: normalize
+// integer representations, supply the required buffer flag, bind the system
+// contract address already present in the legacy metadata, and bind the L1
+// deployment block supplied by l2-rpc-production.yaml.
+export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1Block?: unknown): Record<string, any> {
+  const source = requireGenesisObject(sourceGenesis, '<root>')
+  const normalized = JSON.parse(JSON.stringify(source)) as Record<string, any>
+  const config = requireGenesisObject(normalized.config, 'config')
+  const scroll = requireGenesisObject(config.scroll, 'config.scroll')
+  const l1Config = requireGenesisObject(scroll.l1Config, 'config.scroll.l1Config')
+
+  if (scroll.l1DataFeeBufferCheck === undefined) {
+    scroll.l1DataFeeBufferCheck = false
+  } else if (typeof scroll.l1DataFeeBufferCheck !== 'boolean') {
+    throw new TypeError(
+      `genesis field config.scroll.l1DataFeeBufferCheck must be a boolean, got: ${JSON.stringify(scroll.l1DataFeeBufferCheck)}`,
+    )
+  }
+
+  for (const field of ['l1ChainId', 'numL1MessagesPerBlock']) {
+    l1Config[field] = normalizeGenesisInteger(l1Config[field], `config.scroll.l1Config.${field}`)
+  }
+
+  if (l1Config.l1MessageQueueV2DeploymentBlock !== undefined) {
+    l1Config.l1MessageQueueV2DeploymentBlock = normalizeGenesisInteger(
+      l1Config.l1MessageQueueV2DeploymentBlock,
+      'config.scroll.l1Config.l1MessageQueueV2DeploymentBlock',
+    )
+  }
+
+  // Native Reth releases intentionally scan from zero and no longer emit the
+  // legacy systemContract metadata. Their chainspec is authoritative; the
+  // virtual L1 genesis height is a different setting, not a replacement value.
+  if (config.systemContract === undefined) {
+    l1Config.systemContractAddress = requireGenesisAddress(
+      l1Config.systemContractAddress,
+      'config.scroll.l1Config.systemContractAddress',
+    )
+    l1Config.startL1Block = normalizeGenesisInteger(
+      l1Config.startL1Block,
+      'config.scroll.l1Config.startL1Block',
+    )
+    return normalized
+  }
+
+  const systemContract = requireGenesisObject(config.systemContract, 'config.systemContract')
+  const systemContractAddress = requireGenesisAddress(
+    systemContract.system_contract_address,
+    'config.systemContract.system_contract_address',
+  )
+  const existingSystemContractAddress = l1Config.systemContractAddress
+  if (
+    existingSystemContractAddress !== undefined &&
+    (
+      typeof existingSystemContractAddress !== 'string' ||
+      existingSystemContractAddress.toLowerCase() !== systemContractAddress.toLowerCase()
+    )
+  ) {
+    throw new Error(
+      'genesis field config.scroll.l1Config.systemContractAddress conflicts with ' +
+      'config.systemContract.system_contract_address',
+    )
+  }
+
+  l1Config.systemContractAddress = systemContractAddress
+
+  const startL1Block = normalizeGenesisInteger(
+    requiredStartL1Block,
+    'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK',
+  )
+  if (l1Config.startL1Block !== undefined) {
+    const existingStartL1Block = normalizeGenesisInteger(
+      l1Config.startL1Block,
+      'config.scroll.l1Config.startL1Block',
+    )
+    if (existingStartL1Block !== startL1Block) {
+      throw new Error(
+        'genesis field config.scroll.l1Config.startL1Block conflicts with ' +
+        'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK',
+      )
+    }
+  }
+
+  l1Config.startL1Block = startL1Block
+  return normalized
+}
+
+export default class SetupGenRpcPackage extends Command {
+  static override description = 'Generate configuration files for dogeos-rpc-package to enable external RPC nodes'
+
+  static override examples = [
+    '# Generate RPC package (dogeos-rpc-package directory is required)',
+    '<%= config.bin %> <%= command.id %> -d ~/github/dogeos-rpc-package/',
+    '',
+    '# Generate mainnet RPC package with specific config and namespace',
+    '<%= config.bin %> <%= command.id %> --doge-config .data/doge-config.toml -d ~/github/dogeos-rpc-package/ -n scroll-mainnet',
+    '',
+    '# First clone the project: git clone https://github.com/dogeos69/dogeos-rpc-package',
+    '<%= config.bin %> <%= command.id %> -d ./dogeos-rpc-package/ --namespace default',
+  ]
+
+  static override flags = {
+    'aws-profile': Flags.string({description: 'AWS profile for independently managed bootnode NLB discovery'}),
+    'config-path': Flags.string({
+      default: './config.toml',
+      description: 'Path to config.toml file containing cluster configuration',
+      required: false,
+    }),
+    'doge-config': Flags.string({
+      description: 'Path to Dogecoin config file',
+      required: false,
+    }),
+    'dogeos-rpc-package-dir': Flags.string({
+      char: 'd',
+      description: 'Path to dogeos-rpc-package project directory (clone from https://github.com/dogeos69/dogeos-rpc-package)',
+      required: true,
+    }),
+    namespace: Flags.string({
+      char: 'n',
+      description: 'Kubernetes namespace',
+    }),
+    spec: Flags.string({description: 'Deployment spec required when values reference independent bootnode NLBs'}),
+    'values-dir': Flags.string({
+      default: './values',
+      description: 'Directory containing Helm values files (must include genesis.yaml)',
+      required: false,
+    }),
+  }
+
+  public async run(): Promise<void> {
+    const { flags } = await this.parse(SetupGenRpcPackage)
+
+    try {
+      this.log(chalk.blue('🚀 Starting RPC package generation...'))
+      this.log('')
+
+      // Get namespace interactively if not provided
+      let {namespace} = flags
+      if (!namespace) {
+        namespace = await input({
+          default: 'default',
+          message: 'Enter Kubernetes namespace:',
+          validate(value: string) {
+            if (!value || value.trim() === '') {
+              return 'Namespace cannot be empty'
+            }
+
+            return true
+          }
+        })
+      }
+
+      // Verify dogeos-rpc-package directory exists
+      const rpcPackageDir = path.resolve(flags['dogeos-rpc-package-dir'])
+      if (!fs.existsSync(rpcPackageDir)) {
+        this.log(chalk.red(`❌ dogeos-rpc-package directory not found: ${rpcPackageDir}`))
+        this.log('')
+        this.log(chalk.yellow('Please clone the dogeos-rpc-package project first:'))
+        this.log(chalk.cyan('git clone https://github.com/dogeos69/dogeos-rpc-package'))
+        this.log('')
+        this.exit(1)
+      }
+
+      this.log(chalk.green(`✓ Using dogeos-rpc-package directory: ${rpcPackageDir}`))
+      this.log('')
+
+      // Step 1: Load DogeConfig
+      const { config: dogeConfig, configPath: dogeConfigPath } = await loadDogeConfigWithSelection(
+        flags['doge-config'],
+        `${this.config.bin} ${this.id}`,
+      )
+      this.log(chalk.blue(`Using DogeConfig file: ${dogeConfigPath}`))
+
+      // Step 2: Load config.toml if present. Values YAML is the source of
+      // truth for generated env files; Reth identities come from doge-config.
+      const config = this.loadConfig(flags['config-path'])
+      if (config) {
+        this.log(chalk.green('Successfully loaded config.toml'))
+      } else {
+        this.log(chalk.yellow(`config.toml not found at ${path.resolve(flags['config-path'])}; using values YAML only`))
+      }
+
+      // Step 3: Determine network type
+      const {network} = dogeConfig
+      if (network !== 'mainnet' && network !== 'testnet' && network !== 'regtest') {
+        throw new Error(`Invalid network type in dogeConfig: '${network}'. Expected 'mainnet', 'testnet', or 'regtest'.`)
+      }
+
+      this.log(chalk.blue(`Network type: ${network}`))
+
+      // Step 4: Setup directory structure  
+      this.log(chalk.blue(`RPC package directory: ${rpcPackageDir}`))
+
+      // Step 5: Get LoadBalancer domains
+      this.log(chalk.blue('Step 1: Getting LoadBalancer domains...'))
+      const valuesFiles = readAlbValues(path.resolve(flags['values-dir']))
+      const existingDomains = discoverExistingNlbDomains(valuesFiles, flags.spec ? readExistingAlbSpec(process.cwd(), flags.spec) : undefined, new AwsCliRunner(flags['aws-profile']))
+
+      const loadBalancerDomains = {...await this.getLoadBalancerDomains(namespace), ...existingDomains}
+      if (Object.keys(loadBalancerDomains).length > 0) {
+        this.log(chalk.green(`✓ Found ${Object.keys(loadBalancerDomains).length} LoadBalancer domains`))
+        for (const [service, domain] of Object.entries(loadBalancerDomains)) {
+          this.log(chalk.cyan(`  ${service}: ${domain}`))
+        }
+      } else {
+        this.log(chalk.yellow('⚠️  No LoadBalancer domains found - using placeholders'))
+      }
+
+      // Step 6: Generate L2 reth env file from l2-reth-rpc-production.yaml
+      this.log(chalk.blue('Step 2: Generating L2 reth env file from l2-reth-rpc-production.yaml...'))
+
+      const l2NodeEnv = this.generateL2NodeEnvFiles(config, dogeConfig, rpcPackageDir, loadBalancerDomains, namespace, flags['values-dir'])
+      this.log(chalk.green(`✓ Generated l2reth.env at: ${l2NodeEnv.l2rethEnvPath}`))
+      for (const removedPath of l2NodeEnv.removedLegacyPaths) {
+        this.log(chalk.green(`✓ Removed legacy l2geth config: ${removedPath}`))
+      }
+
+      // Step 7: Extract genesis.json from genesis.yaml
+      this.log(chalk.blue('Step 3: Extracting genesis.json from genesis.yaml...'))
+      const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network)
+      this.log(chalk.green(`✓ Extracted genesis.json at: ${genesisJsonPath}`))
+
+      // Step 7b: Extract protocol_context.json from protocol_context.yaml.
+      // l1-interface's replay reader requires this file at the path given by
+      // DOGEOS_L1_INTERFACE_REPLAY_READ__PROTOCOL_CONTEXT_JSON; docker-compose
+      // mounts configs/<network>/protocol_context.json into the container.
+      this.log(chalk.blue('Step 3b: Extracting protocol_context.json from protocol_context.yaml...'))
+      const protocolContextJsonPath = this.extractProtocolContextJson(flags['values-dir'], rpcPackageDir, network)
+      this.log(chalk.green(`✓ Extracted protocol_context.json at: ${protocolContextJsonPath}`))
+
+      // Step 8: Generate deterministic l1-interface runtime configuration.
+      this.log(chalk.blue('Step 4: Generating l1-interface.env file...'))
+      const l1InterfaceEnv = this.generateL1InterfaceEnvFile(flags['values-dir'], rpcPackageDir, network, config)
+      this.log(chalk.green(`✓ Generated l1-interface.env at: ${l1InterfaceEnv.generatedPath}`))
+
+      // Step 9: Sync initContainers to docker-compose.yml
+      this.log(chalk.blue('Step 5: Syncing initContainers into docker-compose.yml...'))
+      const composeSync = syncRpcPackageInitContainersToCompose(flags['values-dir'], rpcPackageDir)
+      if (composeSync.changed) {
+        this.log(chalk.green(`✓ Updated docker-compose.yml at: ${composeSync.composePath}`))
+        if (composeSync.initServices.length > 0) {
+          this.log(chalk.green(`✓ Synced init services: ${composeSync.initServices.join(', ')}`))
+        }
+
+        if (composeSync.removedServices.length > 0) {
+          this.log(chalk.green(`✓ Removed services: ${composeSync.removedServices.join(', ')}`))
+        }
+      } else {
+        this.log(chalk.green('✓ No initContainer changes detected in docker-compose.yml'))
+      }
+
+      this.log('')
+      this.log(chalk.blue('Generated files:'))
+      this.log(chalk.cyan(`  - ${l2NodeEnv.l2rethEnvPath}`))
+      this.log(chalk.cyan(`  - ${genesisJsonPath}`))
+      this.log(chalk.cyan(`  - ${protocolContextJsonPath}`))
+      this.log(chalk.cyan(`  - ${l1InterfaceEnv.generatedPath}`))
+      this.log(chalk.cyan(`  - ${composeSync.composePath}`))
+      this.log('')
+      if (l2NodeEnv.hasUnresolvedExternalPeers) {
+        this.log(chalk.yellow('⚠️  External peer domains could not be fully resolved.'))
+        this.log(chalk.yellow('The generated l2reth.env contains placeholder or cluster-local peer domains that need to be replaced.'))
+        this.log(chalk.yellow('Run the following command to get the actual LoadBalancer domains:'))
+        this.log(chalk.cyan(`kubectl get svc -n ${namespace} | grep p2p`))
+        this.log('')
+        this.log(chalk.yellow('Then replace unresolved peer hosts in l2reth.env with the actual EXTERNAL-IP domains.'))
+        this.error(`LoadBalancer domains generate fail`);
+      } else if (Object.keys(loadBalancerDomains).length > 0) {
+        this.log(chalk.green('✅ LoadBalancer domains have been automatically resolved and applied.'))
+      } else {
+        this.log(chalk.yellow('No LoadBalancer domains were found; peer list did not require placeholder replacement.'))
+      }
+
+      this.log('')
+      this.log(chalk.green('🎉 RPC package generation completed successfully!'))
+
+    } catch (error) {
+      this.log('')
+      this.log(chalk.red('❌ RPC package generation failed:'))
+      this.log(chalk.red(error instanceof Error ? error.message : String(error)))
+      this.exit(1)
+    }
+  }
+
+  private addLoadBalancerHint(envFilePath: string, namespace: string): void {
+    const hintLines = [
+      '# NOTE: Placeholder or cluster-local peer domains need to be replaced with public p2p endpoints',
+      `# Run: kubectl get svc -n ${namespace} | grep p2p`,
+      '# Replace unresolved peer hosts with actual EXTERNAL-IP domains',
+    ]
+    const content = fs.existsSync(envFilePath) ? fs.readFileSync(envFilePath, 'utf8') : ''
+    const contentWithoutExistingHint = content
+      .split('\n')
+      .filter(line => line !== '# NOTE: Placeholder or cluster-local peer domains need to be replaced with public bootnode endpoints')
+      .filter(line => !hintLines.includes(line))
+      .filter(line => !/^# Run: kubectl get svc -n .+ \| grep p2p$/.test(line))
+      .filter(line => line !== '# Replace unresolved peer hosts with actual EXTERNAL-IP domains')
+      .join('\n')
+      .replace(/\n*$/, '')
+    const nextContent = `${contentWithoutExistingHint}\n${hintLines.join('\n')}\n`
+
+    if (nextContent !== content) {
+      fs.writeFileSync(envFilePath, nextContent)
+    }
+  }
+
+  private capitalize(str: string): string {
+    if (!str) return ''
+    return str.charAt(0).toUpperCase() + str.slice(1)
+  }
+
+  private collectRethBootnodePeers(dogeConfig: DogeConfig, valuesDir: string): string[] {
+    const peers: string[] = []
+    for (const instance of dogeConfig.bootnodeReth?.instances ?? []) {
+      if (instance.enodeUrl) {
+        peers.push(instance.enodeUrl)
+        continue
+      }
+
+      if (instance.nodekey?.privateKey) {
+        peers.push(deriveBootnodeRethEnodeUrl(instance.nodekey.privateKey, instance.index))
+      }
+    }
+
+    const resolvedValuesDir = path.resolve(valuesDir)
+    if (!fs.existsSync(resolvedValuesDir)) return uniqueStrings(peers)
+
+    const files = fs.readdirSync(resolvedValuesDir)
+      .map(file => {
+        const match = file.match(/^l2-reth-bootnode-production-(\d+)\.ya?ml$/)
+        return match ? { file, index: Number(match[1]) } : undefined
+      })
+      .filter((item): item is { file: string; index: number } => item !== undefined)
+      .sort((a, b) => a.index - b.index)
+
+    for (const {file, index} of files) {
+      const yamlPath = path.join(resolvedValuesDir, file)
+      try {
+        const parsedYaml = yaml.load(fs.readFileSync(yamlPath, 'utf8')) as unknown
+        peers.push(...this.extractRethBootnodeEnodes(parsedYaml, index))
+      } catch (error) {
+        this.warn(`Unable to parse ${file} for reth bootnode enodes: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+
+    return uniqueStrings(peers)
+  }
+
+  private extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string {
+    const genesisYamlPath = path.resolve(valuesDir, 'genesis.yaml')
+    const l2RpcYamlPath = path.resolve(valuesDir, 'l2-rpc-production.yaml')
+
+    if (!fs.existsSync(genesisYamlPath)) {
+      throw new Error(`genesis.yaml not found at: ${genesisYamlPath}`)
+    }
+
+    try {
+      // Read and parse genesis.yaml
+      const genesisYamlContent = fs.readFileSync(genesisYamlPath, 'utf8')
+      const genesisYaml = yaml.load(genesisYamlContent) as any
+
+      if (!genesisYaml) {
+        throw new Error('Failed to parse genesis.yaml - file appears to be empty or invalid')
+      }
+
+      // Extract genesis.json from the YAML structure
+      // The structure might be: { genesis: "JSON_STRING" } or { genesis: JSON_OBJECT }
+      let genesisJson: unknown
+
+      if (genesisYaml.scrollConfig) {
+        if (typeof genesisYaml.scrollConfig === 'string') {
+          try {
+            genesisJson = JSON.parse(genesisYaml.scrollConfig)
+          } catch (parseError) {
+            throw new Error(`Failed to parse genesis JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
+          }
+        } else if (typeof genesisYaml.scrollConfig === 'object') {
+          genesisJson = genesisYaml.scrollConfig
+        } else {
+          throw new TypeError('Invalid genesis format in genesis.yaml - expected string or object')
+        }
+      } else {
+        // If no 'genesis' key, assume the entire YAML is the genesis data
+        genesisJson = genesisYaml
+      }
+
+      const sourceConfig = requireGenesisObject(
+        requireGenesisObject(genesisJson, '<root>').config, 'config',
+      )
+      let startL1Block: unknown
+      if (sourceConfig.systemContract !== undefined) {
+        if (!fs.existsSync(l2RpcYamlPath)) {
+          throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
+        }
+
+        startL1Block = this.loadConfigMapEnvData(l2RpcYamlPath).L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK
+        if (startL1Block === undefined) {
+          throw new Error(
+            'l2-rpc-production.yaml configMaps.env.data.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK ' +
+            'is required for legacy genesis config.scroll.l1Config.startL1Block',
+          )
+        }
+      }
+
+      const rethGenesis = normalizeGenesisForReth(genesisJson, startL1Block)
+
+      // Create target directory
+      const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
+      fs.mkdirSync(targetDirectory, { recursive: true })
+
+      // Write a deterministic Reth-specific derivative. The source
+      // values/genesis.yaml remains untouched for all consumers.
+      const genesisJsonPath = path.join(targetDirectory, 'l2reth-genesis.json')
+      fs.writeFileSync(genesisJsonPath, `${JSON.stringify(rethGenesis, null, 2)}\n`)
+
+      const legacyGethGenesisPath = path.join(targetDirectory, 'l2geth-genesis.json')
+      if (fs.existsSync(legacyGethGenesisPath)) {
+        fs.rmSync(legacyGethGenesisPath)
+      }
+
+      return genesisJsonPath
+
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Failed to parse genesis')) {
+        throw error
+      }
+
+      throw new Error(`Failed to extract genesis.json: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private extractProtocolContextJson(valuesDir: string, rpcPackageDir: string, network: string): string {
+    const protocolContextYamlPath = path.resolve(valuesDir, 'protocol_context.yaml')
+
+    if (!fs.existsSync(protocolContextYamlPath)) {
+      throw new Error(`protocol_context.yaml not found at: ${protocolContextYamlPath}`)
+    }
+
+    try {
+      const protocolContextYamlContent = fs.readFileSync(protocolContextYamlPath, 'utf8')
+      const protocolContextYaml = yaml.load(protocolContextYamlContent) as any
+
+      if (!protocolContextYaml || protocolContextYaml.protocolContext === undefined) {
+        throw new Error('protocol_context.yaml missing top-level `protocolContext` key')
+      }
+
+      // The configMap stores protocol_context as a JSON string (helm `|` block);
+      // accept an already-parsed object too for robustness.
+      let protocolContextJson: any
+
+      if (typeof protocolContextYaml.protocolContext === 'string') {
+        try {
+          protocolContextJson = JSON.parse(protocolContextYaml.protocolContext)
+        } catch (parseError) {
+          throw new Error(`Failed to parse protocolContext JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
+        }
+      } else if (typeof protocolContextYaml.protocolContext === 'object') {
+        protocolContextJson = protocolContextYaml.protocolContext
+      } else {
+        throw new TypeError('Invalid protocolContext format in protocol_context.yaml - expected string or object')
+      }
+
+      // Mirror genesis: write into configs/<network>/ so docker-compose can mount it.
+      const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
+      fs.mkdirSync(targetDirectory, { recursive: true })
+
+      const protocolContextJsonPath = path.join(targetDirectory, 'protocol_context.json')
+      fs.writeFileSync(protocolContextJsonPath, JSON.stringify(protocolContextJson, null, 2))
+
+      return protocolContextJsonPath
+
+    } catch (error) {
+      if (error instanceof Error &&
+        (error.message.includes('protocolContext') || error.message.includes('protocol_context.yaml'))) {
+        throw error
+      }
+
+      throw new Error(`Failed to extract protocol_context.json: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private extractRethBootnodeEnodes(value: unknown, index: number, key = ''): string[] {
+    const peers: string[] = []
+    const rethBootnodeEnodePattern = new RegExp(`enode://[^@\\s,'"]+@l2-reth-bootnode-${index}(?:[.:][^:\\s,'"]+)*:\\d+`, 'g')
+
+    if (typeof value === 'string') {
+      const trimmedValue = value.trim()
+      if (/enode/i.test(key) && /^enode:\/\/[^@]+@[^:]+:\d+/.test(trimmedValue)) {
+        peers.push(trimmedValue)
+      }
+
+      peers.push(...(value.match(rethBootnodeEnodePattern) ?? []))
+      return uniqueStrings(peers)
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        peers.push(...this.extractRethBootnodeEnodes(item, index, key))
+      }
+
+      return uniqueStrings(peers)
+    }
+
+    if (value && typeof value === 'object') {
+      for (const [childKey, childValue] of Object.entries(value)) {
+        peers.push(...this.extractRethBootnodeEnodes(childValue, index, childKey))
+      }
+    }
+
+    return uniqueStrings(peers)
+  }
+
+  private generateL1InterfaceEnvFile(
+    valuesDir: string,
+    rpcPackageDir: string,
+    network: string,
+    _config: any,
+  ): { generatedPath: string } {
+    const l1InterfaceYamlPath = path.resolve(valuesDir, 'l1-interface-production.yaml')
+
+    if (!fs.existsSync(l1InterfaceYamlPath)) {
+      throw new Error(`l1-interface-production.yaml not found at: ${l1InterfaceYamlPath}`)
+    }
+
+    try {
+      const envData = this.loadConfigMapEnvData(l1InterfaceYamlPath)
+
+      // Create target directory
+      const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
+      fs.mkdirSync(targetDirectory, { recursive: true })
+
+      const envFilePath = path.join(targetDirectory, 'l1-interface.env')
+
+      // Generated file holds ONLY deterministic values derived from the values
+      // YAML. Operator-owned keys (local creds / external endpoints), secrets,
+      // celestia, and deprecated keys are excluded so this file can be fully
+      // overwritten on every run without losing operator input.
+      // Runtime defaults first so values-YAML keys override them on collision.
+      const generatedVars: Record<string, string> = {...L1_INTERFACE_RUNTIME_DEFAULTS}
+      for (const [key, value] of Object.entries(envData)) {
+        if (isUserOwnedL1InterfaceEnvKey(key)) continue
+        if (isCelestiaEnvKey(key)) continue
+        if (isSecretLikeEnvKey(key)) continue
+        if (L1_INTERFACE_DEPRECATED_ENV_KEYS.has(key)) continue
+        generatedVars[key] = value
+      }
+
+      // Forced overrides win over both runtime defaults and the source YAML.
+      Object.assign(generatedVars, L1_INTERFACE_FORCED_ENV_OVERRIDES)
+
+      // Full overwrite: a key dropped from the source (or newly deprecated)
+      // disappears here too. This is what prevents stale keys such as
+      // SCROLL_MESSENGER_ADDRESS from surviving across regenerations.
+      this.writeFullEnvFile(envFilePath, generatedVars, [
+        `# L1 Interface ${this.capitalize(network)} Configuration`,
+        '#',
+        '# GENERATED by `scrollsdk rpc export` — DO NOT EDIT.',
+        '# Overwritten on every run. Put operator overrides (L1 RPC endpoint,',
+        '# beacon node, external Dogecoin RPC) in l1-interface.local.env,',
+        '# which docker-compose loads last so it wins.',
+        '',
+      ])
+      this.log(chalk.green(`✓ Wrote generated l1-interface.env (${Object.keys(generatedVars).length} vars)`))
+
+      return { generatedPath: envFilePath }
+
+    } catch (error) {
+      throw new Error(`Failed to generate l1-interface.env: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private generateL2NodeEnvFiles(
+    _config: any | undefined,
+    dogeConfig: DogeConfig,
+    rpcPackageDir: string,
+    loadBalancerDomains: Record<string, string | string[]> = {},
+    namespace: string,
+    valuesDir: string,
+  ): L2NodeEnvGenerationResult {
+    const {network} = dogeConfig
+    const networkTitleCase = this.capitalize(network)
+    const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
+    const envFilePathReth = path.join(targetDirectory, 'l2reth.env')
+    const legacyGethEnvFilePath = path.join(targetDirectory, 'l2geth.env')
+    const l2RethRpcYamlPath = path.resolve(valuesDir, 'l2-reth-rpc-production.yaml')
+    const removedLegacyPaths: string[] = []
+
+    // Create directory structure
+    fs.mkdirSync(targetDirectory, { recursive: true })
+
+    if (!fs.existsSync(l2RethRpcYamlPath)) {
+      throw new Error(`l2-reth-rpc-production.yaml not found at: ${l2RethRpcYamlPath}`)
+    }
+
+    const l2RethRpcValues = yaml.load(fs.readFileSync(l2RethRpcYamlPath, 'utf8')) as any
+    const rawNetworkId = l2RethRpcValues?.reth?.networkId
+    const networkId = rawNetworkId === undefined || rawNetworkId === null ? '' : String(rawNetworkId).trim()
+    if (!/^\d+$/.test(networkId)) {
+      throw new Error(`l2-reth-rpc-production.yaml reth.networkId must be a decimal integer, got: ${JSON.stringify(rawNetworkId)}`)
+    }
+
+    const rethBootnodePeers = this.collectRethBootnodePeers(dogeConfig, valuesDir)
+    const peerListValue = this.resolveExternalPeerList(
+      l2RethRpcValues?.reth?.trustedPeers,
+      loadBalancerDomains,
+      rethBootnodePeers,
+    )
+
+    const validSigner = this.resolveL2RethValidSigner(dogeConfig)
+    if (!validSigner) {
+      this.warn('No Reth sequencer index 0 configured; L2RETH_VALID_SIGNER is omitted. Run setup l2-sequencer-reth --index 0 to configure it.')
+    }
+
+    const l2rethVars: EnvVarMap = {}
+    if (peerListValue) {
+      // l2reth_entrypoint.sh currently reads this historical env var name to
+      // build rollup-node --trusted-peers flags.
+      l2rethVars.L2GETH_PEER_LIST = peerListValue
+    }
+
+    l2rethVars.L2RETH_L1_ENDPOINT = l2RethRpcValues?.reth?.l1Url || L1_INTERFACE_RPC_ENDPOINT
+    l2rethVars.L2RETH_NETWORK_ID = networkId
+    const blobS3Url = resolveL2RethBlobS3Url(dogeConfig)
+    if (blobS3Url) {
+      l2rethVars.L2RETH_BLOB_S3_URL = blobS3Url
+    }
+
+    if (validSigner) {
+      l2rethVars.L2RETH_VALID_SIGNER = validSigner
+    }
+
+    const rethWriteResult = this.writeEnvFile(envFilePathReth, l2rethVars, {
+      header: [
+        `# L2Reth ${networkTitleCase} Configuration`,
+        '# Generated for external RPC package usage',
+        '',
+        '# Network specific settings',
+      ],
+      removeKey: key => isCelestiaEnvKey(key) ||
+        key === 'CHAIN_ID' ||
+        key === 'L2RETH_DA_BLOB_BEACON_NODE' ||
+        (key === 'L2RETH_BLOB_S3_URL' && !blobS3Url) ||
+        (key === 'L2RETH_VALID_SIGNER' && !validSigner) ||
+        (key.startsWith('L2GETH_') && key !== 'L2GETH_PEER_LIST'),
+    })
+
+    if (fs.existsSync(legacyGethEnvFilePath)) {
+      fs.rmSync(legacyGethEnvFilePath)
+      removedLegacyPaths.push(legacyGethEnvFilePath)
+    }
+
+    if (rethWriteResult.changed) {
+      this.logEnvWriteChanges('l2reth.env', rethWriteResult)
+    } else {
+      this.log(chalk.green('✓ No changes detected in l2reth.env - file is up to date'))
+    }
+
+    const hasUnresolvedExternalPeers = hasUnresolvedExternalPeer(l2rethVars.L2GETH_PEER_LIST)
+
+    if (hasUnresolvedExternalPeers) {
+      this.addLoadBalancerHint(envFilePathReth, namespace)
+    }
+
+    return {
+      hasUnresolvedExternalPeers,
+      l2rethEnvPath: envFilePathReth,
+      removedLegacyPaths,
+    }
+  }
+
+  private async getLoadBalancerDomains(namespace: string): Promise<Record<string, string | string[]>> {
+    try {
+      const { execSync } = await import('node:child_process')
+
+      // Run kubectl command to get LoadBalancer services
+      const output = execSync(`kubectl get svc -n ${namespace} -o json`, {
+        encoding: 'utf8',
+        timeout: 10_000 // 10 second timeout
+      })
+
+      const services = JSON.parse(output)
+      const loadBalancerDomains: Record<string, string | string[]> = {}
+
+      // Legacy Service-owned endpoints are discovered separately from independent NLBs.
+      // Reth bootnode charts may expose equivalent l2-reth-bootnode-{N}-p2p services.
+      for (const service of services.items) {
+        if (service.spec?.type === 'LoadBalancer' &&
+          service.status?.loadBalancer?.ingress?.[0]) {
+
+          const serviceName = service.metadata?.name
+          if (serviceName && /^l2-(?:reth-)?bootnode-\d+-p2p$/.test(serviceName)) {
+            const {hostname, ip} = service.status.loadBalancer.ingress[0]
+            const endpoint = hostname || ip
+            if (endpoint) {
+              loadBalancerDomains[serviceName] = endpoint
+            }
+          }
+        }
+      }
+
+      return loadBalancerDomains
+    } catch (error) {
+      this.log(chalk.yellow(`Warning: Failed to get LoadBalancer domains: ${error instanceof Error ? error.message : String(error)}`))
+      return {}
+    }
+  }
+
+  private loadConfig(configPath: string): any | undefined {
+    const resolvedPath = path.resolve(configPath)
+
+    if (!fs.existsSync(resolvedPath)) {
+      return undefined
+    }
+
+    try {
+      const configContent = fs.readFileSync(resolvedPath, 'utf8')
+      return toml.parse(configContent) as any
+    } catch (error) {
+      throw new Error(`Failed to parse config.toml: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private loadConfigMapEnvData(yamlPath: string): EnvVarMap {
+    const yamlContent = fs.readFileSync(yamlPath, 'utf8')
+    const parsedYaml = yaml.load(yamlContent) as any
+    if (!parsedYaml) {
+      throw new Error(`Failed to parse ${path.basename(yamlPath)} - file appears to be empty or invalid`)
+    }
+
+    try {
+      return normalizeConfigMapEnvData(parsedYaml.configMaps?.env?.data)
+    } catch (error) {
+      throw new Error(`${path.basename(yamlPath)} ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private logEnvWriteChanges(fileName: string, result: EnvFileWriteResult): void {
+    if (result.updatedVars.length > 0) {
+      this.log(chalk.green(`✓ Updated variables in ${fileName}: ${result.updatedVars.join(', ')}`))
+    }
+
+    if (result.removedVars.length > 0) {
+      this.log(chalk.green(`✓ Removed stale variables from ${fileName}: ${result.removedVars.join(', ')}`))
+    }
+  }
+
+  private resolveExternalPeerList(
+    rethTrustedPeers: string | undefined,
+    loadBalancerDomains: Record<string, string | string[]>,
+    rethBootnodePeers: string[] = [],
+  ): string {
+    const peers = rethBootnodePeers.length > 0 ? rethBootnodePeers : (parsePeerListValue(rethTrustedPeers) || rethTrustedPeers?.split(',').map(peer => peer.trim()).filter(Boolean) || [])
+    return JSON.stringify(convertPeersToExternalDomains(uniqueStrings(peers), loadBalancerDomains))
+  }
+
+  private resolveL2RethValidSigner(dogeConfig: DogeConfig): string | undefined {
+    const instances = dogeConfig.sequencerReth?.instances || []
+    if (instances.length === 0) return undefined
+    const initial = instances.filter(instance => instance.index === 0)
+    const address = initial[0]?.signer?.address
+    if (initial.length !== 1 || !address || !isAddress(address) || address.toLowerCase() === ZeroAddress) {
+      throw new Error('A unique Reth sequencer index 0 with a valid nonzero signer.address is required in doge-config.toml. Run setup l2-sequencer-reth --index 0.')
+    }
+
+    return address
+  }
+
+  private writeEnvFile(
+    envFilePath: string,
+    newVars: EnvVarMap,
+    options: {
+      header: string[]
+      removeKey?: (key: string, value: string | undefined) => boolean
+    },
+  ): EnvFileWriteResult {
+    const existingContent = fs.existsSync(envFilePath) ? fs.readFileSync(envFilePath, 'utf8') : ''
+    const existingLines = existingContent ? existingContent.split('\n') : []
+    if (existingLines.at(-1) === '') existingLines.pop()
+
+    const {content, removedVars, updatedVars} = mergeEnvFileContent(existingLines, newVars, options)
+    const changed = content !== existingContent
+    if (changed) {
+      fs.writeFileSync(envFilePath, content)
+    }
+
+    return {
+      changed,
+      removedVars,
+      updatedVars,
+    }
+  }
+
+  private writeFullEnvFile(envFilePath: string, vars: EnvVarMap, header: string[]): void {
+    const lines = [...header]
+    for (const [key, value] of Object.entries(vars)) {
+      lines.push(`${key}=${value}`)
+    }
+
+    fs.writeFileSync(envFilePath, lines.join('\n').replace(/\n*$/, '') + '\n')
+  }
+
+}

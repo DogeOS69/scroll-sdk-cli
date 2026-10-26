@@ -254,6 +254,9 @@ export default class SetupDomains extends Command {
     }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupDomains)
     const existingConfig = await this.getExistingConfig()

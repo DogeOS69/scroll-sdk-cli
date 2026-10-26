@@ -1,5 +1,8 @@
 # Core services runtime checkpoint (2026-09-09)
 
+> Historical execution record: removed setup commands below describe the recorded run, not the current interface. Use `setup render`, `setup proof-materials`, `setup proof-publish` and `setup deployment-preflight` for the saved-spec workflow.
+
+
 Continue only after the same-instance contracts and Reth checks in
 [the instance runbook](devnet-new-bridge-20260909.md). Do not rerun successful
 contracts broadcasts or reset Bridge/genesis to resume.

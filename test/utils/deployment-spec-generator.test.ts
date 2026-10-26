@@ -49,15 +49,15 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       owner: { address: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' },
     },
     bridge: {
+      attestation: {signers: Array.from({length: 3}, (_, index) => ({attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: `signer-${index}`, transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()})), threshold: 2},
       confirmationsRequired: 6,
+      cubesigner: {roles: []},
       feeRateSatsPerKvb: 100_000,
       feeRecipient: '0x0000000000000000000000000000000000000001',
       fees: { depositFeeSats: '0', minWithdrawalAmountWei: '1000000000000000', withdrawalFeeWei: '0' },
-      keyCounts: { attestation: 3, recovery: 1 },
+      recovery: {publicKeys: [new bitcore.PrivateKey().toPublicKey().toString()], threshold: 1, timelock: 86_400},
       seedString: 'test-seed-string',
       targetAmountsSats: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 42_069_000 },
-      thresholds: { attestation: 2, recovery: 1 },
-      timelock: 86_400,
     },
     contracts: {
       deploymentSalt: '0xabcdef',
@@ -112,7 +112,6 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       tokenSymbol: 'ETH',
     },
     proofArtifacts: {s3: {bucket: 'dogeos-proofs', keyPrefix: 'proof-topology', region: 'us-west-2'}},
-    signing: { cubesigner: { roles: [] } },
     version: '1.0',
     ...overrides,
   } as DeploymentSpec;
@@ -148,7 +147,7 @@ function createProofTopology(
         l2RangeAggregationVerificationKeyHashHex: identity32,
         resourcesRoot: '.data/proof-materials',
       },
-      workerLaunch: 'local_cpu',
+      workerLaunch: 'external',
     },
     compiler: {
       image: image('a', 'dogeos69/dogeos-proof-topology'),
@@ -708,7 +707,7 @@ describe('deployment-spec-generator', () => {
     });
 
     it('requires an explicit supported Dogecoin network instead of a chain ID', () => {
-      for (const network of [undefined, 'invalid-network']) {
+      for (const network of [undefined, '', 'invalid-network', 'livenet', 'TESTNET', ' regtest ']) {
         const spec = createMinimalSpec();
         (spec.dogecoin as any).network = network;
         const result = validateDeploymentSpec(spec);
@@ -719,15 +718,15 @@ describe('deployment-spec-generator', () => {
 
     it('warns when cubesigner TEE role is not set yet', () => {
       const spec = createMinimalSpec();
-      spec.signing = { cubesigner: { roles: [] } };
+      spec.bridge.cubesigner = { roles: [] };
       const result = validateDeploymentSpec(spec);
       expect(result.valid).to.be.true;
-      expect(result.warnings.some(w => w.path === 'signing.cubesigner.roles')).to.be.true;
+      expect(result.warnings.some(w => w.path === 'bridge.cubesigner.roles')).to.be.true;
     });
 
     it('rejects multiple CubeSigner roles because the signer is a singleton', () => {
       const spec = createMinimalSpec();
-      spec.signing!.cubesigner!.roles = [
+      spec.bridge.cubesigner!.roles = [
         {keys: [], name: 'tee-0', roleId: 'role-0'},
         {keys: [], name: 'tee-1', roleId: 'role-1'},
       ];
@@ -738,7 +737,7 @@ describe('deployment-spec-generator', () => {
       expect(result.errors).to.deep.include({
         code: 'E601_INVALID_VALUE',
         message: 'CubeSigner supports exactly one TEE role and one deployment instance',
-        path: 'signing.cubesigner.roles',
+        path: 'bridge.cubesigner.roles',
       });
     });
 
@@ -748,7 +747,7 @@ describe('deployment-spec-generator', () => {
       ['a'.repeat(31) + '/v1', false], ['policy_123/v0', false],
     ] as const) it(`checks provider and signer compatible policy name ${policyIdentifier}`, () => {
       const spec = createMinimalSpec();
-      spec.signing!.cubesigner!.productionPolicy = {
+      spec.bridge.cubesigner!.productionPolicy = {
         policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,
         policyIdentifier,
         programIdentityDigest: `sha256:${'cc'.repeat(32)}`,
@@ -756,12 +755,12 @@ describe('deployment-spec-generator', () => {
         verifierIdentityDigest: `sha256:${'bb'.repeat(32)}`,
       };
       const result = validateDeploymentSpec(spec);
-      expect(result.errors.some(error => error.path === 'signing.cubesigner.productionPolicy.policyIdentifier')).equal(!accepted);
+      expect(result.errors.some(error => error.path === 'bridge.cubesigner.productionPolicy.policyIdentifier')).equal(!accepted);
     });
 
     it('validates CubeSigner production verifier-key policy evidence', () => {
       const spec = createMinimalSpec();
-      spec.signing!.cubesigner!.productionPolicy = {
+      spec.bridge.cubesigner!.productionPolicy = {
         liveEvidenceReportPath: '/etc/dogeos/report.json',
         policyArtifactDigest: 'sha256:ABC',
         policyIdentifier: 'latest',
@@ -774,16 +773,16 @@ describe('deployment-spec-generator', () => {
 
       expect(result.valid).to.be.false;
       expect(result.errors.map(error => error.path)).to.include.members([
-        'signing.cubesigner.productionPolicy.policyIdentifier',
-        'signing.cubesigner.productionPolicy.policyArtifactDigest',
-        'signing.cubesigner.productionPolicy.proofResolverAuthority',
-        'signing.cubesigner.productionPolicy',
+        'bridge.cubesigner.productionPolicy.policyIdentifier',
+        'bridge.cubesigner.productionPolicy.policyArtifactDigest',
+        'bridge.cubesigner.productionPolicy.proofResolverAuthority',
+        'bridge.cubesigner.productionPolicy',
       ]);
     });
 
     it('rejects the retired in-cluster attestation signer deployment shape', () => {
       const spec = createMinimalSpec();
-      spec.signing = {
+      (spec as any).signing = {
         attestationSigner: { profile: 'staging-kms' },
         cubesigner: { roles: [] },
       };
@@ -792,14 +791,13 @@ describe('deployment-spec-generator', () => {
 
       expect(result.valid).to.be.false;
       expect(result.errors.some(error =>
-        error.path === 'signing.attestationSigner' && error.message.includes('attestationSigners')
+        error.path === 'signing' && error.message.includes('bridge.cubesigner')
       )).to.be.true;
     });
 
     it('fails when attestation threshold exceeds key count', () => {
       const spec = createMinimalSpec();
-      spec.bridge.thresholds.attestation = 10;
-      spec.bridge.keyCounts.attestation = 3;
+      spec.bridge.attestation.threshold = 10;
       const result = validateDeploymentSpec(spec);
       expect(result.errors.some(e => e.code === 'E005_INVALID_THRESHOLD')).to.be.true;
     });
@@ -885,6 +883,8 @@ describe('deployment-spec-generator', () => {
         expect((yaml.load(values['contracts-production.yaml']) as any).configMaps['contracts-deployment-env'].data.CHAIN_ID_L1).to.equal(String(chainId));
         const frontends = (yaml.load(values['frontends-config.yaml']) as any).scrollConfig;
         expect(frontends).to.include(`REACT_APP_CHAIN_ID_L1 = "${chainId}"\n`);
+        expect((toml.parse(frontends) as any).REACT_APP_DOGE_NETWORK).to.equal(network);
+        expect((toml.parse(frontends) as any).REACT_APP_CHAIN_ID_L2).to.equal(String(spec.network.l2ChainId));
       });
     }
 
@@ -1471,8 +1471,7 @@ describe('deployment-spec-generator', () => {
     it('includes cubesigner TEE config when present', () => {
       const spec = createMinimalSpec();
       const rawPublicKey = '0x0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8';
-      spec.signing = {
-        cubesigner: {
+      spec.bridge.cubesigner = {
           productionPolicy: {
             policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,
             policyIdentifier: 'dogeos_bridge/v1',
@@ -1485,7 +1484,6 @@ describe('deployment-spec-generator', () => {
             name: 'role1',
             roleId: 'r1',
           }],
-        },
       };
       const output = generateDogeConfigToml(spec);
 
@@ -1498,11 +1496,12 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('proofResolverAuthority = "https://proof-policy.example.com"');
     });
 
-    it('leaves partner signer routing for descriptor import', () => {
+    it('projects partner public identities without direct signer endpoints', () => {
       const spec = createMinimalSpec();
       const output = toml.parse(generateDogeConfigToml(spec)) as any;
 
-      expect(output).not.to.have.property('attestationSigner');
+      expect(output.attestationSigner.activeSignerIds).to.deep.equal(['signer-0', 'signer-1', 'signer-2']);
+      expect(output.attestationSigner.external).to.have.length(3);
       expect(output).not.to.have.property('signerUrls');
       expect(output).not.to.have.property('dummySigner');
       expect(output).not.to.have.property('awsSigner');
@@ -1526,7 +1525,7 @@ describe('deployment-spec-generator', () => {
 
     it('includes TEE public key when configured', () => {
       const spec = createMinimalSpec();
-      spec.bridge.teePubkey = '0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+      spec.bridge.cubesigner!.publicKey = '0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
       const output = generateSetupDefaultsToml(spec);
 
       expect(output).to.include('tee_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"');
@@ -1595,17 +1594,15 @@ describe('deployment-spec-generator', () => {
 
     it('includes TEE pubkey from the cubesigner role when bridge teePubkey is omitted', () => {
       const spec = createMinimalSpec();
-      spec.signing = {
-        cubesigner: {
+      spec.bridge.cubesigner = {
           roles: [
             { keys: [{ keyId: 'k1', keyType: 'secp256k1', materialId: 'm1', publicKey: '0x0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8' }], name: 'r1', roleId: 'id1' },
           ],
-        },
       };
       const output = generateSetupDefaultsToml(spec);
 
       expect(output).to.include('tee_pubkey = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"');
-      expect(output).not.to.include('attestation_pubkeys');
+      expect(toml.parse(output).attestation_pubkeys).to.deep.equal(spec.bridge.attestation.signers.map(signer => signer.attestationPubkey));
     });
   });
 
@@ -1806,7 +1803,7 @@ describe('deployment-spec-generator', () => {
 
     it('projects reviewed CubeSigner production policy evidence and key binding', () => {
       const spec = createMinimalSpec();
-      spec.signing!.cubesigner!.productionPolicy = {
+      spec.bridge.cubesigner!.productionPolicy = {
         policyArtifactDigest: `sha256:${'aa'.repeat(32)}`,
         policyIdentifier: 'dogeos_bridge/v1',
         programIdentityDigest: `sha256:${'cc'.repeat(32)}`,
@@ -1903,7 +1900,12 @@ describe('deployment-spec-generator', () => {
         expect(node.image.tag).to.equal('v0.3.0-beta.2');
         expect(node.reth.l1Url).to.equal('http://l1-interface:8545');
         expect(node.reth.trustedPeers).to.equal('');
-        expect(node.reth.extraArgs.slice(0, 2)).to.deep.equal(['--network.legacy-geth-header-transform', 'false']);
+        expect(node.reth.extraArgs).not.to.include('--network.legacy-geth-header-transform');
+        if (role === 'sequencer') {
+          expect(node.reth.extraArgs).not.to.include('--consensus.exit-on-signer-rotation');
+        } else {
+          expect(node.reth.extraArgs).to.include('--consensus.exit-on-signer-rotation');
+        }
         expect(node).not.to.have.property('configMaps');
       }
 
@@ -2424,7 +2426,7 @@ describe('monitoring template projection', () => {
 
   it('projects explicit transport-only policy even without Slack intent', () => {
     const spec = createMinimalSpec()
-    spec.signing.cubesigner = {mode: 'transport_only', roles: []}
+    spec.bridge.cubesigner = {mode: 'transport_only', roles: []}
     const files = generateValuesFiles(spec, 'serviceAlerts: {enabled: true}\n')
     const monitor = yaml.load(files['scroll-monitor-production.yaml']) as any
     expect(monitor.serviceAlerts).to.deep.equal({cubesignerPolicyMode: 'transport_only', enabled: true})

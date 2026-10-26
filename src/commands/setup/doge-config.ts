@@ -74,8 +74,6 @@ interface InitializeProofTopologyV2Options {
   witnessDir?: string
   witnessRpcUrl?: string
   witnessSource?: 'block_witness_dir' | 'rpc'
-  workerDeploymentBackend?: 'docker_compose' | 'kubernetes'
-  workerLaunch?: 'external' | 'local_cpu' | 'local_cuda'
 }
 
 interface InitializedProofTopology {
@@ -228,17 +226,11 @@ export class DogeConfigCommand extends Command {
       description: 'Chunk witness source used by real materialization',
       options: ['block_witness_dir', 'rpc'],
     }),
-    'proof-worker-deployment-backend': Flags.string({
-      dependsOn: ['proof-topology'],
-      description: 'Deployment adapter backend for local_cpu/local_cuda Workers',
-      options: ['docker_compose', 'kubernetes'],
-    }),
-    'proof-worker-launch': Flags.string({
-      dependsOn: ['proof-topology'],
-      description: 'Staged real Worker compute/ownership placement from the dogeos-core contract',
-      options: ['external', 'local_cpu', 'local_cuda'],
-    }),
+
   }
+
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
 
   private configPath: string = ''
   private dogeConfig: DogeConfig = {} as DogeConfig
@@ -305,15 +297,7 @@ export class DogeConfigCommand extends Command {
       witnessDir: flags['proof-witness-dir'],
       witnessRpcUrl: flags['proof-witness-rpc-url'],
       witnessSource: flags['proof-witness-source'] as 'block_witness_dir' | 'rpc' | undefined,
-      workerDeploymentBackend: flags['proof-worker-deployment-backend'] as
-        | 'docker_compose'
-        | 'kubernetes'
-        | undefined,
-      workerLaunch: flags['proof-worker-launch'] as
-        | 'external'
-        | 'local_cpu'
-        | 'local_cuda'
-        | undefined,
+
     })
 
     if (!fs.existsSync('.data')) {
@@ -845,7 +829,7 @@ export class DogeConfigCommand extends Command {
       }),
     )
     if (artifactSource === 'prepared-aws' && !proofAws) {
-      throw new Error('prepared-aws requires .data/proof-aws.json; run scrollsdk setup proof-aws-init first')
+      throw new Error('prepared-aws requires .data/proof-aws.json; run scrollsdk setup aws first')
     }
 
     const required = async (
@@ -959,33 +943,6 @@ export class DogeConfigCommand extends Command {
       'Enter the HTTPS Proof Coordinator URL reachable from proof Workers:',
       '--proof-coordinator-url',
     )
-    const workerLaunch = await resolveFlagOrPrompt(
-      options.workerLaunch,
-      options.nonInteractive,
-      existing?.active?.workerLaunch || 'external',
-      () => select({
-        choices: [
-          {name: 'External server when generation becomes real', value: 'external'},
-          {name: 'Adapter-managed CUDA Worker when generation becomes real', value: 'local_cuda'},
-          {name: 'Adapter-managed CPU Worker when generation becomes real', value: 'local_cpu'},
-        ],
-        default: existing?.active?.workerLaunch || 'external',
-        message: 'Select the staged real Worker compute/ownership placement:',
-      }),
-    ) as 'external' | 'local_cpu' | 'local_cuda'
-    const workerDeploymentBackend = await resolveFlagOrPrompt(
-      options.workerDeploymentBackend,
-      options.nonInteractive,
-      existing?.deployment.workerDeploymentBackend || 'docker_compose',
-      () => select({
-        choices: [
-          {name: 'Docker Compose bundle (for an adapter-managed server such as EC2)', value: 'docker_compose'},
-          {name: 'Kubernetes Deployment', value: 'kubernetes'},
-        ],
-        default: existing?.deployment.workerDeploymentBackend || 'docker_compose',
-        message: 'How should scroll-sdk-cli deploy adapter-managed CPU/CUDA Workers?',
-      }),
-    ) as 'docker_compose' | 'kubernetes'
     if (generation === 'mock') options.log(chalk.blue('Mock proofs are produced inside Proof Coordinator; no mock Worker will be deployed.'))
 
     const deadline = Number(await required(
@@ -1015,13 +972,6 @@ export class DogeConfigCommand extends Command {
           || existing?.active?.realScroll.chunkWitnessRpcUrl
           || options.config.rpc?.l2Url,
         witnessSource,
-        workerDeploymentBackend,
-        workerLaunch,
-        workerNodeSelector: existing?.deployment.workerNodeSelector,
-        workerResources: existing?.deployment.workerResources,
-        workerRuntimeClassName: existing?.deployment.workerRuntimeClassName,
-        workerSecretName: existing?.deployment.workerSecretName,
-        workerTolerations: existing?.deployment.workerTolerations,
       },
     })
     const materialization = topology.active?.profile === 'withdrawal_mock_prover_real_materialize'

@@ -110,6 +110,9 @@ export default class GenerateFromSpec extends Command {
     }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   public async run(): Promise<void> {
     const { flags } = await this.parse(GenerateFromSpec)
     const jsonCtx = new JsonOutputContext('setup generate-from-spec', flags.json)

@@ -172,7 +172,7 @@ stateDir = "/app/data"
 The compiler image pin was updated to the digest above. The obsolete deployment
 `mockWorkerImage` table was removed; the separate old material receipt is
 unchanged. Source changes mean the old generated deployment contract is stale:
-**rerun prep-charts and proof-config-check before any future install**.
+**rerun prep-charts and deployment-preflight before any future install**.
 The `Makefile` gained a guarded `install-eager-materializer` target using the
 local chart until publication. No Helm install or service restart was performed
 in this upgrade checkpoint. No WP/PC database, PVC, Secret or EC2 service was
@@ -216,7 +216,7 @@ and `c24bff010e525e4992eee41511bdd5cbd2f84313fd0cd3952881a1ced0ff73e7`.
    no delete permission or broad shared administrative role. The CLI preserves
    operator ServiceAccount settings; it does not provision eager IAM automatically.
 4. Run `scrollsdk setup prep-charts`, inspect all values changes, then
-   `scrollsdk setup proof-config-check`. Eager gets compiler-owned TOML, the same
+   `scrollsdk setup deployment-preflight`. Eager gets compiler-owned TOML, the same
    namespace materials and existing `genesis-config/genesis.json`. Do not type
    a second bucket/prefix/RPC authority into its production YAML.
 5. Stop WP scheduling before the final no-WF recheck. Take a consistent backup
@@ -261,7 +261,7 @@ scrollsdk setup doge-config --config .data/doge-config.toml -N \
   --proof-observe-real-proof-deadline-ms 1800000 --json
 scrollsdk setup prep-charts --doge-config .data/doge-config.toml -N \
   --skip-auth-check --skip-l2-contract-deployment-block --json
-scrollsdk setup proof-config-check --json
+scrollsdk setup deployment-preflight --json
 ```
 
 The skip flags above belong to this already-deployed-contract upgrade, not a

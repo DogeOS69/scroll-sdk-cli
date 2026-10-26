@@ -45,7 +45,7 @@ function checkSession(content: string, role: CubesignerRole, options: Options): 
   if (env?.['Dev-CubeSignerStack']?.SignerApiRoot?.replace(/\/$/, '') !== api.origin || session.org_id !== options.organization || session.role_id !== role.role_id) throw new Error('Session environment, organization or role does not match checkpoint selection')
   const expiration = cubesignerSessionExpiration(session)
   const info = session.session_info as {refresh_token_exp?: number} | undefined
-  if (typeof expiration !== 'number' || expiration <= Date.now() / 1000 || typeof info?.refresh_token_exp !== 'number' || info.refresh_token_exp <= Date.now() / 1000) throw new Error('CubeSigner signing session or refresh token is expired; run cubesigner-refresh with management login')
+  if (typeof expiration !== 'number' || expiration <= Date.now() / 1000 || typeof info?.refresh_token_exp !== 'number' || info.refresh_token_exp <= Date.now() / 1000) throw new Error('CubeSigner signing session or refresh token is expired; run scrollsdk cubesigner refresh-session with management login')
   if (typeof session.token !== 'string' || !session.token || typeof session.refresh_token !== 'string' || !session.refresh_token) throw new Error('CubeSigner signing session is incomplete')
 }
 

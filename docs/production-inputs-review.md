@@ -1,4 +1,15 @@
+> CLI entrypoint update (2026-10-23): session maintenance now uses `cubesigner refresh-session`, RPC package export `rpc export`, status pages `monitoring status-page`, and contract source verification `contracts verify`. Commands below record the historical execution.
+
 # Production input review and configuration rehearsal
+
+> Historical execution record: removed setup commands below describe the recorded run, not the current interface. Use `setup render`, `setup proof-materials`, `setup proof-publish` and `setup deployment-preflight` for the saved-spec workflow.
+
+
+> Workflow update (2026-10-23): this document retains historical commands and
+> design assumptions. `setup cubesigner-init` has been removed. Current staged
+> deployments select an existing `bridge.cubesigner.identity` before `setup plan`
+> and prepare runtime sessions with `setup signer-session`. See
+> [the current preparation guide](spec-preparation.md).
 
 Reviewed on 2026-10-08 against the production input inventory in
 `dogeos-core/docs/production-service-inputs-and-generation.md`.

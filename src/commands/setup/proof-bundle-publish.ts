@@ -35,6 +35,9 @@ export default class ProofBundlePublish extends Command {
     'topology-bundle': Flags.string({default: DEFAULT_PROOF_TOPOLOGY_OUTPUT, description: 'Installable active/real compiler bundle containing the tag-5 manifest'}),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   async run(): Promise<void> {
     const {flags} = await this.parse(ProofBundlePublish)
     const output = new JsonOutputContext('setup proof-bundle-publish', flags.json)

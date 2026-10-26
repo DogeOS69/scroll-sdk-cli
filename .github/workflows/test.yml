@@ -57,10 +57,8 @@ jobs:
           python-version: '3.12'
       - name: Validate pinned SDK installation recipes
         run: python .test-sdk-nlb/examples/tests/test_makefile_context.py
-      - name: Validate native dstack worker models and lifecycle offline
+      - name: Validate Capacity Manager dependency probes offline
         run: |
           python -m pip install 'dstack==0.21.5'
-          python scripts/test-proof-workers-controller.py
-          python scripts/test-capacity-manager-fleets.py
           python scripts/test-capacity-manager-preflight.py
       - run: yarn test

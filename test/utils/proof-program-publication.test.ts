@@ -576,7 +576,7 @@ describe('real-proof program bundle publication', () => {
     expect(fs.readdirSync(root).filter(name => name.startsWith('deployment-kit-'))).to.deep.equal([])
   })
 
-  it('setup apply writes the same kit as the CLI writer, from any working directory', async () => {
+  it('setup signer-kit writes the same kit as the CLI writer, from any working directory', async () => {
     const {options} = deploymentKitFixture()
     const cwd = process.cwd()
     process.chdir(os.tmpdir())
@@ -589,15 +589,15 @@ describe('real-proof program bundle publication', () => {
     }
   })
 
-  for (const staged of [false, true]) it(`runs kit steps through the ${staged ? 'signer-kit stages' : 'legacy apply'} runner: wait, record, then resume as a no-op`, async () => {
+  it('runs kit stages: wait, record, then resume as a no-op', async () => {
     deploymentKitFixture()
     const runner = new CommandPreparationRunner(async () => {throw new Error('no CLI subprocess for kit steps')})
-    const step = (id: string) => ({effect: 'local' as const, id, retry: 'safe' as const, ...(staged ? {stage: id === 'deployment-kit' ? 'signer-kit' as const : 'signer-kit-publish' as const} : {}), title: id})
+    const step = (id: string) => ({effect: 'local' as const, id, retry: 'safe' as const, stage: id === 'deployment-kit' ? 'signer-kit' as const : 'signer-kit-publish' as const, title: id})
     const run = async (id: string) => {try {await runner.run(step(id), {preparation: {bridge: {image: 'unused', mode: 'helper'}}} as unknown as DeploymentSpec, root, {} as PreparationPlan); return ''} catch (error) {return error instanceof AwaitingInput ? `waiting: ${error.message}` : String(error)}}
     expect(await run('deployment-kit')).to.equal('')
     expect(await run('deployment-kit-published')).to.match(/^waiting: Waiting for the deployment kit/)
     const request = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/inputs/deployment-kit/request.json'), 'utf8'))
-    expect(request.instructions).to.include(staged ? 'rerun scrollsdk setup signer-kit-publish' : 'rerun scrollsdk setup apply')
+    expect(request.instructions).to.include('rerun scrollsdk setup signer-kit-publish')
     fs.writeFileSync(path.join(root, '.scrollsdk/inputs/deployment-kit/published.json'), JSON.stringify({manifest_sha256: request.manifestSha256, url: 'https://kits.example.com/k.tgz'}))
     expect(await run('deployment-kit-published')).to.equal('')
     const recorded = fs.readFileSync(path.join(root, '.data/doge-config.toml'))

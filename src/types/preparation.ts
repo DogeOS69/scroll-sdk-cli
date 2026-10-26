@@ -27,7 +27,7 @@ export interface PreparationConfig {
     }
   }
   databases?: Array<'blockscout'>
-  /** Explicit S3 publication owns only deployment-kits/<version>/ reads; omission keeps manual publication. */
+  /** Explicit S3 publication writes <keyPrefix>/deployment-kits/<version>/ and ensures the deployment's read grant; omission keeps manual publication. */
   deploymentKitPublication?: {awsProfile?: string; mode: 'manual' | 's3'}
   dstack?: {
     /** Existing AWS networking; controller uses its workload role, never static access keys. */

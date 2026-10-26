@@ -71,6 +71,16 @@ function proofFixture(): DeploymentSpec {
 }
 
 describe('spec intent through configuration and values projection', () => {
+  it('projects status-page intent and metadata environment independently from the Dogecoin network', () => {
+    const spec = fixture()
+    spec.metadata.environment = 'devnet'
+    spec.monitoring = {slack: {enabled: true}, statusPage: {enabled: true}}
+    const generated = toml.parse(generateAllConfigs(spec)['doge-config.toml']) as any
+    expect(generated.monitoring).deep.eq({environment: 'devnet', slack: {enabled: true}, statusPage: {enabled: true}})
+    spec.monitoring.statusPage = {enabled: 'yes' as any}
+    expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'monitoring.statusPage.enabled')).eq(true)
+  })
+
   it('generates the frontend gas oracle from the same selection as genesis', () => {
     const spec = fixture()
     for (const override of [undefined, '0x0000000000000000000000000000000000000012']) {
@@ -266,7 +276,7 @@ describe('spec intent through configuration and values projection', () => {
       fs.writeFileSync(configPath, content)
       const result = spawnSync(process.execPath, [path.join(cliRoot, 'bin/run.js'), 'setup', 'eth-da-submitter', '--doge-config', configPath,
         '--archive-bucket', 'audit-proofs', '--no-create-archive-bucket', '-N', '--json'], {
-        cwd: root, encoding: 'utf8', env: {OCLIF_TEST_ROOT: cliRoot, PATH: process.env.PATH},
+        cwd: root, encoding: 'utf8', env: {OCLIF_TEST_ROOT: cliRoot, PATH: process.env.PATH, SCROLLSDK_PREPARATION_STEP: 'archive'},
       })
       expect(result.status).not.to.equal(0)
       expect(result.stdout + result.stderr).to.include('separate prefixes')
@@ -390,16 +400,11 @@ describe('spec intent through configuration and values projection', () => {
     } finally {fs.rmSync(root, {force: true, recursive: true})}
   })
 
-  it('rejects impossible, duplicate and empty initial signer selections', () => {
-    for (const keyset of [
-      {signerIds: ['partner-a'], threshold: 99},
-      {signerIds: ['partner-a', 'partner-a'], threshold: 1},
-      {signerIds: [], threshold: 1},
-      {signerIds: ['partner-a'], threshold: 0},
-    ]) {
+  it('rejects impossible initial signer thresholds', () => {
+    for (const threshold of [99, 0, -1, 1.5]) {
       const spec = fixture()
-      spec.bridge.initialAttestationKeyset = keyset
-      expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'bridge.initialAttestationKeyset')).to.equal(true)
+      spec.bridge.attestation.threshold = threshold
+      expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'bridge.attestation.threshold')).to.equal(true)
     }
   })
 
@@ -417,13 +422,13 @@ describe('spec intent through configuration and values projection', () => {
     const command = (...args: string[]) => execFileSync(process.execPath, [path.join(cliRoot, 'bin/run.js'), ...args], {cwd: root, env: {OCLIF_TEST_ROOT: cliRoot, PATH: process.env.PATH}, stdio: 'pipe'})
     try {
       const spec = fixture()
-      spec.bridge.initialAttestationKeyset = {signerIds: ['partner-c', 'partner-a'], threshold: 1}
+      const publicKey = () => {const key = createECDH('secp256k1'); key.generateKeys(); return key.getPublicKey('hex', 'compressed')}
+      spec.bridge.attestation = {signers: ['partner-c', 'partner-a'].map(name => ({attestationPubkey: publicKey(), name, transportPubkey: publicKey()})), threshold: 1}
       fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
       command('setup', 'generate-from-spec', '--spec', 'intent.yaml', '--json')
       fs.mkdirSync(path.join(root, 'descriptors'))
-      const publicKey = () => {const key = createECDH('secp256k1'); key.generateKeys(); return key.getPublicKey('hex', 'compressed')}
       for (const id of ['partner-a', 'partner-b', 'partner-c']) {
-        fs.writeFileSync(path.join(root, 'descriptors', `${id}.json`), JSON.stringify({id, network: 'testnet', publicKey: publicKey(), schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA, transportPubkey: publicKey()}))
+        fs.writeFileSync(path.join(root, 'descriptors', `${id}.json`), JSON.stringify({id, network: 'testnet', publicKey: spec.bridge.attestation.signers.find(signer => signer.name === id)?.attestationPubkey ?? publicKey(), schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA, transportPubkey: spec.bridge.attestation.signers.find(signer => signer.name === id)?.transportPubkey ?? publicKey()}))
       }
 
       command('setup', 'attestation-signer', '--json')

@@ -63,16 +63,18 @@ producer、CUDA Worker、coordinator、topology compiler、publisher。
 不能再用旧版单个 mock/production 参数代替。
 
 1. 配置共享 artifact store 与 `setup proof-aws-init` 的读取方式。已有共享桶
-   使用 `existing-public-s3` 或 `existing-gateway`；需要补充权限时，通过
-   `setup artifact-access` 先查看计划，再显式使用 `--apply`。
-2. 按 [proof configuration transactions](proof-config-transactions.md) 准备
-   request、release manifest 和 SHA-256，运行 `setup proof-config prepare`。
+   使用 `existing-public-s3` 或 `existing-gateway`。`existing-public-s3` 会确认本部署前缀
+   下外部读取路径（含 `deployment-kits/`）可匿名读取，缺失时只添加本部署自己的授权语句，
+   不改其他语句和 Public Access Block。DA/snapshot 桶的权限通过 `artifacts access`
+   先查看计划，再显式使用 `--apply`。
+2. 按 [saved-spec proof 工作流](proof-config-transactions.md)，在 spec 中固定
+   release、proof mode 和运行意图，执行 `setup proof-materials --dir .`。
+   不再接收独立 proof request JSON，也不支持旧 prepared transaction。
    real 和 release mock 都使用 producer bake 的身份；materializer 从匹配的
    coordinator 镜像提取。
-3. 检查生成目录中的配置、收据及发布计划。real generation 还需通过 CUDA
-   Worker 身份检查；mock generation 不生成 Worker 部署契约。
-4. `setup proof-config publish` 的预览不会写入 S3；发布材料需要显式 `--apply`。
-   这一步不代表服务部署或真实 GPU 证明验收完成。
+3. 检查生成的配置和回执；real generation 还需通过 CUDA Worker 身份检查。
+4. `setup proof-publish --dir .` 执行保存计划中的 S3 发布并验证 readback。
+   完成后按阶段继续 signer kit 和 render；这不代表真实 GPU 证明验收完成。
 
 诊断和单步操作见 [proof release workflow](proof-release-workflow.md)。
 公开 artifact 读取不包含 signer session、RPC 密码或 proof bearer token。

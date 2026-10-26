@@ -40,7 +40,7 @@ process, and mock generation compiles with the bake's
 `bridge/worker-identity-bundle.json` minus `bridge_guest`, which is the release
 Worker's own `--print-identity-json`.
 
-`setup proof-config prepare` runs the whole chain below from that manifest.
+`setup proof-materials` runs the preparation chain from the release pinned in the saved plan; `setup proof-publish` owns publication. The lower-level commands below describe internal implementation.
 To run only the bake, use:
 
 ```bash
@@ -152,7 +152,7 @@ Worker program files.
 scrollsdk setup doge-config --proof-topology
 scrollsdk setup proof-topology-compile --deployment-dir . --preflight real
 scrollsdk setup prep-charts
-scrollsdk setup proof-config-check --json
+scrollsdk setup deployment-preflight --json
 ```
 
 Review the generated configuration before any cluster apply. In particular,
@@ -211,11 +211,12 @@ part of the program bundle.
 
 ## 6. What remains explicit
 
-After publication, render/hydrate the normal Worker handoff and run
-`proof-worker-check` on the Worker host. Starting dstack, selecting a Vast/dstack
-offer, renting a GPU, and enabling real enforcement remain separately approved
-operator actions. A label check and successful S3 publication are preparation
-evidence; they are not proof-generation acceptance.
+After publication, render the Capacity Manager configuration and install it
+after the proof services, dstack and Secrets are ready. Use
+`scrollsdk capacity-manager probe --kube-context YOUR_CONTEXT` to check runtime
+dependencies. Installing the manager can allocate paid GPUs within its policy.
+Successful publication and dependency checks are preparation evidence; actual
+proof generation and enabling real enforcement require separate acceptance.
 
 ## Real published-image regression
 

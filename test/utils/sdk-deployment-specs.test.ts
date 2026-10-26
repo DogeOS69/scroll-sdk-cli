@@ -42,7 +42,7 @@ describe('paired SDK deployment starters', () => {
 
     for (const [index, binding] of Object.values(aws.alb!.bindings).entries()) binding.targetGroupArn = `${prefix}targetgroup/fixture-${index}/${String(index).padStart(16, '0')}`
     spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet).toAddress().toString()
-    for (const signer of spec.attestationSigners ?? []) {
+    for (const signer of spec.bridge.attestation.signers ?? []) {
       signer.attestationPubkey = new bitcore.PrivateKey().toPublicKey().toString()
       signer.transportPubkey = new bitcore.PrivateKey().toPublicKey().toString()
     }

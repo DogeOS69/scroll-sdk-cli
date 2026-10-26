@@ -77,6 +77,19 @@ export function resolveSdkRevision(sdkDirectory: string, override?: string): str
   } catch {throw new Error('Cannot resolve SDK commit in --sdk-dir')}
 }
 
+/** Reject chart pins that silently ignore fleet initialization or endpoint binding. */
+export function assertCapacityChartVersions(makefile: string, spec: DeploymentSpec): void {
+  if (!spec.capacityManager) return
+  const charts = ['CAPACITY_MANAGER', ...(spec.capacityManager.connection?.mode === 'existing-alb' ? ['DSTACK_CONTROLLER'] : [])]
+  for (const chart of charts) {
+    const pin = makefile.match(new RegExp(`^${chart}_CHART_VERSION\\s*(?:\\?=|:=|=)\\s*([^\\s#]+)`, 'm'))?.[1]
+    // Custom installation flows without Makefile pins must select compatible charts.
+    if (!pin) continue
+    const version = pin.match(/^(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/)
+    if (!version || Number(version[1]) === 0 && (Number(version[2]) < 1 || Number(version[2]) === 1 && Number(version[3]) < 6)) throw new Error(`${chart} requires chart >= 0.1.6 for fleet initialization/private endpoint binding; select a compatible templates.sdkRevision and chart pin`)
+  }
+}
+
 /** Build a reviewable file plan from committed templates, never a mutable working tree. */
 export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): Record<string, string> {
   validateBridgeHistory(spec)
@@ -102,6 +115,7 @@ export function planSpecBootstrap(spec: DeploymentSpec, sdkDirectory?: string): 
     delete hashes['values/l1-devnet-production.yaml']
   }
 
+  assertCapacityChartVersions(files.Makefile, spec)
   if (spec.capacityManager && !files['values/capacity-manager-production.yaml']) throw new Error('Selected SDK revision lacks capacity-manager templates; use SDK PR #145 or a release containing it')
   if (!spec.capacityManager) {
     delete files['values/capacity-manager-production.yaml']

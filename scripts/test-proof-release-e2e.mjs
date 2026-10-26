@@ -49,7 +49,7 @@ const spec = await resolvePreparationProofRelease({
 const selected = readProofSoftwareRelease(spec.preparation.proofRelease.manifest, spec.preparation.proofRelease.sha256);
 console.log(JSON.stringify({root, release: version, coreRevision: selected.manifest.revision, sdkRevision: revision}));
 const runner = new CommandPreparationRunner();
-for (const id of ['proof-release-bake', 'proof-materializer-export', 'proof-worker-check', 'proof-materials']) {
+for (const id of ['proof-release-bake', 'proof-materializer-export', 'proof-worker-image-check', 'proof-materials']) {
   console.log(JSON.stringify({step: id, status: 'running'}));
   await runner.run({id, effect: 'local', retry: 'safe', title: id}, spec, root, {});
   console.log(JSON.stringify({step: id, status: 'passed'}));

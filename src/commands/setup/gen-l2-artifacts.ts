@@ -124,6 +124,9 @@ export default class SetupGenL2Artifacts extends Command {
     }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   protected jsonCtx!: JsonOutputContext
   protected jsonMode: boolean = false
   protected nonInteractive: boolean = false

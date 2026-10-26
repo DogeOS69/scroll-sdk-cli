@@ -29,7 +29,7 @@ describe('TSO signer poll liveness', () => {
     expect(signerLiveness(keys, metrics([[keys[0], now], [keys[1], now + 6]]), now).passed).to.equal(false)
   })
 
-  it('accepts an enforcing deployment only when every registered Attestation signer polls (proof-config-check --live)', async () => {
+  it('accepts an enforcing deployment only when every registered Attestation signer polls (deployment-preflight --proof-live)', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tso-signer-live-'))
     try {
       fs.mkdirSync(path.join(root, 'values'))
