@@ -37,7 +37,7 @@ The following manual recovery changes are now recorded in production values:
   `DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL`. Follow the instance runbook's
   selective, prefix-aware Secret reconciliation after generation, including
   the four indexed Reth node identities. Re-export the signer policy bundle and
-  run `setup proof-config-check`. Do not edit files concurrently with prep-charts.
+  run `setup deployment-preflight`. Do not edit files concurrently with prep-charts.
 - Render and validate the intended Helm update, then run
   `make install-eth-da-submitter`. Makefile Helm calls explicitly select the
   devnet context below. Recovery completed with Helm revision 2.

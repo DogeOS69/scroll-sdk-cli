@@ -12,7 +12,6 @@ import {
   normalizeRethSignerPrivateKey,
   parseSequencerRethKmsAlias,
   shouldReuseExistingSequencerRethKmsKey,
-  shouldReuseExistingSequencerRethRoleArn,
 } from '../../../src/commands/setup/l2-sequencer-reth.js'
 
 describe('setup l2-sequencer-reth', () => {
@@ -78,15 +77,11 @@ describe('setup l2-sequencer-reth', () => {
     }
     const matchingAlias = 'alias/dogeos/devnet0/dogeos-devnet-cluster/sequencer-reth-0'
     const oldAlias = 'alias/dogeos/shutest/dogeos-devnet-cluster/sequencer-reth-0'
-    const matchingRoleArn = 'arn:aws:iam::123456789012:role/dogeos-devnet0-dogeos-devnet-cluster-sequencer-reth-0-kms'
-    const oldRoleArn = 'arn:aws:iam::123456789012:role/dogeos-shutest-dogeos-devnet-cluster-sequencer-reth-0-kms'
 
     expect(getSequencerRethDefaultKmsAlias(0, identity)).to.equal(matchingAlias)
     expect(getSequencerRethDefaultKmsRoleName(0, identity)).to.equal('dogeos-devnet0-dogeos-devnet-cluster-sequencer-reth-0-kms')
     expect(shouldReuseExistingSequencerRethKmsKey(matchingAlias, 0, identity)).to.equal(true)
     expect(shouldReuseExistingSequencerRethKmsKey(oldAlias, 0, identity)).to.equal(false)
-    expect(shouldReuseExistingSequencerRethRoleArn(matchingRoleArn, 0, identity)).to.equal(true)
-    expect(shouldReuseExistingSequencerRethRoleArn(oldRoleArn, 0, identity)).to.equal(false)
   })
 
   it('writes plain local key material as a mounted Secret and removes external secret references', () => {

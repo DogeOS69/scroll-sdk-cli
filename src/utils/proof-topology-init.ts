@@ -4,7 +4,6 @@ import type {
   ProofGeneration,
   ProofTopologyArtifactStoreConfig,
   ProofTopologySpec,
-  ProofWorkerDeploymentBackend,
   ProofWorkerLaunch,
 } from '../types/proof-topology.js'
 
@@ -25,13 +24,7 @@ export interface ProofTopologyRuntimeInput {
   publicS3EndpointUrl?: string
   rpcWitnessUrl?: string
   witnessSource?: 'block_witness_dir' | 'rpc'
-  workerDeploymentBackend?: ProofWorkerDeploymentBackend
   workerLaunch?: ProofWorkerLaunch
-  workerNodeSelector?: Record<string, string>
-  workerResources?: ProofTopologySpec['deployment']['workerResources']
-  workerRuntimeClassName?: string
-  workerSecretName?: string
-  workerTolerations?: ProofTopologySpec['deployment']['workerTolerations']
 }
 
 export interface BuildProofTopologyOptions {
@@ -144,7 +137,7 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
     throw new Error('real proof materialization with RPC witnesses requires a witness RPC URL')
   }
 
-  const workerLaunch = options.runtime.workerLaunch ?? (generation === 'mock' ? 'local_cpu' : 'external')
+  const workerLaunch = options.runtime.workerLaunch ?? 'external'
   const root = proofMaterialsRoot(materials)
   const {artifacts} = materials.software
   const realScroll = {
@@ -210,13 +203,7 @@ export function buildProofTopology(options: BuildProofTopologyOptions): ProofTop
         : undefined,
       readinessEvidencePath: '/run/dogeos/prover-worker-ready-v1.json',
       resourcesMountPath: '/app/data/proof-materials',
-      workerDeploymentBackend: options.runtime.workerDeploymentBackend ?? 'docker_compose',
-      workerNodeSelector: options.runtime.workerNodeSelector,
-      workerResources: options.runtime.workerResources,
-      workerRuntimeClassName: options.runtime.workerRuntimeClassName,
-      workerSecretName: options.runtime.workerSecretName,
       workerTokenFile: '/app/secrets/prover-worker-token',
-      workerTolerations: options.runtime.workerTolerations,
     },
     enforcement: options.enforcement ?? 'observe',
     generation,

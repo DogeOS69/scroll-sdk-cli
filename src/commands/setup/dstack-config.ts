@@ -16,6 +16,7 @@ import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 
 export default class DstackConfig extends Command {
   static override description = 'Import provider credentials and AWS workload-role configuration locally and configure dstack controller Secret references'
+
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --vastai-api-key-file /private/vastai-key --gcp-service-account /private/service-account.json -N',
@@ -35,6 +36,9 @@ export default class DstackConfig extends Command {
     'vastai-api-key-env': Flags.string({description: 'Environment variable containing the Vast.ai API key', exclusive: ['vastai-api-key-file']}),
     'vastai-api-key-file': Flags.string({description: 'Path to a file containing only the Vast.ai API key; avoids credentials in command arguments', exclusive: ['vastai-api-key-env']}),
   }
+
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
 
   protected override async catch(error: Error): Promise<void> {
     if (error instanceof CliExitError) {

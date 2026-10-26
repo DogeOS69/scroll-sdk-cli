@@ -50,23 +50,47 @@ use their own deployment directories.
 
 ## Generate, inspect, apply
 
+Configure the deployment spec:
+
+```yaml
+monitoring:
+  statusPage:
+    enabled: true
+```
+
+`setup render` generates local status-page configuration automatically. The
+status-page environment comes from `metadata.environment`, independently of the
+Dogecoin network. Keep component publication policy, sources and health overrides
+in the monitor values (or the spec's `helmValues` overlay). When the spec declares
+status-page intent, overlays must not redefine `statusPage.enabled` or
+`statusPage.environment`. Existing page/component bindings and publication policy
+are preserved on repeated renders. Disabling an already generated publication
+requires explicit cleanup; changing its environment requires a separate deployment.
+Missing health inputs for automatic components remain validation errors.
+
+`scroll-monitor` evaluates health and publishes ongoing status updates. Render
+does not create Instatus resources or obtain webhook credentials. Use the explicit
+provider commands below to initialize or maintain those bindings; install the
+private webhook Secrets through the deployment's Secret workflow before deploying
+the chart. The Instatus management API key stays outside the runtime.
+
 Run these commands from the deployment directory, using a CLI build containing
-`setup status-page`:
+`monitoring status-page`:
 
 ```bash
-# Offline: read this deployment's files and update local monitor values.
-scrollsdk setup status-page
+# Generate configuration through the saved preparation plan.
+scrollsdk setup render --dir .
 
 # Optional: read Instatus and print create/update/unchanged actions.
 # Does not modify local files or Instatus; reads INSTATUS_API_KEY from the private deployment.env or process environment.
-scrollsdk setup status-page --plan
+scrollsdk monitoring status-page --plan
 
 # Explicit remote mutation; creates or reconciles the selected page and components.
-scrollsdk setup status-page --apply
+scrollsdk monitoring status-page --apply
 ```
 
-All modes regenerate the desired catalog in memory from current inputs before
-using it. Default generation writes only the selected monitor values file.
+Both provider modes reconcile the desired catalog in memory before using it.
+The command requires either `--plan` or `--apply`; local generation belongs to `setup render`.
 `--plan` is read-only. `--apply` saves generated values, reconciles Instatus, and
 persists returned page/component IDs after each successful operation.
 `--plan` and `--apply` are mutually exclusive. `--json` emits structured results.
@@ -74,7 +98,7 @@ persists returned page/component IDs after each successful operation.
 Paths can be selected explicitly:
 
 ```bash
-scrollsdk setup status-page --deployment-dir /path/to/deployment \
+scrollsdk monitoring status-page --plan --deployment-dir /path/to/deployment \
   --config config.toml --values values/scroll-monitor-production-0.yaml
 ```
 
@@ -208,10 +232,10 @@ the process environment. File-provisioned contact points are read-only in the UI
 First initialization is explicit; ordinary redeployment reuses the saved URL:
 
 ```bash
-scrollsdk setup status-page --plan --create-webhook
-scrollsdk setup status-page --apply --create-webhook
+scrollsdk monitoring status-page --plan --create-webhook
+scrollsdk monitoring status-page --apply --create-webhook
 # Later deployments:
-scrollsdk setup status-page --apply
+scrollsdk monitoring status-page --apply
 ```
 
 The CLI calls the official `POST /v3/integrations` endpoint with `pageId`,
@@ -267,8 +291,8 @@ To adopt an existing integration, recover an uncertain creation or rotate the
 URL, copy the selected page's URL into a private text file outside Git, then:
 
 ```bash
-scrollsdk setup status-page --plan --webhook-url-file /private/instatus-grafana.url
-scrollsdk setup status-page --apply --webhook-url-file /private/instatus-grafana.url
+scrollsdk monitoring status-page --plan --webhook-url-file /private/instatus-grafana.url
+scrollsdk monitoring status-page --apply --webhook-url-file /private/instatus-grafana.url
 ```
 
 Import checks URL format, but the operator must verify its page and network/component associations in
@@ -413,12 +437,14 @@ modes stop the component's verifier activity when deployed, preserving bindings 
 incidents. Use manual mode before taking over a public incident.
 
 ```sh
-# Offline, also export separate probe-chart values; set image/location before deploying.
-scrollsdk setup status-page --probe-values values/status-page-probe-production.yaml
+# Generate local configuration.
+scrollsdk setup render --dir .
+# External probe mode only: add --probe-values values/status-page-probe-production.yaml
+# to the explicit --apply command; set image/location before deploying those probes.
 # Read-only review, including incident policy and heartbeat target state.
-scrollsdk setup status-page --plan --create-webhook
+scrollsdk monitoring status-page --plan --create-webhook
 # Create/reuse selected component integrations and optional Cron Monitor.
-scrollsdk setup status-page --apply --create-webhook
+scrollsdk monitoring status-page --apply --create-webhook
 ```
 
 Export preserves top-level image/location options and regenerates `config`. Run

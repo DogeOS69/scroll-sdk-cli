@@ -39,6 +39,9 @@ export class AttestationSignerCommand extends Command {
     threshold: Flags.string({ description: 'Initial bridge attestation threshold (T of the active set)' }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   async run(): Promise<void> {
     const { flags } = await this.parse(AttestationSignerCommand)
     const json = new JsonOutputContext('setup attestation-signer', flags.json)

@@ -10,7 +10,6 @@ import { parseTomlConfig } from '../../utils/config-parser.js'
 import {existingAlbIngress, readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
 import {verifyExistingAlbTargetHealth} from '../../utils/existing-alb-runtime.js'
 import {specKubernetesTarget} from '../../utils/spec-kubernetes-target.js'
-import Alb from '../setup/alb.js'
 
 export default class TestIngress extends Command {
   static override description = 'Check for required ingress hosts and validate frontend URLs'
@@ -39,14 +38,10 @@ export default class TestIngress extends Command {
     let kubeContext: string | undefined
     if (flags.config) this.loadConfig(flags.config)
     if (spec?.infrastructure.aws?.alb) {
-      const args = ['--values-dir', flags['values-dir'], '--require-services']
-      if (flags.spec) args.push('--spec', flags.spec)
-      if (flags.namespace) args.push('--namespace', flags.namespace)
-      if (flags['aws-profile']) args.push('--aws-profile', flags['aws-profile'])
-      await Alb.run(args, this.config)
+      const target = specKubernetesTarget(spec)
+      if (flags.namespace && flags.namespace !== target.namespace) throw new Error('Namespace must match the deployment spec')
       const healthy = verifyExistingAlbTargetHealth(spec, new AwsCliRunner(flags['aws-profile']))
       this.log(`Existing ALB targets healthy: ${healthy.join(', ')}. Selected bindings do not require Kubernetes Ingress objects.`)
-      const target = specKubernetesTarget(spec)
       kubeContext = target.kubeContext
       namespace = target.namespace
       const values = readAlbValues(flags['values-dir'])

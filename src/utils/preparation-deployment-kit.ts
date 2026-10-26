@@ -7,6 +7,7 @@ import {type KitPublicationDependencies, publishDeploymentKit} from './deploymen
 import {DEPLOYMENT_KIT_PROTOCOL_CONTEXT, recordDeploymentKitPublication} from './deployment-kit-record.js'
 import {loadDogeConfigWithSelection} from './doge-config.js'
 import {AwaitingInput, localPath, writeJson} from './preparation-io.js'
+import {readOptionalProofAwsConfig} from './proof-aws-config.js'
 import {validateProofDeploymentContract} from './proof-deployment-contract.js'
 import {resolveProofIntent, validateProofIntentBinding} from './proof-intent.js'
 import {deriveTsoUrl} from './signer-policy-derivation.js'
@@ -17,6 +18,8 @@ const INBOX = '.scrollsdk/inputs/deployment-kit'
 export async function publishPreparationDeploymentKit(root: string, profile?: string, dependencies?: KitPublicationDependencies): Promise<{manifest_sha256: string; url: string; version: string}> {
   const {configPath, kit} = await exportPreparationDeploymentKit(root)
   const {store} = readProofArtifactStore(root, configPath)
+  // S3 publication grants anonymous S3 reads; a gateway-served bucket keeps reads behind its gateway.
+  if (readOptionalProofAwsConfig(root)?.config.artifactReadTransport.publicReadMode === 'existing-gateway') throw new Error('Proof artifacts are served through an operator gateway; publish the kit through that gateway and record it with manual publication')
   const published = await publishDeploymentKit(kit, store, profile, dependencies)
   const current = await exportPreparationDeploymentKit(root)
   if (current.kit.manifestSha256 !== kit.manifestSha256) throw new Error('Deployment kit inputs changed during publication; export and publish the current version')
@@ -31,7 +34,7 @@ export async function publishPreparationDeploymentKit(root: string, profile?: st
  * no-op; changed inputs give a new version in a new directory.
  */
 export async function exportPreparationDeploymentKit(root: string): Promise<{configPath: string; kit: DeploymentKitRecord}> {
-  const {config, configPath} = await loadDogeConfigWithSelection(localPath(root, '.data/doge-config.toml'), 'setup apply')
+  const {config, configPath} = await loadDogeConfigWithSelection(localPath(root, '.data/doge-config.toml'), 'setup signer-kit')
   const intent = resolveProofIntent({deploymentDir: root, dogeConfig: config, dogeConfigPath: configPath, required: true})!
   validateProofIntentBinding(validateProofDeploymentContract(root), intent)
   const tsoUrl = deriveTsoUrl(localPath(root, 'config.toml'))?.value
@@ -44,7 +47,7 @@ export async function exportPreparationDeploymentKit(root: string): Promise<{con
  * the current kit unchanged and saved its URL and manifest SHA-256 in
  * `.scrollsdk/inputs/deployment-kit/published.json`, then record it.
  */
-export async function awaitDeploymentKitPublication(root: string, resumeCommand = 'scrollsdk setup apply'): Promise<void> {
+export async function awaitDeploymentKitPublication(root: string, resumeCommand = 'scrollsdk setup signer-kit-publish'): Promise<void> {
   const {configPath, kit} = await exportPreparationDeploymentKit(root)
   const kitDirectory = path.relative(root, kit.kitDir)
   writeJson(localPath(root, `${INBOX}/request.json`), {

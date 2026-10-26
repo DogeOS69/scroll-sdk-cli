@@ -7,7 +7,6 @@ import * as path from 'node:path'
 import type {ProofTopologySpec} from '../../src/types/proof-topology.js'
 import type {ValidatedProofTopologyBundle} from '../../src/utils/proof-topology-compiler.js'
 
-import {PROVER_WORKER_EXECUTABLE} from '../../src/utils/compiled-prover-worker-bundle.js'
 import {configureEagerMaterializerValues, reconcileCompiledProofTopology} from '../../src/utils/proof-topology-kubernetes-adapter.js'
 
 const BUNDLE_REVISION = 'b'.repeat(64)
@@ -20,7 +19,6 @@ const WORKER_ARGV = [
 
 function topology(
   mode: 'active' | 'disabled',
-  workerDeploymentBackend: 'docker_compose' | 'kubernetes' = 'docker_compose',
 ): ProofTopologySpec {
   const hex32 = (character: string) => `0x${character.repeat(64)}`
   const hex64 = (character: string) => `0x${character.repeat(128)}`
@@ -46,14 +44,13 @@ function topology(
         l2RangeAggregationVerificationKeyHashHex: hex32('c'),
         resourcesRoot: '.data/proof-materials',
       },
-      workerLaunch: 'local_cpu',
+      workerLaunch: 'external',
     },
     compiler: {image: {digest: IMAGE_DIGEST, repository: 'dogeos69/dogeos-proof-topology'}},
     deployment: {
       artifactKeyPrefix: 'proof-topology',
       mockWorkerImage: {digest: IMAGE_DIGEST, repository: 'dogeos69/prover-worker-mock'},
       proverPublicUrl: 'https://proof-coordinator.example.com',
-      workerDeploymentBackend,
     },
     enforcement: 'observe',
     generation: 'mock',
@@ -82,10 +79,10 @@ function fakeBundle(root: string, mode: 'active' | 'disabled', generation: 'mock
   const worker = mode === 'active' && generation === 'real' ? {
     argv: WORKER_ARGV,
     capabilities: ['scroll_chunk'],
-    desired_state: 'local_deployment' as const,
+    desired_state: 'external' as const,
     environment: [{name: 'DOGEOS_PROVER_WORKER_READY_FILE', value: '/run/dogeos/ready.json'}],
     image: {digest: IMAGE_DIGEST, repository: 'dogeos69/prover-worker'},
-    placement: 'local_cpu' as const,
+    placement: 'external' as const,
     readiness_evidence_path: '/run/dogeos/ready.json',
     required_build_class: 'production' as const,
     schema_version: 1,
@@ -199,6 +196,20 @@ describe('self-contained proof topology Kubernetes adapter', () => {
       })
     }
   }
+
+  for (const launch of ['local_cpu', 'local_cuda'] as const) it(`rejects retired real worker placement ${launch} before compilation`, () => {
+    const proofTopology = topology('active')
+    proofTopology.generation = 'real'
+    proofTopology.active!.workerLaunch = launch
+    let compiled = false
+    expect(() => reconcileCompiledProofTopology({
+      compile() {compiled = true; throw new Error('unexpected compilation')},
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      deploymentDir: root, deploymentName: 'test', network: 'testnet', proofTopology,
+      valuesDir: path.join(root, 'values'), withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
+    })).to.throw('managed by Capacity Manager')
+    expect(compiled).false
+  })
 
   it('uses the selected custom config Secret provider instead of an unrelated default config', () => {
     fs.writeFileSync(path.join(root, '.data/doge-config.toml'), '[ethereumRpcSecretStore]\nprovider="aws"\nprefix="wrong-default"\n')
@@ -338,64 +349,61 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     })
     const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
     expect(worker.controller.replicas).to.equal(0)
-    expect(result.workerBundle).to.equal(undefined)
+    expect(result).not.to.have.property('workerBundle')
     expect(fs.existsSync(path.join(root, 'prover-worker-active/docker-compose/docker-compose.yml'))).to.equal(false)
     expect(fs.readFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), 'utf8'))
       .to.include('DOGEOS_ETH_DA_SUBMITTER_L2__START_BLOCK_NUMBER: "2898792"')
   })
 
-  for (const backend of ['docker_compose', 'kubernetes'] as const) {
-    it(`supports pure mock without materializer files and removes stale runtime staging (${backend})`, () => {
-      const proofTopology = topology('active', backend)
-      proofTopology.active!.profile = 'withdrawal_mock_prover'
-      delete proofTopology.active!.realScroll.chunkMaterializerBinaryPath
-      delete proofTopology.active!.realScroll.batchMaterializerBinaryPath
-      delete proofTopology.active!.realScroll.aggVerifyingKeyPath
-      fs.rmSync(path.join(root, '.data/proof-materials/software'), {recursive: true})
+  it('supports pure mock without materializer files and removes stale runtime staging', () => {
+    const proofTopology = topology('active')
+    proofTopology.active!.profile = 'withdrawal_mock_prover'
+    delete proofTopology.active!.realScroll.chunkMaterializerBinaryPath
+    delete proofTopology.active!.realScroll.batchMaterializerBinaryPath
+    delete proofTopology.active!.realScroll.aggVerifyingKeyPath
+    fs.rmSync(path.join(root, '.data/proof-materials/software'), {recursive: true})
 
-      for (const component of ['withdrawal-processor', 'proof-coordinator']) {
-        const file = path.join(root, `values/${component}-production.yaml`)
-        const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
-        values.initContainers = {
-          'operator-init': {image: 'operator-image'},
-          'prepare-proof-runtime-materials': {image: 'old-proof-image'},
-        }
-        values.persistence ||= {}
-        values.persistence['proof-runtime-materials'] = {enabled: true, type: 'emptyDir'}
-        values.persistence['proof-runtime-seed'] = {enabled: true, type: 'secret'}
-        values.secrets = {'proof-runtime-seed': {enabled: true}}
-        fs.writeFileSync(file, yaml.dump(values))
+    for (const component of ['withdrawal-processor', 'proof-coordinator']) {
+      const file = path.join(root, `values/${component}-production.yaml`)
+      const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
+      values.initContainers = {
+        'operator-init': {image: 'operator-image'},
+        'prepare-proof-runtime-materials': {image: 'old-proof-image'},
       }
+      values.persistence ||= {}
+      values.persistence['proof-runtime-materials'] = {enabled: true, type: 'emptyDir'}
+      values.persistence['proof-runtime-seed'] = {enabled: true, type: 'secret'}
+      values.secrets = {'proof-runtime-seed': {enabled: true}}
+      fs.writeFileSync(file, yaml.dump(values))
+    }
 
-      const result = reconcileCompiledProofTopology({
-        compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
-        coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
-        deploymentDir: root,
-        deploymentName: 'test',
-        network: 'testnet',
-        proofTopology,
-        valuesDir: path.join(root, 'values'),
-        withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
-      })
-
-      for (const component of ['withdrawal-processor', 'proof-coordinator']) {
-        const values = yaml.load(fs.readFileSync(path.join(root, `values/${component}-production.yaml`), 'utf8')) as any
-        expect(values.initContainers).not.to.have.property('prepare-proof-runtime-materials')
-        expect(values.initContainers['operator-init']).to.deep.equal({image: 'operator-image'})
-        expect(values.persistence).not.to.have.property('proof-runtime-materials')
-        expect(values.persistence).not.to.have.property('proof-runtime-seed')
-        expect(values.secrets).not.to.have.property('proof-runtime-seed')
-        expect(values.configMaps['proof-topology-materials'].data).to.deep.include({
-          'material-00-chunk.json': '{"kind":"chunk"}\n',
-        })
-      }
-
-      const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
-      expect(worker.controller.replicas).to.equal(0)
-      expect(result.workerBundle).to.equal(undefined)
+    const result = reconcileCompiledProofTopology({
+      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active'),
+      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
+      deploymentDir: root,
+      deploymentName: 'test',
+      network: 'testnet',
+      proofTopology,
+      valuesDir: path.join(root, 'values'),
+      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
     })
-  }
 
+    for (const component of ['withdrawal-processor', 'proof-coordinator']) {
+      const values = yaml.load(fs.readFileSync(path.join(root, `values/${component}-production.yaml`), 'utf8')) as any
+      expect(values.initContainers).not.to.have.property('prepare-proof-runtime-materials')
+      expect(values.initContainers['operator-init']).to.deep.equal({image: 'operator-image'})
+      expect(values.persistence).not.to.have.property('proof-runtime-materials')
+      expect(values.persistence).not.to.have.property('proof-runtime-seed')
+      expect(values.secrets).not.to.have.property('proof-runtime-seed')
+      expect(values.configMaps['proof-topology-materials'].data).to.deep.include({
+        'material-00-chunk.json': '{"kind":"chunk"}\n',
+      })
+    }
+
+    const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
+    expect(worker.controller.replicas).to.equal(0)
+    expect(result).not.to.have.property('workerBundle')
+  })
   for (const profile of ['withdrawal_mock_prover_real_materialize', 'real_scroll_withdrawal_full_topology'] as const) {
     for (const field of ['chunkMaterializerBinaryPath', 'batchMaterializerBinaryPath'] as const) {
       it(`still requires ${field} for ${profile}`, () => {
@@ -475,69 +483,6 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     expect(init).not.to.include('/app/data/proof-materials/core-test-release')
   })
 
-  it('keeps Kubernetes as an explicit deployment backend for local CPU Workers', () => {
-    const proofTopology = topology('active', 'kubernetes')
-    proofTopology.generation = 'real'
-    reconcileCompiledProofTopology({
-      compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active', 'real'),
-      coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
-      deploymentDir: root,
-      deploymentName: 'test',
-      network: 'testnet',
-      proofTopology,
-      valuesDir: path.join(root, 'values'),
-      withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
-    })
-
-    const worker = yaml.load(fs.readFileSync(path.join(root, 'values/prover-worker-production.yaml'), 'utf8')) as any
-    expect(worker.controller.replicas).to.equal(1)
-    expect(worker.command).to.deep.equal([PROVER_WORKER_EXECUTABLE])
-    expect(worker.args).to.deep.equal(WORKER_ARGV)
-    // The Worker mounts only its minted credential, never the coordinator master key.
-    expect(worker.persistence['prover-worker-token']).to.deep.include({
-      items: [{key: 'prover-worker-credential', path: 'prover-worker-credential'}],
-      mountPath: '/app/secrets/prover-worker-credential',
-      name: 'prover-worker-credentials',
-    })
-    expect(worker.configMaps['proof-topology-materials'].data['material-00-chunk.json'])
-      .to.equal('{"kind":"chunk"}\n')
-    expect(fs.existsSync(path.join(root, 'prover-worker-active/docker-compose'))).to.equal(false)
-  })
-
-  for (const grace of [undefined, 780, 1200]) {
-    it(`preserves operator worker termination grace (${grace ?? 'unset'}) across regeneration`, () => {
-      const file = path.join(root, 'values/prover-worker-production.yaml')
-      const initial = yaml.load(fs.readFileSync(file, 'utf8')) as {termination?: {gracePeriodSeconds: number}}
-      if (grace !== undefined) initial.termination = {gracePeriodSeconds: grace}
-      fs.writeFileSync(file, yaml.dump(initial))
-      const proofTopology = topology('active', 'kubernetes')
-      proofTopology.generation = 'real'
-
-      for (let run = 0; run < 2; run++) {
-        reconcileCompiledProofTopology({
-          compile: () => fakeBundle(path.join(root, '.data/generated/proof-topology'), 'active', 'real'),
-          coordinatorConfigPath: path.join(root, 'proof-coordinator/ProofCoordinator.toml'),
-          deploymentDir: root,
-          deploymentName: 'test',
-          network: 'testnet',
-          proofTopology,
-          valuesDir: path.join(root, 'values'),
-          withdrawalConfigPath: path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'),
-        })
-
-        const worker = yaml.load(fs.readFileSync(file, 'utf8')) as {
-          args: string[]
-          controller: {replicas: number}
-          termination?: {gracePeriodSeconds: number}
-        }
-        expect(worker.controller.replicas).to.equal(1)
-        expect(worker.args).to.deep.equal(WORKER_ARGV)
-        if (grace === undefined) expect(worker).not.to.have.property('termination')
-        else expect(worker.termination).to.deep.equal({gracePeriodSeconds: grace})
-      }
-    })
-  }
-
   it('projects eager compiler output and identity mounts without overriding operator IAM', () => {
     const bundle = fakeBundle(path.join(root, 'eager-bundle'), 'active')
     bundle.manifest.eager_materializer = 'eager-materializer.toml'
@@ -565,6 +510,9 @@ describe('self-contained proof topology Kubernetes adapter', () => {
     fs.writeFileSync(path.join(bundle.bundleDir, bundle.manifest.eager_materializer), '[service]\nlisten_port = 3007\nstate_dir = "/app/data"\n[materializer]\nl2_genesis_json = "/app/genesis/genesis.json"\n[artifact_store]\nkind = "s3"\n')
     const file = path.join(root, 'values/eager-materializer-production.yaml')
     const coordinator = {annotations: {'eks.amazonaws.com/role-arn': 'coordinator-role'}, name: 'custom-coordinator'}
+    fs.writeFileSync(file, yaml.dump({serviceAccount: {create: true, name: 'eager-materializer'}}))
+    configureEagerMaterializerValues(file, bundle, topology('active'), {name: 'pod-identity-coordinator'})
+    expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).serviceAccount).to.include({create: false, name: 'pod-identity-coordinator'})
     fs.writeFileSync(file, yaml.dump({serviceAccount: {annotations: {}, create: true, name: 'eager-materializer'}}))
     configureEagerMaterializerValues(file, bundle, topology('active'), coordinator)
     expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).serviceAccount).to.include({create: false, name: 'custom-coordinator'})

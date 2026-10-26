@@ -80,9 +80,7 @@ function validateShape(value: unknown, source: string): void {
     'mockWorkerImage', 'productionWorkerImage', 'proofWorkBind', 'proofWorkPublicUrl',
     'proofWorkTokenFile', 'protocolContextPath', 'proverBind', 'proverPublicUrl',
     'publicS3EndpointUrl', 'readinessEvidencePath', 'resourcesMountPath',
-    'resourcesPersistentVolumeClaim', 'workerNodeSelector', 'workerResources',
-    'workerDeploymentBackend', 'workerRuntimeClassName', 'workerSecretName',
-    'workerTokenFile', 'workerTolerations', 'eagerMaterializer',
+    'resourcesPersistentVolumeClaim', 'workerTokenFile', 'eagerMaterializer',
   ], `${source}: proof_topology.deployment`)
   const deployment = mapping(root.deployment, 'deployment')
   if (deployment.mockWorkerImage !== undefined) known(deployment.mockWorkerImage, ['digest', 'repository'], `${source}: proof_topology.deployment.mockWorkerImage`)
