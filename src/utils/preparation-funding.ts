@@ -119,7 +119,7 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   if (!sequencer.kms) checkPrivateKey(sequencer.publicKey, policy.sequencerKeyEnv!)
   const feeWallet = productionFeeWallet(root, spec)
   if (feeWallet.publicKey === sequencer.publicKey.toLowerCase()) throw new Error('Production sequencer and fee wallet must have different keys')
-  if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is not in the future; use a reviewed future block height in a new plan'})
+  if (await rpc('getblockcount', []) >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is not in the future; use a reviewed future block height in a new plan'})
   const {data, file} = fundingInput(root, spec)
   const addresses = {feeWallet: feeWallet.address, sequencer: publicKeyAddress(sequencer.publicKey, spec.dogecoin.network)}
   const setupPath = path.join(root, '.data/setup_defaults.toml')
@@ -143,9 +143,9 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   privateWrite(path.join(root, '.data/GenerateBridgeInfo.toml'), toml.stringify({default: {
     attestation: {pubkeys: setup.attestation_pubkeys, threshold: setup.attestation_threshold},
     namespace_id: Array.from({length: 20}, () => 0), network: spec.dogecoin.network === 'mainnet' ? 'dogecoin' : spec.dogecoin.network,
-    recovery: {pubkeys: policy.recoveryPublicKeys, threshold: spec.bridge.thresholds.recovery},
-    tee_pubkey: spec.bridge.teePubkey!,
-    timelock: spec.bridge.timelock,
+    recovery: {pubkeys: spec.bridge.recovery.publicKeys, threshold: spec.bridge.recovery.threshold},
+    tee_pubkey: spec.bridge.cubesigner!.publicKey!,
+    timelock: spec.bridge.recovery.timelock,
   }}))
   privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({
     bridge_address: '', bridge_script_hex: '',
@@ -180,7 +180,7 @@ export async function prepareProductionBridgeFunding(root: string, spec: Deploym
   const current = await inspectFunding(facts.sequencer, {address: publicKeyAddress(productionSequencer(root, spec).publicKey, spec.dogecoin.network), confirmations: spec.bridge.confirmationsRequired, exact: true, minimumSats: GENESIS_SEQUENCER_AMOUNT_SATS}, rpc)
   if (current.blockHash !== facts.sequencer.blockHash) throw new Error('Sequencer confirmation anchor changed; review the reorganization before continuing')
   await inspectFunding(facts.feeWallet, {address: productionFeeWallet(root, spec).address, confirmations: spec.bridge.confirmationsRequired, minimumSats: setup.fee_wallet_target_amount}, rpc)
-  if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
+  if (await rpc('getblockcount', []) >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
   const bridgeMinimumSats = bridgeFundingMinimumSats(spec, setup.bridge_target_amount)
   let funded: FundingFact
   try {funded = await inspectFunding(data.bridge, {address: bridge.p2sh_address, confirmations: spec.bridge.confirmationsRequired, marker: true, minimumSats: bridgeMinimumSats}, rpc)} catch (error) {
