@@ -554,8 +554,8 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   try {specAwsSecretPrefix(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'preparation.secretUpload.awsPrefix'})}
   try {validateMonitoring(spec.monitoring)} catch {errors.push({code: 'E601_INVALID_VALUE', message: 'monitoring.slack.enabled must be a boolean', path: 'monitoring.slack.enabled'})}
 
-  try {resolveSpecAttestationSigners(spec, Boolean(spec.preparation))} catch (error) {
-    errors.push({code: 'E601_INVALID_VALUE', message: error instanceof Error ? error.message : 'Invalid attestation signer identities', path: 'attestationSigners'})
+  try {resolveSpecAttestationSigners(spec)} catch (error) {
+    errors.push({code: 'E601_INVALID_VALUE', message: error instanceof Error ? error.message : 'Invalid attestation signer identities', path: 'bridge.attestation.signers'})
   }
 
   try {
@@ -564,12 +564,9 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     errors.push({code: 'E012_INVALID_ETHEREUM_DA_CONFIG', message: error instanceof Error ? error.message : 'Invalid artifact bucket configuration', path: 'ethereumDa.blobArchive.s3.bucket'})
   }
 
-  const keyset = spec.bridge?.initialAttestationKeyset
-  if (keyset && (!Array.isArray(keyset.signerIds) || keyset.signerIds.length === 0
-    || keyset.signerIds.some(id => typeof id !== 'string' || !/^[\da-z](?:[\da-z-]*[\da-z])?$/.test(id) || id.length > 63)
-    || new Set(keyset.signerIds).size !== keyset.signerIds.length
-    || !Number.isSafeInteger(keyset.threshold) || keyset.threshold < 1 || keyset.threshold > keyset.signerIds.length)) {
-    errors.push({code: 'E005_INVALID_THRESHOLD', message: 'initialAttestationKeyset requires unique signer IDs and a threshold between 1 and the selected signer count', path: 'bridge.initialAttestationKeyset'})
+  const attestation = spec.bridge?.attestation
+  if (!Number.isSafeInteger(attestation?.threshold) || attestation.threshold < 1 || attestation.threshold > (attestation.signers?.length ?? 0)) {
+    errors.push({code: 'E005_INVALID_THRESHOLD', message: 'Attestation threshold must be between 1 and the signer count', path: 'bridge.attestation.threshold'})
   }
 
   if (spec.genesis?.gasLimit !== undefined && (!Number.isSafeInteger(spec.genesis.gasLimit) || spec.genesis.gasLimit < 5000)) {
@@ -796,13 +793,13 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   // Signing validation. CubeSigner provides the TEE key; attestation-signer provides attestation keys.
-  if (!spec.signing?.cubesigner?.roles || spec.signing.cubesigner.roles.length === 0) {
+  if (!spec.bridge?.cubesigner?.roles || spec.bridge.cubesigner.roles.length === 0) {
     warnings.push({
       message: 'CubeSigner TEE role is not set yet',
       path: 'signing.cubesigner.roles',
       suggestion: 'Run setup cubesigner-init to create or select the TEE role before bridge/signing artifacts are finalized',
     })
-  } else if (spec.signing.cubesigner.roles.length > 1) {
+  } else if (spec.bridge.cubesigner.roles.length > 1) {
     errors.push({
       code: 'E601_INVALID_VALUE',
       message: 'CubeSigner supports exactly one TEE role and one deployment instance',
@@ -810,7 +807,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
-  const cubesignerPolicy = spec.signing?.cubesigner?.productionPolicy
+  const cubesignerPolicy = spec.bridge?.cubesigner?.productionPolicy
   if (cubesignerPolicy) {
     const policyPath = 'signing.cubesigner.productionPolicy'
     const digestPattern = /^sha256:[\da-f]{64}$/
@@ -882,14 +879,6 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
         path: policyPath,
       })
     }
-  }
-
-  if (spec.signing?.attestationSigner) {
-    errors.push({
-      code: 'E601_INVALID_VALUE',
-      message: 'signing.attestationSigner is retired: declare partner public identities in attestationSigners',
-      path: 'signing.attestationSigner',
-    })
   }
 
   const ethereumDaChain = spec.ethereumDa?.chain || (spec.metadata.environment === 'mainnet' ? 'mainnet' : 'sepolia')
@@ -1100,26 +1089,25 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     })
   }
 
-  // Bridge thresholds validation
-  if (spec.bridge?.thresholds && !spec.bridge.initialAttestationKeyset) {
-    const { attestation } = spec.bridge.thresholds
-    const attestationKeyCount = spec.attestationSigners?.length ?? spec.bridge.keyCounts?.attestation ?? 0
-    if (attestation > attestationKeyCount) {
-      errors.push({
-        code: 'E005_INVALID_THRESHOLD',
-        message: `Attestation threshold (${attestation}) cannot exceed key count (${attestationKeyCount})`,
-        path: 'bridge.thresholds.attestation'
-      })
-    }
+  const recovery = spec.bridge?.recovery
+  if (!recovery || !Array.isArray(recovery.publicKeys) || recovery.publicKeys.length === 0
+    || !Number.isSafeInteger(recovery.threshold) || recovery.threshold < 1 || recovery.threshold > recovery.publicKeys.length
+    || !Number.isSafeInteger(recovery.timelock) || recovery.timelock < 1 || recovery.timelock >= 500_000_000) {
+    errors.push({code: 'E005_INVALID_THRESHOLD', message: 'Recovery requires ordered publicKeys, a valid threshold and an absolute Dogecoin block-height timelock', path: 'bridge.recovery'})
+  } else {
+    try {
+      const keys = recovery.publicKeys.map(key => normalizeCompressedSecp256k1PublicKey(key, 'bridge.recovery.publicKeys'))
+      if (new Set(keys).size !== keys.length) throw new Error('Recovery public keys must be unique')
+    } catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'bridge.recovery.publicKeys'})}
   }
 
-  if (spec.bridge?.teePubkey) {
+  if (spec.bridge?.cubesigner?.publicKey) {
     const teePubkeyPattern = /^(?:0x)?[\dA-Fa-f]{66}$/
-    if (!teePubkeyPattern.test(spec.bridge.teePubkey)) {
+    if (!teePubkeyPattern.test(spec.bridge.cubesigner!.publicKey)) {
       errors.push({
         code: 'E007_INVALID_TEE_PUBKEY',
         message: 'TEE public key must be a compressed 33-byte hex string',
-        path: 'bridge.teePubkey'
+        path: 'bridge.cubesigner.publicKey'
       })
     }
   }
@@ -1565,15 +1553,9 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   }
 
   if (spec.dogecoin.kubernetes) config.kubernetes = structuredClone(spec.dogecoin.kubernetes)
-  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
-  if (attestation) config.attestationSigner = attestation
-  else if (spec.bridge.initialAttestationKeyset) {
-    config.attestationSigner = {
-      activeSignerIds: [...spec.bridge.initialAttestationKeyset.signerIds],
-      mode: 'external',
-      threshold: spec.bridge.initialAttestationKeyset.threshold,
-    }
-  }
+  const attestation = resolveSpecAttestationSigners(spec)
+  config.attestationSigner = attestation
+
 
   config.ethereumRpcSecretStore = {
     prefix: spec.infrastructure.provider === 'gcp' ? (spec.infrastructure.gcp?.secretsProject ?? spec.infrastructure.gcp?.project ?? 'default-project') : specAwsSecretPrefix(spec),
@@ -1665,15 +1647,15 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   }
 
   // Add signing configuration
-  if (spec.signing.cubesigner) {
+  if (spec.bridge.cubesigner) {
     config.cubesigner = {
-      ...(spec.signing.cubesigner.mode ? {mode: spec.signing.cubesigner.mode} : {}),
-      ...(spec.signing.cubesigner.expectedPolicy ? {expectedPolicy: spec.signing.cubesigner.expectedPolicy} : {}),
-      ...(spec.signing.cubesigner.policyReceipts ? {policyReceipts: spec.signing.cubesigner.policyReceipts} : {}),
-      ...(spec.signing.cubesigner.productionPolicy
-        ? {productionPolicy: spec.signing.cubesigner.productionPolicy}
+      ...(spec.bridge.cubesigner.mode ? {mode: spec.bridge.cubesigner.mode} : {}),
+      ...(spec.bridge.cubesigner.expectedPolicy ? {expectedPolicy: spec.bridge.cubesigner.expectedPolicy} : {}),
+      ...(spec.bridge.cubesigner.policyReceipts ? {policyReceipts: spec.bridge.cubesigner.policyReceipts} : {}),
+      ...(spec.bridge.cubesigner.productionPolicy
+        ? {productionPolicy: spec.bridge.cubesigner.productionPolicy}
         : {}),
-      roles: (spec.signing.cubesigner.roles || []).map(role => ({
+      roles: (spec.bridge.cubesigner.roles || []).map(role => ({
         keys: role.keys.map(key => ({
           key_id: key.keyId,
           key_type: key.keyType,
@@ -1705,13 +1687,13 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
  */
 export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
   const spec = normalizeDeploymentSpec(rawSpec)
-  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
+  const attestation = resolveSpecAttestationSigners(spec)
   const externalRpc = getDogecoinExternalRpc(spec)
   const targetAmountsSats = getBridgeTargetAmountsSats(spec)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Dynamic config building
   const config: Record<string, any> = {
-    attestation_key_count: attestation?.activeSignerIds.length ?? spec.bridge.initialAttestationKeyset?.signerIds.length ?? spec.bridge.keyCounts.attestation,
-    attestation_threshold: attestation?.threshold ?? spec.bridge.initialAttestationKeyset?.threshold ?? spec.bridge.thresholds.attestation,
+    attestation_key_count: attestation.activeSignerIds.length,
+    attestation_threshold: spec.bridge.attestation.threshold,
     ...(attestation ? {attestation_pubkeys: attestation.activeSignerIds.map(id => attestation.external.find(signer => signer.id === id)!.publicKey)} : {}),
     bridge_target_amount: targetAmountsSats.bridge,
     confirmations_required: spec.bridge.confirmationsRequired,
@@ -1722,17 +1704,18 @@ export function generateSetupDefaultsToml(rawSpec: DeploymentSpec): string {
     fee_rate_sat_per_kvb: getBridgeFeeRateSatsPerKvb(spec),
     fee_wallet_target_amount: targetAmountsSats.feeWallet,
     network: coreHelperNetwork(spec.dogecoin.network),
-    recovery_key_count: spec.bridge.keyCounts.recovery,
-    recovery_threshold: spec.bridge.thresholds.recovery,
+    recovery_key_count: spec.bridge.recovery.publicKeys.length,
+    recovery_pubkeys: spec.bridge.recovery.publicKeys.map(key => normalizeCompressedSecp256k1PublicKey(key, 'bridge.recovery.publicKeys')),
+    recovery_threshold: spec.bridge.recovery.threshold,
     ...(spec.preparation?.bridge.mode !== 'production' && spec.bridge.seedString ? {seed_string: spec.bridge.seedString} : {}),
     sequencer_target_amount: targetAmountsSats.sequencer,
-    timelock: spec.bridge.timelock,
+    timelock: spec.bridge.recovery.timelock,
   }
 
-  if (spec.bridge.teePubkey) {
-    config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(spec.bridge.teePubkey, 'bridge.teePubkey')
-  } else if (spec.signing.cubesigner?.roles?.length) {
-    const key = spec.signing.cubesigner.roles[0].keys[0]
+  if (spec.bridge.cubesigner?.publicKey) {
+    config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(spec.bridge.cubesigner!.publicKey, 'bridge.cubesigner.publicKey')
+  } else if (spec.bridge.cubesigner?.roles?.length) {
+    const key = spec.bridge.cubesigner.roles[0].keys[0]
     const teePubkey = key?.publicKey
     if (teePubkey) {
       config.tee_pubkey = normalizeCompressedSecp256k1PublicKey(teePubkey, 'signing.cubesigner.roles[0].keys[0].publicKey')

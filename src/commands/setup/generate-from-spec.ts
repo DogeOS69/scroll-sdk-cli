@@ -264,8 +264,8 @@ export default class GenerateFromSpec extends Command {
       const monitor = 'scroll-monitor-production.yaml'
       const monitorTemplate = mergeBootstrapValues(templateFiles[`values/${monitor}`], '{}', existingValues(monitor))
       valuesFiles = generateValuesFiles(spec, monitorTemplate, {bootstrap: flags.bootstrap})
-      if (flags.bootstrap && spec.signing?.cubesigner?.mode === 'production_verifier_key_policy'
-        && !spec.signing.cubesigner.policyReceipts && !spec.signing.cubesigner.productionPolicy) {
+      if (flags.bootstrap && spec.bridge?.cubesigner?.mode === 'production_verifier_key_policy'
+        && !spec.bridge.cubesigner.policyReceipts && !spec.bridge.cubesigner.productionPolicy) {
         jsonCtx.addWarning('CubeSigner production policy receipts are pending. Bootstrap can prepare genesis; import the governed policy receipts before final configuration generation or deployment.')
       }
 

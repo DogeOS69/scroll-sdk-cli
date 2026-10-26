@@ -365,7 +365,7 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   if (monitoringTemplate) {
     const monitor = yaml.load(monitoringTemplate) as Record<string, any> ?? {}
     reconcileMonitoringSlack(monitor, normalizedSpec.monitoring)
-    reconcileScrollMonitorCubesigner(monitor, normalizedSpec.signing.cubesigner?.mode)
+    reconcileScrollMonitorCubesigner(monitor, normalizedSpec.bridge.cubesigner?.mode)
     files['scroll-monitor-production.yaml'] = yaml.dump(monitor, {lineWidth: -1, noRefs: true})
   }
 
@@ -394,7 +394,7 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
   files['withdrawal-processor-production.yaml'] = generateWithdrawalProcessorValues(normalizedSpec)
 
   // CubeSigner provides the TEE key. Attestation signers provide attestation keys.
-  if (normalizedSpec.signing.cubesigner) {
+  if (normalizedSpec.bridge.cubesigner) {
     files['cubesigner-signer-production.yaml'] = generateCubesignerValues(normalizedSpec, options.bootstrap)
   }
 
@@ -885,7 +885,7 @@ function generateTsoServiceValues(spec: DeploymentSpec): string {
  * Generate Withdrawal Processor values
  */
 export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string {
-  const attestation = resolveSpecAttestationSigners(spec, Boolean(spec.preparation))
+  const attestation = resolveSpecAttestationSigners(spec)
   const secretConfig = getSecretProviderConfig(spec)
   const dogecoinEndpoints = resolveDogecoinKubernetesEndpoints(spec.dogecoin)
   const ethereumDaSubmitterAddress = spec.accounts.l1CommitSender?.address
@@ -1031,7 +1031,7 @@ export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string 
  */
 function generateCubesignerValues(spec: DeploymentSpec, bootstrap = false): string {
   const secretConfig = getSecretProviderConfig(spec)
-  const selection = spec.signing?.cubesigner
+  const selection = spec.bridge?.cubesigner
   // A new Bridge cannot have protocol-bound policy receipts before genesis.
   // Bootstrap emits an incomplete production configuration; runtime generation
   // remains strict. Never ignore provided receipts or legacy policy evidence.
@@ -1039,7 +1039,7 @@ function generateCubesignerValues(spec: DeploymentSpec, bootstrap = false): stri
     && !selection.policyReceipts && !selection.expectedPolicy && !selection.productionPolicy
   const policyResolution: ReturnType<typeof resolveCubesignerPolicy> = pendingPolicy
     ? {mode: 'production_verifier_key_policy', warnings: ['CubeSigner policy receipts are pending; this bootstrap configuration is not ready for deployment']}
-    : resolveCubesignerPolicy({keys: (spec.signing?.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.keyId, materialId: key.materialId, roleId: role.roleId}))), network: spec.dogecoin.network, scope: 'preparation', selection: spec.signing?.cubesigner})
+    : resolveCubesignerPolicy({keys: (spec.bridge?.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.keyId, materialId: key.materialId, roleId: role.roleId}))), network: spec.dogecoin.network, scope: 'preparation', selection: spec.bridge?.cubesigner})
   const productionPolicy = policyResolution.policy
 
   const image = resolveImage(spec, 'cubesignerSigner', {

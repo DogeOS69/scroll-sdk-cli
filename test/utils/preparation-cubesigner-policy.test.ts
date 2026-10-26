@@ -15,7 +15,7 @@ import {CommandPreparationRunner} from '../../src/utils/preparation-runner.js'
 const image = `ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:${'a'.repeat(64)}`
 const revision = 'b'.repeat(40)
 const component = Buffer.from([0, 97, 115, 109, 13, 0, 1, 0, 0, 1, 0])
-const spec = {preparation: {bridge: {mode: 'helper'}, proofMaterials: {mode: 'existing'}}, proofTopology: {enforcement: 'observe'}, signing: {cubesigner: {}}} as DeploymentSpec
+const spec = {bridge: {cubesigner: {}}, preparation: {bridge: {mode: 'helper'}, proofMaterials: {mode: 'existing'}}, proofTopology: {enforcement: 'observe'}} as DeploymentSpec
 
 describe('staged CubeSigner policy preparation', () => {
   let root: string
@@ -83,8 +83,8 @@ describe('staged CubeSigner policy preparation', () => {
 
   it('leaves legacy workflows, non-CubeSigner and transport-only deployments unchanged', () => {
     expect(preparationSteps(spec).some(step => step.id === 'cubesigner-policy-build')).false
-    for (const signing of [{}, {cubesigner: {mode: 'transport_only' as const}}]) {
-      expect(preparationSteps({...spec, signing}, true).some(step => step.id === 'cubesigner-policy-build')).false
+    for (const bridge of [{}, {cubesigner: {mode: 'transport_only' as const}}]) {
+      expect(preparationSteps({...spec, bridge: {...spec.bridge, cubesigner: bridge.cubesigner}}, true).some(step => step.id === 'cubesigner-policy-build')).false
     }
   })
 })

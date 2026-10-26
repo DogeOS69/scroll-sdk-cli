@@ -259,7 +259,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'charts': case 'charts-published': case 'render-final': {
-        if (spec.signing?.cubesigner?.mode === 'production_verifier_key_policy') importPreparationPolicyReceipts(root)
+        if (spec.bridge?.cubesigner?.mode === 'production_verifier_key_policy') importPreparationPolicyReceipts(root)
         if (step.id === 'charts' && spec.identities?.bootnodes?.length) {
           const file = localPath(root, '.data/doge-config.toml')
           const before = toml.parse(fs.readFileSync(file, 'utf8')) as any
@@ -341,7 +341,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'proof-check': {await command(['proof-config-check', ...(step.stage ? ['--scope', 'preparation'] : [])]); break}
       case 'secret-upload': case 'cubesigner-secret-upload': {
         const signerOnly = step.id === 'cubesigner-secret-upload'
-        if (spec.signing?.cubesigner && (signerOnly || !step.stage)) {
+        if (spec.bridge?.cubesigner && (signerOnly || !step.stage)) {
           for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) {
             const file = localPath(root, `secrets/${name}`)
             if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) throw new AwaitingInput({file, message: 'Required CubeSigner runtime Secret input is missing or empty. Run scrollsdk setup cubesigner-policy prepare-session --dir . for the prepared production workflow, or explicitly recover legacy credentials, then rerun setup upload-secrets. Uploading other available files does not satisfy this prerequisite.'})
