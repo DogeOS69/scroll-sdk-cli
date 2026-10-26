@@ -144,6 +144,21 @@ describe('frontend dynamic deposit configuration', () => {
     expect(execFileSync('/bin/sh', ['-ec', command], {encoding: 'utf8'})).eq(`DogeOS Devnet||${genesisHash}`)
   })
 
+  for (const network of ['mainnet', 'testnet', 'regtest']) {
+    it(`exports the explicit ${network} network before invoking the frontend entrypoint`, () => {
+      const file = path.join(root, 'frontend-config')
+      const values: any = {}
+      reconcileFrontendConfig(values, {REACT_APP_CHAIN_ID_L2: '6281971', REACT_APP_DOGE_NETWORK: network})
+      fs.writeFileSync(file, values.scrollConfig)
+      const command = FRONTEND_COMMAND[2].replace('/app/conf/frontend-config', file)
+        .replaceAll('/usr/share/nginx/html/.env', path.join(root, '.env'))
+        .replace('exec /usr/local/bin/entrypoint.sh', 'exec printenv REACT_APP_DOGE_NETWORK REACT_APP_CHAIN_ID_L2')
+      expect(execFileSync('/bin/sh', ['-ec', command], {
+        encoding: 'utf8', env: {...process.env, REACT_APP_DOGE_NETWORK: 'stale-build-time-network'},
+      })).eq(`${network}\n6281971\n`)
+    })
+  }
+
   it('prep-charts writes the same identity for template and old generated payloads without network access', async () => {
     fs.mkdirSync(path.join(root, 'values'))
     const file = path.join(root, 'values/frontends-config.yaml')
@@ -165,6 +180,7 @@ describe('frontend dynamic deposit configuration', () => {
         const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
         expect(values).not.to.have.property('configMaps')
         const config = toml.parse(values.scrollConfig)
+        expect(config.REACT_APP_DOGE_NETWORK).eq('testnet')
         expect(config.REACT_APP_DOGEOS_GENESIS_STATE_HASH).eq(genesisHash)
         expect(config.REACT_APP_L1_GAS_PRICE_ORACLE).eq(command.contractsConfig.L1_GAS_PRICE_ORACLE_ADDR)
         expect(config).not.to.have.property('REACT_APP_DOGE_BRIDGE_ADDRESS')
