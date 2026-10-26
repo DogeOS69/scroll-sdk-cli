@@ -9,6 +9,7 @@ import {
   checkArtifactAccess,
   planArtifactAccess,
 } from '../../src/utils/artifact-access.js'
+import {ensureRetentionLifecycle, retentionLifecycleRule} from '../../src/utils/bucket-retention.js'
 
 const da = {bucket: 'dogeos-da-archive', forcePathStyle: false, keyPrefix: 'mainnet/batches', region: 'us-east-1'}
 const proof = {bucket: 'dogeos-proof-artifacts', forcePathStyle: false, keyPrefix: 'mainnet/proofs', region: 'us-east-1'}
@@ -22,6 +23,7 @@ function fixture() {
   let deny = false
   let block = false
   let bucketBlock: Record<string, boolean> | undefined
+  let lifecycle: Record<string, unknown> | undefined
   // S3 Gateway endpoints by id; vpce-0abc is a usable us-east-1 endpoint.
   const endpoints: Record<string, unknown> = {
     'vpce-0abc': {ServiceName: 'com.amazonaws.us-east-1.s3', State: 'available', VpcEndpointType: 'Gateway'},
@@ -34,6 +36,17 @@ function fixture() {
       if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
       if (args[1] === 'get-public-access-block') return {PublicAccessBlockConfiguration: structuredClone(args[0] === 's3api' && bucketBlock ? bucketBlock : {BlockPublicPolicy: block, RestrictPublicBuckets: false})}
       if (args[1] === 'get-bucket-versioning') return versioning ? {Status: versioning} : {}
+      if (args[1] === 'get-bucket-lifecycle-configuration') {
+        if (!lifecycle) throw new Error('An error occurred (NoSuchLifecycleConfiguration)')
+        return structuredClone(lifecycle)
+      }
+
+      if (args[1] === 'put-bucket-lifecycle-configuration') {
+        writes.push(args)
+        lifecycle = {Rules: JSON.parse(args[args.indexOf('--lifecycle-configuration') + 1]).Rules}
+        return {}
+      }
+
       if (args[1] === 'get-role') return {Role: {Arn: roleArn}}
       if (args[1] === 'describe-vpc-endpoints') {
         const endpoint = endpoints[args[args.indexOf('--vpc-endpoint-ids') + 1]]
@@ -84,7 +97,7 @@ function fixture() {
       throw new Error(`Unexpected AWS text read: ${args[1]}`)
     },
   }
-  return {aws, get block() {return block}, set block(value: boolean) {block = value}, get bucket() {return bucket}, get bucketBlock() {return bucketBlock}, set bucketBlock(value: Record<string, boolean> | undefined) {bucketBlock = value}, get deny() {return deny}, set deny(value: boolean) {deny = value}, get inline() {return inline}, set inline(value: unknown) {inline = value}, writes}
+  return {aws, get block() {return block}, set block(value: boolean) {block = value}, get bucket() {return bucket}, get bucketBlock() {return bucketBlock}, set bucketBlock(value: Record<string, boolean> | undefined) {bucketBlock = value}, get deny() {return deny}, set deny(value: boolean) {deny = value}, get inline() {return inline}, set inline(value: unknown) {inline = value}, get lifecycle() {return lifecycle}, set lifecycle(value: Record<string, unknown> | undefined) {lifecycle = value}, writes}
 }
 
 function sids(policy: Record<string, unknown>): string[] {
@@ -145,12 +158,12 @@ describe('DA archive and snapshot bucket access', () => {
     expect(f.writes).to.deep.equal([])
     expect(plan.versioning.changed).to.equal(true)
     applyArtifactAccess(f.aws, plan)
-    expect(f.writes.map(args => args[1])).to.deep.equal(['put-bucket-versioning', 'put-bucket-policy', 'put-role-policy'])
+    expect(f.writes.map(args => args[1])).to.deep.equal(['put-bucket-versioning', 'put-bucket-lifecycle-configuration', 'put-bucket-policy', 'put-role-policy'])
     expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', archivePolicySids('da', da.bucket, da.keyPrefix).publicRead, archivePolicySids('da', da.bucket, da.keyPrefix).vpceRead])
     expect(JSON.stringify(f.inline)).not.to.include('DeleteObject')
     expect(JSON.stringify(f.inline)).not.to.include('ListBucket')
     const again = planArtifactAccess(f.aws, 'da', da, options)
-    expect([again.bucketPolicy.changed, again.versioning.changed, again.writerPolicy?.changed]).to.deep.equal([false, false, false])
+    expect([again.bucketPolicy.changed, again.versioning.changed, again.lifecycle.changed, again.writerPolicy?.changed]).to.deep.equal([false, false, false, false])
     checkArtifactAccess(f.aws, again)
   })
 
@@ -342,4 +355,43 @@ describe('DA archive and snapshot bucket access', () => {
     const policy = buildArchiveBucketPolicy({}, 'snapshot', 'dogeos-snapshots', 'mainnet/history', {vpcEndpointId: 'vpce-0abc'})
     expect(sids(policy)).to.deep.equal(['ScrollSdkDenyInsecureTransport', archivePolicySids('snapshot', 'dogeos-snapshots', 'mainnet/history').vpceRead])
   })
+
+  it('owns one abort-only DA retention rule per prefix, preserving other rules and the minimum-size default', () => {
+    const f = fixture()
+    const sibling = {Expiration: {Days: 30}, Filter: {Prefix: 'deployments/other/'}, ID: 'SiblingExpiry', Status: 'Enabled'}
+    const disabled = {Expiration: {Days: 1}, Filter: {}, ID: 'DisabledWholeBucket', Status: 'Disabled'}
+    f.lifecycle = {Rules: [sibling, disabled], TransitionDefaultMinimumObjectSize: 'varies_by_storage_class'}
+    const plan = planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'})
+    expect(plan.lifecycle.changed).to.equal(true)
+    applyArtifactAccess(f.aws, plan)
+    expect(f.lifecycle?.Rules).to.deep.equal([sibling, disabled, retentionLifecycleRule('da', da.bucket, da.keyPrefix)])
+    const put = f.writes.find(args => args[1] === 'put-bucket-lifecycle-configuration')!
+    expect(put.slice(-2)).to.deep.equal(['--transition-default-minimum-object-size', 'varies_by_storage_class'])
+    expect(retentionLifecycleRule('da', da.bucket, da.keyPrefix)).to.deep.include({AbortIncompleteMultipartUpload: {DaysAfterInitiation: 7}, Filter: {Prefix: 'mainnet/batches/'}})
+    checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))
+    const snapshot = planArtifactAccess(fixture().aws, 'snapshot', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'}).lifecycle
+    expect(snapshot.after.Rules).to.deep.equal([retentionLifecycleRule('snapshot', da.bucket, da.keyPrefix)])
+    expect(retentionLifecycleRule('snapshot', da.bucket, da.keyPrefix).ID).not.to.equal(retentionLifecycleRule('da', da.bucket, da.keyPrefix).ID)
+  })
+
+  for (const [name, rule] of Object.entries({
+    'archive transition': {Filter: {Prefix: 'mainnet/'}, ID: 'Archive', Status: 'Enabled', Transitions: [{Days: 30, StorageClass: 'GLACIER'}]},
+    'noncurrent deletion': {Filter: {And: {Prefix: 'mainnet/batches/', Tags: [{Key: 'a', Value: 'b'}]}}, ID: 'Noncurrent', NoncurrentVersionExpiration: {NoncurrentDays: 7}, Status: 'Enabled'},
+    'whole-bucket expiry': {Expiration: {Days: 365}, Filter: {}, ID: 'Expire', Status: 'Enabled'},
+  })) it(`refuses an overlapping ${name} rule before any write`, () => {
+    const f = fixture()
+    f.lifecycle = {Rules: [rule]}
+    expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'})).to.throw(`lifecycle rule ${rule.ID}`)
+    expect(() => ensureRetentionLifecycle(f.aws, 'da', da)).to.throw('DA blobs are kept forever')
+    expect(f.writes).to.deep.equal([])
+  })
+
+  it('accepts directly readable transitions and leaves a correct lifecycle unwritten', () => {
+    const f = fixture()
+    const tiering = {Filter: {Prefix: ''}, ID: 'Tiering', Status: 'Enabled', Transitions: [{Days: 30, StorageClass: 'INTELLIGENT_TIERING'}]}
+    f.lifecycle = {Rules: [tiering, retentionLifecycleRule('da', da.bucket, da.keyPrefix)]}
+    expect(ensureRetentionLifecycle(f.aws, 'da', da)).to.deep.equal({changed: false})
+    expect(f.writes).to.deep.equal([])
+  })
+
 })

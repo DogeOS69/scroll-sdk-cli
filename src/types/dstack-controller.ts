@@ -1,6 +1,8 @@
 /** Public deployment inputs for the standalone dstack-controller chart. */
 export interface DstackControllerConfig {
   auth?: {existingSecret?: string; key?: string}
+  /** Derived from infrastructure.aws.workloadIdentity during AWS preparation. */
+  awsWorkloadIdentity?: 'irsa' | 'pod-identity'
   credentialSecrets?: Array<{name: string; secretName: string}>
   database?: {existingSecret?: string; key?: string; type?: 'postgresql' | 'sqlite'}
   /** Opt into cloud SDK credentials and automatic discovery; requires chart >= 0.1.3. */

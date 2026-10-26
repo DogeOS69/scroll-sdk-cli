@@ -25,7 +25,7 @@ export function resolveSpecIdentities(spec: DeploymentSpec): DeploymentIdentityI
       validateKeyAction(input, label)
       if (input.kms) throw new Error(`${label}.kms is only allowed for aws_kms`)
     } else if (input.backend === 'aws_kms') {
-      if (!['create', 'reuse'].includes(input.action) || input.privateKeyEnv) throw new Error(`${label}: AWS KMS requires create or reuse without a local key`)
+      if (input.action !== 'reuse' || input.privateKeyEnv) throw new Error(`${label}: prepare AWS KMS externally and select reuse with keyId, without a local key`)
       input.kms = {
         eksCluster: spec.infrastructure.aws?.eksClusterName,
         namespace: spec.infrastructure.namespace ?? 'default',
@@ -34,11 +34,8 @@ export function resolveSpecIdentities(spec: DeploymentSpec): DeploymentIdentityI
         ...input.kms,
       }
       for (const field of ['eksCluster', 'namespace', 'networkAlias', 'region'] as const) requireText(input.kms[field], `${label}.kms.${field}`)
-      if (input.action === 'reuse') {
-        requireText(input.kms.keyId, `${label}.kms.keyId`)
-        requireText(input.kms.roleArn, `${label}.kms.roleArn`)
-      } else if (input.kms.keyId || input.expectedAddress) throw new Error(`${label}: create cannot select an existing KMS key or a predetermined address; use reuse`)
-      if (input.kms.roleArn !== undefined && !/^arn:aws[\w-]*:iam::\d{12}:role\/.+/.test(input.kms.roleArn)) throw new Error(`${label}.kms.roleArn must be an IAM role ARN`)
+      // Keys and workload roles are externally managed. Never fall back to creation.
+      requireText(input.kms.keyId, `${label}.kms.keyId`)
     } else throw new Error(`${label}.backend must be local or aws_kms`)
   }
 
@@ -87,7 +84,7 @@ export function specIdentityFlags(intent: DeploymentIdentityIntent, task: {index
       if (!key) throw new Error(`${task.service}: no saved local signer key to reuse`)
     }
 
-    for (const [field, flag] of [['keyId', 'kms-key-id'], ['roleArn', 'role-arn'], ['region', 'aws-region'], ['eksCluster', 'eks-cluster'], ['namespace', 'namespace'], ['networkAlias', 'network-alias'], ['serviceAccount', 'service-account']] as const) {
+    for (const [field, flag] of [['keyId', 'kms-key-id'], ['region', 'aws-region'], ['eksCluster', 'eks-cluster'], ['namespace', 'namespace'], ['networkAlias', 'network-alias']] as const) {
       if (signer.kms?.[field] !== undefined) flags[flag] = signer.kms[field]
     }
   }
