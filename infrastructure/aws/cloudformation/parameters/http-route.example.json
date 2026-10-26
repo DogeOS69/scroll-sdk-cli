@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "ResourceClassification",
+    "ParameterValue": "nonproduction-deletable"
+  },
+  {
+    "ParameterKey": "ListenerArn",
+    "ParameterValue": "arn:aws:elasticloadbalancing:us-east-2:123456789012:listener/app/example/0000000000000000/1111111111111111"
+  },
+  {
+    "ParameterKey": "TargetGroupArn",
+    "ParameterValue": "arn:aws:elasticloadbalancing:us-east-2:123456789012:targetgroup/example/2222222222222222"
+  },
+  {
+    "ParameterKey": "Hostname",
+    "ParameterValue": "explorer.example.invalid"
+  },
+  {
+    "ParameterKey": "PathPatterns",
+    "ParameterValue": "/auth/*"
+  },
+  {
+    "ParameterKey": "ListenerPriority",
+    "ParameterValue": "41"
+  }
+]

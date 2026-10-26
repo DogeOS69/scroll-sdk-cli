@@ -1,0 +1,46 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-REPLACE"
+  },
+  {
+    "ParameterKey": "SubnetA",
+    "ParameterValue": "subnet-REPLACEA"
+  },
+  {
+    "ParameterKey": "SubnetB",
+    "ParameterValue": "subnet-REPLACEB"
+  },
+  {
+    "ParameterKey": "Scheme",
+    "ParameterValue": "internal"
+  },
+  {
+    "ParameterKey": "CertificateArn",
+    "ParameterValue": "arn:aws:acm:us-east-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "ParameterKey": "ClientIpv4Cidr",
+    "ParameterValue": "10.20.0.0/24"
+  },
+  {
+    "ParameterKey": "BackendIpv4Cidr",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "BackendPortFrom",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "BackendPortTo",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "PrivateHostname",
+    "ParameterValue": "dstack.example.invalid"
+  }
+]

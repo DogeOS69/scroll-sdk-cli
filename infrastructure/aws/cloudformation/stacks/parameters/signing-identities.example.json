@@ -1,0 +1,66 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "EthDaMode",
+    "ParameterValue": "reuse"
+  },
+  {
+    "ParameterKey": "EthDaAliasName",
+    "ParameterValue": "alias/dogeos/REPLACE_ENV/ethda"
+  },
+  {
+    "ParameterKey": "EthDaExistingKeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "ParameterKey": "FeeOracleMode",
+    "ParameterValue": "reuse"
+  },
+  {
+    "ParameterKey": "FeeOracleAliasName",
+    "ParameterValue": "alias/dogeos/REPLACE_ENV/feeoracle"
+  },
+  {
+    "ParameterKey": "FeeOracleExistingKeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "ParameterKey": "Sequencer0Mode",
+    "ParameterValue": "reuse"
+  },
+  {
+    "ParameterKey": "Sequencer0AliasName",
+    "ParameterValue": "alias/dogeos/REPLACE_ENV/sequencer0"
+  },
+  {
+    "ParameterKey": "Sequencer0ExistingKeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "ParameterKey": "Sequencer1Mode",
+    "ParameterValue": "reuse"
+  },
+  {
+    "ParameterKey": "Sequencer1AliasName",
+    "ParameterValue": "alias/dogeos/REPLACE_ENV/sequencer1"
+  },
+  {
+    "ParameterKey": "Sequencer1ExistingKeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "ParameterKey": "BridgeMode",
+    "ParameterValue": "reuse"
+  },
+  {
+    "ParameterKey": "BridgeAliasName",
+    "ParameterValue": "alias/dogeos/REPLACE_ENV/bridge"
+  },
+  {
+    "ParameterKey": "BridgeExistingKeyArn",
+    "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"
+  }
+]

@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: One durable DogeOS signing identity. Reuse by default; explicitly create only for a new identity.
+Parameters:
+  Environment:
+    Type: String
+    Description: Stable infrastructure environment; do not use a deployment date.
+    AllowedPattern: '[a-z][a-z0-9-]{2,47}'
+  Mode:
+    Type: String
+    Description: reuse references a key without changing it; create creates a new signing identity.
+    AllowedValues:
+    - reuse
+    - create
+    Default: reuse
+  ExistingKeyArn:
+    Type: String
+    Description: Existing ECC_SECG_P256K1 SIGN_VERIFY key ARN. Required in reuse mode.
+    AllowedPattern: ^$|arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[a-f0-9-]+
+    Default: ''
+  AliasName:
+    Type: String
+    Description: Stable alias/ prefixed name for create mode; ignored in reuse mode. Choose your own environment/purpose path; never use a rehearsal date or the reserved alias/aws/ prefix.
+    AllowedPattern: '^alias/(?!aws/)[a-zA-Z0-9/_-]{1,250}$'
+  ResourceClassification:
+    Type: String
+    Default: production
+    AllowedValues:
+    - production
+    - nonproduction-deletable
+    Description: Resource lifecycle. nonproduction-deletable explicitly marks disposable test infrastructure.
+Resources:
+  SigningKey:
+    Type: AWS::KMS::Key
+    Condition: CreateKey
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description:
+        Fn::Sub: DogeOS ${ResourceClassification} - ${Environment} - SigningKey. Nonproduction resources may be
+          deleted after testing.
+      KeySpec: ECC_SECG_P256K1
+      KeyUsage: SIGN_VERIFY
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: kms:*
+          Resource: '*'
+          Principal:
+            AWS:
+              Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+          Sid: EnableAccountIAMPermissions
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: signing-key
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-SigningKey
+  SigningAlias:
+    Type: AWS::KMS::Alias
+    Condition: CreateKey
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AliasName:
+        Ref: AliasName
+      TargetKeyId:
+        Ref: SigningKey
+Outputs:
+  KeyArn:
+    Description: Signing key ARN; verify its public identity before use.
+    Value:
+      Fn::If:
+      - CreateKey
+      - Fn::GetAtt:
+        - SigningKey
+        - Arn
+      - Ref: ExistingKeyArn
+Conditions:
+  CreateKey:
+    Fn::Equals:
+    - Ref: Mode
+    - create
+Rules:
+  ExplicitIdentity:
+    Assertions:
+    - Assert:
+        Fn::Or:
+        - Fn::Equals:
+          - Ref: Mode
+          - create
+        - Fn::Not:
+          - Fn::Equals:
+            - Ref: ExistingKeyArn
+            - ''
+      AssertDescription: reuse requires ExistingKeyArn
+    - Assert:
+        Fn::Or:
+        - Fn::Equals:
+          - Ref: Mode
+          - reuse
+        - Fn::And:
+          - Fn::Equals:
+            - Ref: ExistingKeyArn
+            - ''
+          - Fn::Not:
+            - Fn::Equals:
+              - Ref: AliasName
+              - ''
+      AssertDescription: create requires AliasName and an empty ExistingKeyArn

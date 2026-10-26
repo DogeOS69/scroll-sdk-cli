@@ -1,0 +1,845 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DogeOS application Pod Identity / optional IRSA roles for two sequencers. References existing keys, buckets and EKS OIDC provider.
+Parameters:
+  Environment:
+    Type: String
+    Description: Stable infrastructure environment; do not use a deployment date.
+    AllowedPattern: '[a-z][a-z0-9-]{2,47}'
+  OidcIssuer:
+    Type: String
+    Description: EKS issuer WITHOUT https://, for an existing IAM OIDC provider.
+    AllowedPattern: ^$|oidc\.eks\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?/id/[A-Za-z0-9]+
+    Default: ''
+  Namespace:
+    Type: String
+    Description: Kubernetes namespace used by the Helm releases.
+    AllowedPattern: '[a-z0-9]([-a-z0-9]*[a-z0-9])?'
+    Default: default
+  PermissionsBoundaryArn:
+    Type: String
+    Description: Optional existing IAM permissions boundary ARN.
+    AllowedPattern: ^$|arn:aws[a-z-]*:iam::[0-9]{12}:policy/[A-Za-z0-9+=,.@_/-]+
+    Default: ''
+  EthDaKeyArn:
+    Type: String
+    Description: Existing Ethereum DA signing key.
+    AllowedPattern: arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[a-f0-9-]+
+  FeeOracleKeyArn:
+    Type: String
+    Description: Existing Fee Oracle signing key.
+    AllowedPattern: arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[a-f0-9-]+
+  Sequencer0KeyArn:
+    Type: String
+    Description: Existing L2 sequencer 0 signing key.
+    AllowedPattern: arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[a-f0-9-]+
+  Sequencer1KeyArn:
+    Type: String
+    Description: Existing L2 sequencer 1 signing key.
+    AllowedPattern: arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[a-f0-9-]+
+  BridgeKeyArn:
+    Type: String
+    Description: Existing Dogecoin Bridge sequencer signing key.
+    AllowedPattern: arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[a-f0-9-]+
+  ArchiveBucketName:
+    Type: String
+    Description: Existing DA archive bucket; never created or modified.
+    AllowedPattern: '[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]'
+  ArchivePrefix:
+    Type: String
+    Description: DA archive deployment prefix. No leading/trailing slash or IAM wildcards.
+    AllowedPattern: '[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*'
+  ProofBucketName:
+    Type: String
+    Description: Existing proof artifact bucket; never created or modified.
+    AllowedPattern: '[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]'
+  ProofPrefix:
+    Type: String
+    Description: Proof artifact deployment prefix. No leading/trailing slash or IAM wildcards.
+    AllowedPattern: '[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*'
+  EthDaServiceAccount:
+    Type: String
+    Description: Must match the rendered Kubernetes ServiceAccount name.
+    AllowedPattern: '[a-z0-9]([-a-z0-9.]*[a-z0-9])?'
+    Default: eth-da-submitter
+  FeeOracleServiceAccount:
+    Type: String
+    Description: Must match the rendered Kubernetes ServiceAccount name.
+    AllowedPattern: '[a-z0-9]([-a-z0-9.]*[a-z0-9])?'
+    Default: fee-oracle
+  Sequencer0ServiceAccount:
+    Type: String
+    Description: Must match the rendered Kubernetes ServiceAccount name.
+    AllowedPattern: '[a-z0-9]([-a-z0-9.]*[a-z0-9])?'
+    Default: l2-reth-sequencer-0
+  Sequencer1ServiceAccount:
+    Type: String
+    Description: Must match the rendered Kubernetes ServiceAccount name.
+    AllowedPattern: '[a-z0-9]([-a-z0-9.]*[a-z0-9])?'
+    Default: l2-reth-sequencer-1
+  ProofCoordinatorServiceAccount:
+    Type: String
+    Description: Must match the rendered Kubernetes ServiceAccount name.
+    AllowedPattern: '[a-z0-9]([-a-z0-9.]*[a-z0-9])?'
+    Default: proof-coordinator
+  WithdrawalProcessorServiceAccount:
+    Type: String
+    Description: Must match the rendered Kubernetes ServiceAccount name.
+    AllowedPattern: '[a-z0-9]([-a-z0-9.]*[a-z0-9])?'
+    Default: withdrawal-processor
+  ResourceClassification:
+    Type: String
+    Default: production
+    AllowedValues:
+    - production
+    - nonproduction-deletable
+    Description: Resource lifecycle. nonproduction-deletable explicitly marks disposable test infrastructure.
+  WorkloadIdentity:
+    Type: String
+    Default: pod-identity
+    AllowedValues:
+    - pod-identity
+    - irsa
+    Description: Pod Identity for new environments; explicitly select irsa for an existing OIDC deployment.
+  ClusterName:
+    Type: String
+    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9_-]*'
+    Description: Existing EKS cluster. Required for Pod Identity; install its agent separately.
+    MinLength: 1
+Resources:
+  EthDaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Fn::If:
+        - UsePodIdentity
+        - Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+            - sts:AssumeRole
+            - sts:TagSession
+            Condition:
+              StringEquals:
+                aws:RequestTag/eks-cluster-arn:
+                  Fn::Sub: arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                aws:RequestTag/kubernetes-namespace:
+                  Ref: Namespace
+                aws:RequestTag/kubernetes-service-account:
+                  Ref: EthDaServiceAccount
+        - Fn::Sub: |-
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${OidcIssuer}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OidcIssuer}:aud": "sts.amazonaws.com",
+                      "${OidcIssuer}:sub": "system:serviceaccount:${Namespace}:${EthDaServiceAccount}"
+                    }
+                  }
+                }
+              ]
+            }
+      PermissionsBoundary:
+        Fn::If:
+        - HasBoundary
+        - Ref: PermissionsBoundaryArn
+        - Ref: AWS::NoValue
+      Policies:
+      - PolicyName: workload-access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - kms:GetPublicKey
+            - kms:Sign
+            Resource:
+              Ref: EthDaKeyArn
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:PutObject
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:s3:::${ArchiveBucketName}/${ArchivePrefix}/*
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:PutObject
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:s3:::${ProofBucketName}/${ProofPrefix}/scroll-chunk-segmentation-sidecars/*
+            - Fn::Sub: arn:${AWS::Partition}:s3:::${ProofBucketName}/${ProofPrefix}/scroll-chunk-segmentation-sidecars-by-height/*
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: eth-da-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-EthDaRole
+      Description:
+        Fn::Sub: DogeOS ${ResourceClassification} - ${Environment} - EthDaRole. Nonproduction resources may be deleted after testing.
+  FeeOracleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Fn::If:
+        - UsePodIdentity
+        - Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+            - sts:AssumeRole
+            - sts:TagSession
+            Condition:
+              StringEquals:
+                aws:RequestTag/eks-cluster-arn:
+                  Fn::Sub: arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                aws:RequestTag/kubernetes-namespace:
+                  Ref: Namespace
+                aws:RequestTag/kubernetes-service-account:
+                  Ref: FeeOracleServiceAccount
+        - Fn::Sub: |-
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${OidcIssuer}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OidcIssuer}:aud": "sts.amazonaws.com",
+                      "${OidcIssuer}:sub": "system:serviceaccount:${Namespace}:${FeeOracleServiceAccount}"
+                    }
+                  }
+                }
+              ]
+            }
+      PermissionsBoundary:
+        Fn::If:
+        - HasBoundary
+        - Ref: PermissionsBoundaryArn
+        - Ref: AWS::NoValue
+      Policies:
+      - PolicyName: workload-access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - kms:GetPublicKey
+            - kms:Sign
+            Resource:
+              Ref: FeeOracleKeyArn
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: fee-oracle-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-FeeOracleRole
+      Description:
+        Fn::Sub: DogeOS ${ResourceClassification} - ${Environment} - FeeOracleRole. Nonproduction resources may be deleted after testing.
+  Sequencer0Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Fn::If:
+        - UsePodIdentity
+        - Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+            - sts:AssumeRole
+            - sts:TagSession
+            Condition:
+              StringEquals:
+                aws:RequestTag/eks-cluster-arn:
+                  Fn::Sub: arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                aws:RequestTag/kubernetes-namespace:
+                  Ref: Namespace
+                aws:RequestTag/kubernetes-service-account:
+                  Ref: Sequencer0ServiceAccount
+        - Fn::Sub: |-
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${OidcIssuer}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OidcIssuer}:aud": "sts.amazonaws.com",
+                      "${OidcIssuer}:sub": "system:serviceaccount:${Namespace}:${Sequencer0ServiceAccount}"
+                    }
+                  }
+                }
+              ]
+            }
+      PermissionsBoundary:
+        Fn::If:
+        - HasBoundary
+        - Ref: PermissionsBoundaryArn
+        - Ref: AWS::NoValue
+      Policies:
+      - PolicyName: workload-access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - kms:GetPublicKey
+            - kms:Sign
+            Resource:
+              Ref: Sequencer0KeyArn
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: sequencer0-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-Sequencer0Role
+      Description:
+        Fn::Sub: DogeOS ${ResourceClassification} - ${Environment} - Sequencer0Role. Nonproduction resources may be deleted after testing.
+  Sequencer1Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Fn::If:
+        - UsePodIdentity
+        - Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+            - sts:AssumeRole
+            - sts:TagSession
+            Condition:
+              StringEquals:
+                aws:RequestTag/eks-cluster-arn:
+                  Fn::Sub: arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                aws:RequestTag/kubernetes-namespace:
+                  Ref: Namespace
+                aws:RequestTag/kubernetes-service-account:
+                  Ref: Sequencer1ServiceAccount
+        - Fn::Sub: |-
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${OidcIssuer}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OidcIssuer}:aud": "sts.amazonaws.com",
+                      "${OidcIssuer}:sub": "system:serviceaccount:${Namespace}:${Sequencer1ServiceAccount}"
+                    }
+                  }
+                }
+              ]
+            }
+      PermissionsBoundary:
+        Fn::If:
+        - HasBoundary
+        - Ref: PermissionsBoundaryArn
+        - Ref: AWS::NoValue
+      Policies:
+      - PolicyName: workload-access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - kms:GetPublicKey
+            - kms:Sign
+            Resource:
+              Ref: Sequencer1KeyArn
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: sequencer1-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-Sequencer1Role
+      Description:
+        Fn::Sub: DogeOS ${ResourceClassification} - ${Environment} - Sequencer1Role. Nonproduction resources may be deleted after testing.
+  ProofCoordinatorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Fn::If:
+        - UsePodIdentity
+        - Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+            - sts:AssumeRole
+            - sts:TagSession
+            Condition:
+              StringEquals:
+                aws:RequestTag/eks-cluster-arn:
+                  Fn::Sub: arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                aws:RequestTag/kubernetes-namespace:
+                  Ref: Namespace
+                aws:RequestTag/kubernetes-service-account:
+                  Ref: ProofCoordinatorServiceAccount
+        - Fn::Sub: |-
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${OidcIssuer}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OidcIssuer}:aud": "sts.amazonaws.com",
+                      "${OidcIssuer}:sub": "system:serviceaccount:${Namespace}:${ProofCoordinatorServiceAccount}"
+                    }
+                  }
+                }
+              ]
+            }
+      PermissionsBoundary:
+        Fn::If:
+        - HasBoundary
+        - Ref: PermissionsBoundaryArn
+        - Ref: AWS::NoValue
+      Policies:
+      - PolicyName: workload-access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:s3:::${ProofBucketName}/${ProofPrefix}/*
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:s3:::${ProofBucketName}
+            Condition:
+              StringLike:
+                s3:prefix:
+                - Ref: ProofPrefix
+                - Fn::Sub: ${ProofPrefix}/*
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: proof-coordinator-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-ProofCoordinatorRole
+      Description:
+        Fn::Sub: DogeOS ${ResourceClassification} - ${Environment} - ProofCoordinatorRole. Nonproduction resources may be deleted after testing.
+  WithdrawalProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Fn::If:
+        - UsePodIdentity
+        - Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+            - sts:AssumeRole
+            - sts:TagSession
+            Condition:
+              StringEquals:
+                aws:RequestTag/eks-cluster-arn:
+                  Fn::Sub: arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                aws:RequestTag/kubernetes-namespace:
+                  Ref: Namespace
+                aws:RequestTag/kubernetes-service-account:
+                  Ref: WithdrawalProcessorServiceAccount
+        - Fn::Sub: |-
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/${OidcIssuer}"
+                  },
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OidcIssuer}:aud": "sts.amazonaws.com",
+                      "${OidcIssuer}:sub": "system:serviceaccount:${Namespace}:${WithdrawalProcessorServiceAccount}"
+                    }
+                  }
+                }
+              ]
+            }
+      PermissionsBoundary:
+        Fn::If:
+        - HasBoundary
+        - Ref: PermissionsBoundaryArn
+        - Ref: AWS::NoValue
+      Policies:
+      - PolicyName: workload-access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - kms:GetPublicKey
+            - kms:Sign
+            Resource:
+              Ref: BridgeKeyArn
+          - Effect: Allow
+            Action:
+            - s3:GetObject
+            - s3:PutObject
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:s3:::${ProofBucketName}/${ProofPrefix}/*
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: withdrawal-processor-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-WithdrawalProcessorRole
+      Description:
+        Fn::Sub: DogeOS ${ResourceClassification} - ${Environment} - WithdrawalProcessorRole. Nonproduction resources may be deleted after testing.
+  EthDaRoleAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Condition: UsePodIdentity
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      Namespace:
+        Ref: Namespace
+      ServiceAccount:
+        Ref: EthDaServiceAccount
+      RoleArn:
+        Fn::GetAtt:
+        - EthDaRole
+        - Arn
+      DisableSessionTags: false
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: eth-da-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-EthDaRole
+  FeeOracleRoleAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Condition: UsePodIdentity
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      Namespace:
+        Ref: Namespace
+      ServiceAccount:
+        Ref: FeeOracleServiceAccount
+      RoleArn:
+        Fn::GetAtt:
+        - FeeOracleRole
+        - Arn
+      DisableSessionTags: false
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: fee-oracle-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-FeeOracleRole
+  Sequencer0RoleAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Condition: UsePodIdentity
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      Namespace:
+        Ref: Namespace
+      ServiceAccount:
+        Ref: Sequencer0ServiceAccount
+      RoleArn:
+        Fn::GetAtt:
+        - Sequencer0Role
+        - Arn
+      DisableSessionTags: false
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: sequencer0-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-Sequencer0Role
+  Sequencer1RoleAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Condition: UsePodIdentity
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      Namespace:
+        Ref: Namespace
+      ServiceAccount:
+        Ref: Sequencer1ServiceAccount
+      RoleArn:
+        Fn::GetAtt:
+        - Sequencer1Role
+        - Arn
+      DisableSessionTags: false
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: sequencer1-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-Sequencer1Role
+  ProofCoordinatorRoleAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Condition: UsePodIdentity
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      Namespace:
+        Ref: Namespace
+      ServiceAccount:
+        Ref: ProofCoordinatorServiceAccount
+      RoleArn:
+        Fn::GetAtt:
+        - ProofCoordinatorRole
+        - Arn
+      DisableSessionTags: false
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: proof-coordinator-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-ProofCoordinatorRole
+  WithdrawalProcessorRoleAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Condition: UsePodIdentity
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      Namespace:
+        Ref: Namespace
+      ServiceAccount:
+        Ref: WithdrawalProcessorServiceAccount
+      RoleArn:
+        Fn::GetAtt:
+        - WithdrawalProcessorRole
+        - Arn
+      DisableSessionTags: false
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: Purpose
+        Value: withdrawal-processor-role
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-WithdrawalProcessorRole
+Outputs:
+  EthDaRoleArn:
+    Description: External workload role ARN for infrastructure.aws.roles. Pod Identity uses the EKS association, not a ServiceAccount annotation.
+    Value:
+      Fn::GetAtt:
+      - EthDaRole
+      - Arn
+  FeeOracleRoleArn:
+    Description: External workload role ARN for infrastructure.aws.roles. Pod Identity uses the EKS association, not a ServiceAccount annotation.
+    Value:
+      Fn::GetAtt:
+      - FeeOracleRole
+      - Arn
+  Sequencer0RoleArn:
+    Description: External workload role ARN for infrastructure.aws.roles. Pod Identity uses the EKS association, not a ServiceAccount annotation.
+    Value:
+      Fn::GetAtt:
+      - Sequencer0Role
+      - Arn
+  Sequencer1RoleArn:
+    Description: External workload role ARN for infrastructure.aws.roles. Pod Identity uses the EKS association, not a ServiceAccount annotation.
+    Value:
+      Fn::GetAtt:
+      - Sequencer1Role
+      - Arn
+  ProofCoordinatorRoleArn:
+    Description: External workload role ARN for infrastructure.aws.roles. Pod Identity uses the EKS association, not a ServiceAccount annotation.
+    Value:
+      Fn::GetAtt:
+      - ProofCoordinatorRole
+      - Arn
+  WithdrawalProcessorRoleArn:
+    Description: External workload role ARN for infrastructure.aws.roles. Pod Identity uses the EKS association, not a ServiceAccount annotation.
+    Value:
+      Fn::GetAtt:
+      - WithdrawalProcessorRole
+      - Arn
+  EthDaRoleAssociationId:
+    Condition: UsePodIdentity
+    Value:
+      Fn::GetAtt:
+      - EthDaRoleAssociation
+      - AssociationId
+  FeeOracleRoleAssociationId:
+    Condition: UsePodIdentity
+    Value:
+      Fn::GetAtt:
+      - FeeOracleRoleAssociation
+      - AssociationId
+  Sequencer0RoleAssociationId:
+    Condition: UsePodIdentity
+    Value:
+      Fn::GetAtt:
+      - Sequencer0RoleAssociation
+      - AssociationId
+  Sequencer1RoleAssociationId:
+    Condition: UsePodIdentity
+    Value:
+      Fn::GetAtt:
+      - Sequencer1RoleAssociation
+      - AssociationId
+  ProofCoordinatorRoleAssociationId:
+    Condition: UsePodIdentity
+    Value:
+      Fn::GetAtt:
+      - ProofCoordinatorRoleAssociation
+      - AssociationId
+  WithdrawalProcessorRoleAssociationId:
+    Condition: UsePodIdentity
+    Value:
+      Fn::GetAtt:
+      - WithdrawalProcessorRoleAssociation
+      - AssociationId
+Conditions:
+  HasBoundary:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: PermissionsBoundaryArn
+      - ''
+  UsePodIdentity:
+    Fn::Equals:
+    - Ref: WorkloadIdentity
+    - pod-identity
+Rules:
+  IdentityParameters:
+    Assertions:
+    - Assert:
+        Fn::Or:
+        - Fn::Equals:
+          - Ref: WorkloadIdentity
+          - pod-identity
+        - Fn::Not:
+          - Fn::Equals:
+            - Ref: OidcIssuer
+            - ''
+      AssertDescription: IRSA requires OidcIssuer.
