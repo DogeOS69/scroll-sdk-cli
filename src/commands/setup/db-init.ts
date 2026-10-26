@@ -100,6 +100,9 @@ export default class SetupDbInit extends Command {
     }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   private conn: PgClient | undefined;
   private outputContext?: JsonOutputContext
   private pgDatabase: string = "";

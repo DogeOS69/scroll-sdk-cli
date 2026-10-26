@@ -331,7 +331,7 @@ The activation report at `.scrollsdk/cubesigner-activation.json` never claims an
 installation occurred. After explicit installation, verify running WP transport
 `bridge_proof_ref_v1`, gateway production mode, immutable identifier and digest,
 and the actual mounted protocol context. Run the existing
-`setup proof-config-check --live` for its documented topology checks; those alone
+`setup deployment-preflight --proof-live` for its documented topology checks; those alone
 are not a signing/denial test.
 
 Use the release's controlled acceptance harness and archive real positive proof

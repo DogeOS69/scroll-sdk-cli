@@ -334,7 +334,7 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     const selected: any = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8'))
     const spec = structuredClone(MINIMAL)
     spec.dogecoin.network = 'mainnet'
-    spec.signing.cubesigner = {...selected.cubesigner, roles: [{keys: [{keyId: key.keyId, materialId: key.materialId, publicKeyCompressed: selected.cubesigner.roles[0].keys[0].public_key_compressed}], roleId: key.roleId}]}
+    spec.bridge.cubesigner = {...selected.cubesigner, roles: [{keys: [{keyId: key.keyId, materialId: key.materialId, publicKeyCompressed: selected.cubesigner.roles[0].keys[0].public_key_compressed}], roleId: key.roleId}]}
     const previous = process.cwd()
     try {
       process.chdir(root)

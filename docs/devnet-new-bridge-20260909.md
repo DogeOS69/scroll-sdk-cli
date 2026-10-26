@@ -1,5 +1,8 @@
 # New Bridge / native Reth genesis: verified devnet checkpoint
 
+> Historical execution record: removed setup commands below describe the recorded run, not the current interface. Use `setup render`, `setup proof-materials`, `setup proof-publish` and `setup deployment-preflight` for the saved-spec workflow.
+
+
 This records the user-authorized **new instance**, created on 2026-09-09 JST.
 It supersedes the 2026-09-08 instance; it is not an in-place genesis upgrade.
 Steps through configuration and offline Reth initialization are verified.
