@@ -13,10 +13,10 @@ const lookup: Lookup = args => {
 
 /** Resolve public facts only. The frozen result requires no CubeSigner access on apply. */
 export function resolveCubesignerIdentity(input: DeploymentSpec, query: Lookup = lookup): DeploymentSpec {
-  const reference = input.signing?.cubesigner?.identity
+  const reference = input.bridge?.cubesigner?.identity
   if (!reference) return input
   if (typeof reference.roleId !== 'string' || !reference.roleId.trim() || reference.keyId !== undefined && (typeof reference.keyId !== 'string' || !reference.keyId.trim())) throw new Error('CubeSigner identity requires roleId and an optional non-empty keyId')
-  if (input.signing.cubesigner?.roles?.length) throw new Error('Choose CubeSigner identity lookup or explicit roles, not both')
+  if (input.bridge.cubesigner?.roles?.length) throw new Error('Choose CubeSigner identity lookup or explicit roles, not both')
   const role = query(['role', 'get', `--role-id=${reference.roleId}`])
   if (role.role_id !== reference.roleId || !Array.isArray(role.keys)) throw new Error('CubeSigner returned an unexpected role')
   const keys = role.keys as Array<{key_id?: string}>
@@ -27,10 +27,10 @@ export function resolveCubesignerIdentity(input: DeploymentSpec, query: Lookup =
   const expectedType = input.dogecoin.network === 'mainnet' ? 'SecpDogeAddr' : 'SecpDogeTestAddr'
   if (key.key_type !== expectedType) throw new Error('CubeSigner key type does not match the selected Dogecoin network')
   const publicKey = normalizeCompressedSecp256k1PublicKey(key.public_key, 'CubeSigner public key')
-  if (input.bridge.teePubkey && normalizeCompressedSecp256k1PublicKey(input.bridge.teePubkey, 'bridge.teePubkey') !== publicKey) throw new Error('bridge.teePubkey conflicts with the selected CubeSigner key')
+  if (input.bridge.cubesigner?.publicKey && normalizeCompressedSecp256k1PublicKey(input.bridge.cubesigner?.publicKey, 'bridge.cubesigner.publicKey') !== publicKey) throw new Error('bridge.cubesigner.publicKey conflicts with the selected CubeSigner key')
   const spec = structuredClone(input)
-  delete spec.signing.cubesigner!.identity
-  spec.signing.cubesigner!.roles = [{keys: [{keyId, keyType: key.key_type, materialId: key.material_id, publicKey: key.public_key, publicKeyCompressed: publicKey}], name: typeof role.name === 'string' ? role.name : reference.roleId, roleId: reference.roleId}]
-  spec.bridge.teePubkey = publicKey
+  delete spec.bridge.cubesigner!.identity
+  spec.bridge.cubesigner!.roles = [{keys: [{keyId, keyType: key.key_type, materialId: key.material_id, publicKey: key.public_key, publicKeyCompressed: publicKey}], name: typeof role.name === 'string' ? role.name : reference.roleId, roleId: reference.roleId}]
+  spec.bridge.cubesigner!.publicKey = publicKey
   return spec
 }
