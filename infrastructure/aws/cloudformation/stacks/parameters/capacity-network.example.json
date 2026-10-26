@@ -1,0 +1,70 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "HttpsVpcId",
+    "ParameterValue": "vpc-REPLACE"
+  },
+  {
+    "ParameterKey": "HttpsSubnetA",
+    "ParameterValue": "subnet-REPLACEA"
+  },
+  {
+    "ParameterKey": "HttpsSubnetB",
+    "ParameterValue": "subnet-REPLACEB"
+  },
+  {
+    "ParameterKey": "HttpsScheme",
+    "ParameterValue": "internal"
+  },
+  {
+    "ParameterKey": "HttpsCertificateArn",
+    "ParameterValue": "arn:aws:acm:us-east-2:123456789012:certificate/00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "ParameterKey": "HttpsClientIpv4Cidr",
+    "ParameterValue": "10.20.0.0/24"
+  },
+  {
+    "ParameterKey": "HttpsBackendIpv4Cidr",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "HttpsBackendPortFrom",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "HttpsBackendPortTo",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "HttpsPrivateHostname",
+    "ParameterValue": "dstack.example.invalid"
+  },
+  {
+    "ParameterKey": "ControllerHostname",
+    "ParameterValue": "dstack.example.invalid"
+  },
+  {
+    "ParameterKey": "ControllerServiceKind",
+    "ParameterValue": "generic"
+  },
+  {
+    "ParameterKey": "ControllerPathPatterns",
+    "ParameterValue": "/*"
+  },
+  {
+    "ParameterKey": "ControllerListenerPriority",
+    "ParameterValue": "100"
+  },
+  {
+    "ParameterKey": "ControllerBackendPort",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "ControllerHealthCheckPath",
+    "ParameterValue": "/"
+  }
+]
