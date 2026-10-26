@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: NONPRODUCTION DELETABLE Pod Identity compatibility probe. Reuses one signing key and one bucket; creates no keys or storage.
+Parameters:
+  Environment:
+    Type: String
+    AllowedPattern: '[a-z][a-z0-9-]{2,47}'
+  ResourceClassification:
+    Type: String
+    Default: nonproduction-deletable
+    AllowedValues: [nonproduction-deletable]
+  ClusterName:
+    Type: String
+    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9_-]*'
+  Namespace:
+    Type: String
+    AllowedPattern: '[a-z0-9]([-a-z0-9]*[a-z0-9])?'
+  ServiceAccount:
+    Type: String
+    AllowedPattern: '[a-z0-9]([-a-z0-9.]*[a-z0-9])?'
+  SigningKeyArn:
+    Type: String
+    Description: Existing disposable secp256k1 signing key; never use a production key for this probe.
+    AllowedPattern: 'arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[a-f0-9-]+'
+  BucketName:
+    Type: String
+    AllowedPattern: '[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]'
+  BucketPrefix:
+    Type: String
+    Description: Existing nonproduction prefix. Probe can list this prefix but cannot write objects.
+    AllowedPattern: '[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*'
+Resources:
+  ProbeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description:
+        Fn::Sub: NONPRODUCTION DELETABLE ${Environment} Pod Identity probe; remove after testing.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: pods.eks.amazonaws.com
+          Action: [sts:AssumeRole, sts:TagSession]
+          Condition:
+            StringEquals:
+              aws:RequestTag/eks-cluster-arn:
+                Fn::Sub: arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+              aws:RequestTag/kubernetes-namespace:
+                Ref: Namespace
+              aws:RequestTag/kubernetes-service-account:
+                Ref: ServiceAccount
+      Policies:
+      - PolicyName: nonproduction-probe
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action: [kms:GetPublicKey, kms:Sign]
+            Resource:
+              Ref: SigningKeyArn
+          - Effect: Allow
+            Action: s3:ListBucket
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:s3:::${BucketName}
+            Condition:
+              StringLike:
+                s3:prefix:
+                - Ref: BucketPrefix
+                - Fn::Sub: ${BucketPrefix}/*
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Purpose
+        Value: pod-identity-probe
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-pod-identity-probe
+  Association:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      Namespace:
+        Ref: Namespace
+      ServiceAccount:
+        Ref: ServiceAccount
+      RoleArn:
+        Fn::GetAtt: [ProbeRole, Arn]
+      DisableSessionTags: false
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Purpose
+        Value: pod-identity-probe
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-pod-identity-probe
+Outputs:
+  RoleArn:
+    Value:
+      Fn::GetAtt: [ProbeRole, Arn]
+  AssociationId:
+    Value:
+      Fn::GetAtt: [Association, AssociationId]
+  AssociationArn:
+    Value:
+      Fn::GetAtt: [Association, AssociationArn]
