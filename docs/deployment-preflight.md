@@ -1,27 +1,42 @@
-# Deployment preparation and checks
+# Deployment preparation and application checks
 
-Use the current scroll-sdk example templates and the matching scroll-sdk-cli.
-The templates target the supported release; the CLI does not migrate historical
-configuration. These commands check current deployment inputs, reconcile artifact
-permissions and validate signer routing. Run them from the deployment directory.
+Run `scrollsdk setup deployment-preflight --json` after `setup render` and before
+installing Helm releases. It validates local application inputs. Optional proof,
+RPC, Kubernetes and startup checks verify application behavior. The command does
+not install releases or audit AWS resource compliance.
+
+AWS resources and permissions are prepared with the external infrastructure
+workflow. The old `--alb`, `--nlb`, `--artifact-access` and associated AWS audit
+flags have been removed. `setup aws` reads metadata for production YAML instead.
+Use `test ingress` after installation for target health and application
+reachability; configuration generation alone does not prove runtime readiness.
+
+`--proof-live --kube-context <context>` requires activation scope and checks fresh
+signer polls. `--require-dstack` with a selected context checks the installed
+controller. `--rendered-manifest` checks Kubernetes prerequisites; the RPC and
+Reth canary options remain explicit application checks.
 
 ## 1. Prepare and reuse the CubeSigner identity
 
-Create the intended role/key and session with `setup cubesigner-init` and
-`setup cubesigner-refresh`. Existing local files can be reused directly when
-continuing in the same deployment directory.
+Select an existing CubeSigner role/key in `bridge.cubesigner.identity.roleId`
+(and `keyId` when the role contains multiple keys) before `setup plan`. Authenticate
+`cs` first; planning reads and freezes the public identity without creating a
+provider key or role. New provider identities must be provisioned through the
+operator's CubeSigner administration workflow before planning. Existing prepared
+identity files are retained when resuming the same deployment directory.
 
 For a saved staged plan, run `setup signer-session --dir .` after `setup render --dir .` and
 before `setup upload-secrets --dir .` when running from the deployment directory.
 Production mode uses `setup cubesigner-policy prepare-session`, including its
 reviewed lifetimes and interrupted-creation journal. Transport mode reuses valid
-local files or calls `setup cubesigner-refresh` when both files are absent.
+local files or calls `cubesigner refresh-session` when both files are absent.
 Completed session steps are skipped on retry. Rendering
 alone no longer creates a remote session. If a provider request failed without a
 recorded result, inspect the remote session state before retrying. See the
 [staged preparation workflow](spec-preparation.md#commands) for the
-complete sequence. The standalone identity/session commands remain available for
-manual workflows.
+complete sequence. `cubesigner refresh-session` remains available for explicit
+session recovery; it consumes the prepared identity and does not create keys or
+roles.
 
 For optional backup and recovery before archiving/replacing deployment inputs,
 use the `cubesigner` maintenance group:
@@ -46,7 +61,7 @@ organization, role/key/public key, session expiration and refresh expiration.
 Import preserves unrelated config and policy selection, rejects another active
 TEE identity, and makes no CubeSigner provider calls. It does not establish that
 a locally valid session remains unrevoked. If the signing session is expired,
-use `setup cubesigner-refresh`; a checkpoint cannot extend its lifetime.
+use `cubesigner refresh-session`; a checkpoint cannot extend its lifetime.
 
 ## 2. Generate and check current configuration
 
@@ -62,15 +77,19 @@ devnet DeploymentSpec templates select `transport_only` explicitly. The SDK's
 production CubeSigner values retain the production policy posture.
 
 ```bash
-scrollsdk setup prep-charts -N --json
-scrollsdk setup proof-config-check --json
+scrollsdk setup render --dir .
 scrollsdk setup deployment-preflight --json
 ```
 
 By default, `deployment-preflight` checks local configuration. It checks the contract owner signing
 configuration, the fixed 42,069,000 sat genesis sequencing output, WP fees, the DA batcher allowlist,
 the relationship between chunk gas and genesis block gas, CubeSigner policy
-selection, and dstack configuration. It consumes doge-config and conventional
+selection, dstack configuration, and the proof deployment contract when proof is
+configured. Missing proof receipts/contracts fail; an absent proof configuration
+is reported as not-configured. `--proof-scope preparation` checks preparation
+evidence only and does not authorize signer installation. The default scope is
+activation. `--proof-live` requires an explicit Kubernetes context and cannot
+be used with preparation scope. It consumes doge-config and conventional
 values/native paths. It does not rewrite configuration, choose a release, inspect
 live database schemas or perform database recovery.
 
@@ -90,79 +109,13 @@ receipts are supplied, generation checks their release, attachment and current
 reports remote policy state as unverified; it cannot discover remote policies
 from local configuration alone. `transport_only` does not require C2F egress.
 
-## 3. Reconcile each new artifact prefix
+## 3. Prepare artifact access outside the CLI
 
-`proof-aws-init --artifact-public-read-mode existing-public-s3` intentionally
-preserves the bucket policy. It does **not** imply a new prefix is readable.
-
-The DA archive (`ethereumDa.blobArchive.s3`) and the bootstrap snapshot bucket
-(`snapshots.s3`) are managed by `setup artifact-access --store da|snapshot`.
-The proof artifact bucket (`proofArtifacts.s3`) is managed by
-`proof-aws-init`. Configure the writer role for each store:
-
-```bash
-# Plan, then apply the reviewed changes:
-scrollsdk setup artifact-access --store da --public-read \
-  --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter --json
-scrollsdk setup artifact-access --store da --public-read \
-  --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter --apply --json
-
-# Read-only policy/IAM checks before starting the workload:
-scrollsdk setup artifact-access --store da --public-read \
-  --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter --check --json
-
-# DA kill switch: remove public reads; our services keep reading through the
-# S3 VPC endpoint statement.
-scrollsdk setup artifact-access --store da --no-public-read --apply --json
-
-# Snapshots: deploy role writes; public read stays off unless requested.
-scrollsdk setup artifact-access --store snapshot \
-  --writer-role-arn arn:aws:iam::123456789012:role/deploy --apply --json
-```
-
-The command enables versioning and owns three bucket-policy statements by Sid:
-`ScrollSdkDenyInsecureTransport` (TLS-only), `ScrollSdk<Store>ReadViaVpcEndpoint<scope>`
-(GetObject from the S3 Gateway endpoint recorded by `proof-aws-init`, or
-`--vpc-endpoint-id`), and `ScrollSdk<Store>PublicRead<scope>` (anonymous GetObject,
-added by `--public-read`, removed by `--no-public-read`). `<scope>` is a
-deterministic hash of the bucket and deployment prefix, so other deployments
-retain their grants. Only the TLS-only statement is bucket-wide. The DA writer inline
-policy `eth-da-submitter-s3-archive` grants GetObject/PutObject on the DA
-prefix and on the proof store's `scroll-chunk-segmentation-sidecars/` and
-`scroll-chunk-segmentation-sidecars-by-height/` namespaces;
-the snapshot writer gets PutObject only. No list or delete is granted. Other
-statements are preserved, even explicit Deny statements. Policy changes observed
-between planning and writing stop the operation. AWS has no bucket-policy
-compare-and-swap; serialize concurrent policy updates.
-
-The plan fails closed, before any write, when:
-
-- another statement grants anonymous access to the prefix (for example a legacy
-  `ScrollSdkArtifactRead*` grant from the previous `artifact-access`, or a
-  public write). Remove it from the bucket policy yourself; the CLI never
-  deletes statements it does not own;
-- public read would be off but no usable VPC endpoint read statement exists
-  for the prefix: the endpoint must be an available S3 Gateway endpoint in the
-  bucket's region (supply it with `--vpc-endpoint-id` if none is recorded).
-
-`--check` also fails when the managed writer inline policy differs from the
-planned one (for example the old bucket-wide grant, or an extra DeleteObject).
-It does not audit other policies attached to the role.
-
-The command checks bucket/account public policy restrictions before adding a
-public statement. If the account disallows public policies, have its owner
-configure delivery or use an existing gateway.
-
-`--check` requires the exact CLI-managed public statement; equivalent arbitrary
-operator statements are not inferred. Writer checks use IAM simulation. These
-checks cannot certify effective live access through every SCP, endpoint, bucket,
-KMS or gateway policy. Verify anonymous GET on actual required artifact objects
-and a write/read from the real workload after deployment. A successful policy
-write is not reported as runtime acceptance.
-
-Previously parked archive jobs remain a submitter/operator recovery concern.
-Fixing IAM does not rewrite their retry state, and there is no CLI SQL repair
-command.
+The infrastructure owner prepares archive/proof prefixes and signer-kit delivery
+before publication. Use `render-artifact-policy.py` in the CloudFormation pack to
+preserve a current complete bucket policy and add a reviewed HTTPS-read grant.
+Apply it in the bucket's region using the owner's infrastructure workflow. The
+publisher verifies uploaded content but does not edit bucket policies.
 
 ## 4. Check signer-host Docker routing
 
@@ -202,7 +155,7 @@ scrollsdk setup deployment-preflight \
   --namespace default --dstack-deployment dstack-controller --json
 ```
 
-Without `--kube-context`, no Kubernetes calls occur and runtime is reported as
+For the dstack check, without a selected Kubernetes context no Kubernetes calls occur and runtime is reported as
 `not-checked`. With it, the command checks updated/available replicas and observed
 generation, without mutations. Customize namespace/deployment for chart name
 overrides. This is Deployment availability, not provider authentication, GPU
@@ -273,9 +226,9 @@ After Blockscout is available, submit source and require full verification, or
 read the final status without resubmitting:
 
 ```bash
-scrollsdk setup verify-contracts --config-dir . --preinstalls \
+scrollsdk contracts verify --config-dir . --preinstalls \
   --require-verified --wait-seconds 120
-scrollsdk setup verify-contracts --config-dir . --preinstalls --status-only
+scrollsdk contracts verify --config-dir . --preinstalls --status-only
 ```
 
 `--preinstalls` includes the required preinstalls alongside business contracts;
@@ -285,3 +238,21 @@ is partial, pending or unavailable; only full verification passes. The optional
 polling window defaults to zero and is limited to 600 seconds. Without either
 status flag, successful submission reports final status as `not-checked`.
 Block-hash history has no Solidity source and remains a separate bytecode check.
+
+### Capacity Manager diagnostics
+
+For a rendered spec selecting `capacityManager`, use these separate runtime
+commands. Select `--kube-context` explicitly; `--namespace` defaults to the prepared
+target and `--deployment-dir` defaults to the current directory:
+
+- `scrollsdk capacity-manager status --kube-context YOUR_CONTEXT` reads Deployment replicas and recent reconcile log
+  evidence. Raw logs are omitted; GPU allocation and proof acceptance remain
+  unverified.
+- `scrollsdk capacity-manager probe --kube-context YOUR_CONTEXT` creates and deletes a temporary Pod using manager
+  labels and existing Secret references. It checks DNS, dstack TLS/project/backend
+  access and WP capacity API access, without fleet or Worker mutations. The local
+  CLI never reads Secret values. This command explicitly opts into creating the probe Pod.
+
+Results are returned by the runtime command, separately from deployment preflight.
+A failed check exits unsuccessfully. Fleet creation belongs to the manager chart's initialization
+Job during installation/upgrade; diagnostics do not initialize fleets.

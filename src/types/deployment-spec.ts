@@ -5,7 +5,6 @@ import type {DstackControllerConfig} from './dstack-controller.js'
 import type {ExistingAlbConfig, SharedAlbConfig} from './existing-alb.js'
 import type {PreparationConfig} from './preparation.js'
 import type {ActiveProofTopologySpec, ProofTopologyArtifactStoreConfig, ProofTopologyDeploymentConfig, ProofTopologySpec} from './proof-topology.js'
-import type {ProofWorkersConfig} from './proof-workers.js'
 
 export type {
   ActiveProofTopologySpec,
@@ -85,7 +84,7 @@ export interface DeploymentSpec {
   /** Deployment metadata */
   metadata: DeploymentMetadata
 
-  /** Notification intent only; Slack credentials use fixed SLACK_WEBHOOK_URL. */
+  /** Monitoring intent; credentials remain in private Secret storage. */
   monitoring?: MonitoringConfig
 
   /** Network and chain configuration */
@@ -115,9 +114,6 @@ export interface DeploymentSpec {
     /** Artifact prefix is derived from proofArtifacts.s3.keyPrefix. */
     deployment: Omit<ProofTopologyDeploymentConfig, 'artifactKeyPrefix'>
   } & Omit<ProofTopologySpec, 'active' | 'deployment'>
-
-  /** GPU capacity is planned/applied after the coordinator is deployed. */
-  proofWorkers?: ProofWorkersConfig
 
   /** Rollup parameters */
   rollup?: RollupConfig

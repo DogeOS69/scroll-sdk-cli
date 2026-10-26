@@ -33,6 +33,9 @@ export default class ProofTopologyCompile extends Command {
     'withdrawal-processor-config': Flags.string({default: 'withdrawal-processor/WithdrawalProcessor.toml', description: 'Withdrawal Processor base config'}),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   async run(): Promise<void> {
     const {flags} = await this.parse(ProofTopologyCompile)
     const output = new JsonOutputContext('setup proof-topology-compile', flags.json)

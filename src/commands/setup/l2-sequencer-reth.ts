@@ -18,6 +18,7 @@ import {
   truncateIamRoleName,
 } from '../../utils/kms-signer-provisioner.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
+import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 
 type RethSecretMode = 'external-secret' | 'plain'
 type RethSignerBackend = 'aws_kms' | 'local'
@@ -460,6 +461,7 @@ export default class SetupL2SequencerReth extends Command {
   }
 
   public async run(): Promise<void> {
+    requirePreparationStep(['identities'])
     const { flags } = await this.parse(SetupL2SequencerReth) as any
     const jsonCtx = new JsonOutputContext('setup l2-sequencer-reth', flags.json)
     jsonCtx.addWarning('Use setup gen-keystore --service sequencer-reth instead.')
