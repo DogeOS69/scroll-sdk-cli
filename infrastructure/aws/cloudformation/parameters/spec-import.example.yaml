@@ -1,0 +1,64 @@
+# Copy to your private environment directory; replace stack names.
+# Stack names are explicit: the importer never searches or creates resources.
+version: 1
+sources:
+  - kind: signing-identities
+    stack: REPLACE-signing-identities
+  - kind: workload-access
+    stack: REPLACE-workload-access
+  - kind: public-network
+    stack: REPLACE-public-network
+    endpoint: public
+    # index: 0  # Only when bootnodePublicP2p explicitly enables this bootnode.
+  - kind: alb
+    stack: REPLACE-tso-alb
+    endpoint: tso
+  - kind: alb
+    stack: REPLACE-proof-alb
+    endpoint: proof
+  - kind: http-target
+    stack: REPLACE-rpc-http-target
+    binding: l2-reth-rpc-public
+  - kind: http-target
+    stack: REPLACE-rpc-ws-target
+    binding: l2-reth-rpc-public-ws
+  - kind: http-target
+    stack: REPLACE-portal-target
+    binding: frontends
+  - kind: http-target
+    stack: REPLACE-blockscout-api-target
+    binding: blockscout-api
+  - kind: http-target
+    stack: REPLACE-blockscout-frontend-target
+    binding: blockscout-frontend
+  - kind: http-target
+    stack: REPLACE-tso-target
+    binding: tso-service
+  - kind: http-target
+    stack: REPLACE-proof-target
+    binding: proof-coordinator
+  - kind: secret-metadata
+    stack: REPLACE-secret-metadata
+# Optional sources: enable only for services selected in your spec.
+# - kind: bootnode-nlb
+#   stack: REPLACE-bootnode-1
+#   index: 1
+# - kind: capacity-access
+#   stack: REPLACE-capacity-access
+# - kind: capacity-network
+#   stack: REPLACE-capacity-network
+# - kind: secrets-reader
+#   stack: REPLACE-dedicated-secrets-reader
+# For offline import replace `stack` with `file`, relative to this manifest:
+# - kind: signing-identities
+#   file: outputs/signing-identities.outputs.json
+# Individual existing key stack:
+# - kind: signing-key
+#   stack: REPLACE-sequencer-0-key
+#   identity: sequencer  # ethDaSubmitter, feeOracle, sequencer or bridge
+#   index: 0            # Required for sequencer; identifies spec index, not array position.
+# Separate pre-existing dstack ALB and target stacks:
+# - kind: capacity-alb
+#   stack: REPLACE-dstack-alb
+# - kind: capacity-target
+#   stack: REPLACE-dstack-target
