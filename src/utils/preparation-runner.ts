@@ -283,7 +283,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         if (p.proofPublication && step.id !== 'charts') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
         await command(args)
         if (step.id === 'render-final') writeContractsHelmValues(root)
-        writeHelmValues(root, spec)
+        writeHelmValues(root, spec, {deferIngressValidation: step.id !== 'render-final' && Boolean(step.stage)})
         break
       }
 
