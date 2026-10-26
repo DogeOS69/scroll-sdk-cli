@@ -28,10 +28,10 @@ describe('preparation stage command reporting', () => {
 
   it('keeps a completed stage successful and points to its successor', () => {
     const log = sinon.stub(console, 'log')
-    reportPreparationStage(new JsonOutputContext('setup genesis', true), 'genesis', 'deployment', {files: {}, nextStage: 'aws', planId: 'test-plan', status: 'stage-complete', steps: {'genesis-local': 'completed'}})
+    reportPreparationStage(new JsonOutputContext('setup genesis', true), 'genesis', 'deployment', {files: {}, nextStage: 'bridge-funding', planId: 'test-plan', status: 'stage-complete', steps: {'genesis-local': 'completed'}})
     const response = JSON.parse(log.firstCall.args[0])
     expect(response.success).to.equal(true)
-    expect(response.data.nextCommand).to.equal('scrollsdk setup aws')
+    expect(response.data.nextCommand).to.equal('scrollsdk setup bridge-funding')
     expect(process.exitCode).to.equal(0)
   })
 

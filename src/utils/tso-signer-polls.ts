@@ -56,13 +56,13 @@ export function signerLiveness(keys: string[], metrics: string, nowSeconds: numb
 }
 
 /**
- * The post-rollout acceptance check behind `proof-config-check --live`: for an
+ * The post-rollout acceptance check behind `deployment-preflight --proof-live`: for an
  * enforcing deployment, every registered Attestation signer has a fresh
  * authenticated TSO poll. A failure means liveness, not safety.
  */
 export async function liveSignerAcceptance(options: {context?: string; deploymentDir: string; enforcement: string; namespace: string; now: () => number; readMetrics: (target: {context: string; namespace: string}) => Promise<string>}): Promise<SignerLiveness> {
-  if (options.enforcement !== 'enforce') throw new Error('--live applies to enforcing deployments; observe and mock deployments have no signer kit')
-  if (!options.context) throw new Error('--live requires --kube-context')
+  if (options.enforcement !== 'enforce') throw new Error('--proof-live applies to enforcing deployments; observe and mock deployments have no signer kit')
+  if (!options.context) throw new Error('--proof-live requires --kube-context')
   const keys = registeredAttestationKeys(options.deploymentDir)
   const live = signerLiveness(keys, await options.readMetrics({context: options.context, namespace: options.namespace}), Math.floor(options.now() / 1000))
   if (!live.passed) throw new Error(`Not accepted: these registered Attestation signers have no fresh authenticated TSO poll (last 60 s): ${live.signers.filter(signer => !signer.fresh).map(signer => signer.publicKey).join(', ')}. Signing stalls until they poll; nothing is signed incorrectly`)

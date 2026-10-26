@@ -1,4 +1,12 @@
+> CLI entrypoint update (2026-10-23): session maintenance now uses `cubesigner refresh-session`, RPC package export `rpc export`, status pages `monitoring status-page`, and contract source verification `contracts verify`. Commands below record the historical execution.
+
 # Fresh devnet redeployment acceptance (2026-09-09)
+
+> Workflow update (2026-10-23): this document retains historical commands and
+> design assumptions. `setup cubesigner-init` has been removed. Current staged
+> deployments select an existing `bridge.cubesigner.identity` before `setup plan`
+> and prepare runtime sessions with `setup signer-session`. See
+> [the current preparation guide](spec-preparation.md).
 
 ## Current operator decision
 

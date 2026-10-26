@@ -28,6 +28,9 @@ export default class ProofWorkerImageCheck extends Command {
     'preparation-receipt': Flags.string({description: 'Validated proof-release-preparation-v1.json'}),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   async run(): Promise<void> {
     const {flags} = await this.parse(ProofWorkerImageCheck)
     const output = new JsonOutputContext('setup proof-worker-image-check', flags.json)

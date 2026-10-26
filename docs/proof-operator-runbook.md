@@ -155,11 +155,15 @@ IAM roles and token secret, configures the selected external read transport,
 and writes `.data/proof-aws.json`. The DA archive configuration is independent.
 Choose the public-read mode according to who owns the bucket-level policy:
 
-- `existing-public-s3` uses the regional S3 endpoint and preserves the existing
-  bucket policy and Public Access Block settings. Use it for a shared bucket
-  whose anonymous `GetObject` policy is already managed by the operator, such
-  as a testnet DA archive. The CLI still manages the selected prefix's IRSA
-  roles, optional EKS S3 Gateway endpoint statement, and proof token secret.
+- `existing-public-s3` uses the regional S3 endpoint on an existing, possibly
+  shared, bucket. The CLI makes the selected prefix's external-consumer paths
+  (including `deployment-kits/`) anonymously readable: when the policy already
+  grants them it is left unchanged, otherwise the CLI adds only this
+  deployment's own prefix-scoped statement. It never edits other statements or
+  any Public Access Block, and stops before IAM/secret changes when a Public
+  Access Block or Deny statement would prevent the reads. The CLI also manages
+  the prefix's IRSA roles, optional EKS S3 Gateway endpoint statement, and
+  proof token secret.
 - `direct-s3` makes the CLI manage anonymous reads for the required external
   proof paths. Use it only where the CLI is allowed to manage the bucket-wide
   Public Access Block posture. It rejects an unmanaged public `GetObject`
@@ -168,9 +172,13 @@ Choose the public-read mode according to who owns the bucket-level policy:
 - `existing-gateway` keeps S3 private and records an operator-managed
   credential-free HTTPS gateway.
 
-`existing-public-s3` does not narrow or otherwise endorse a pre-existing broad
-policy such as `arn:aws:s3:::bucket/*`; it records that policy as
-operator-managed and unverified. Review that policy independently.
+Every mode keeps proof artifacts forever: the CLI owns an abort-only lifecycle rule
+for the prefix and refuses a rule that would expire, permanently delete or archive
+its objects (see [deployment preflight](deployment-preflight.md)).
+
+`existing-public-s3` does not narrow a pre-existing broad policy such as
+`arn:aws:s3:::bucket/*`; it only confirms that the required paths are readable.
+Review broader exposure independently.
 If the bucket is in a different AWS region from EKS, the command keeps the
 EKS/Secrets region separate from the artifact region and skips the regional S3
 Gateway endpoint; cross-region access uses the normal S3 endpoint or an
@@ -265,23 +273,13 @@ scrollsdk setup doge-config --proof-topology
 ```
 
 The wizard reads `.data/proof-aws.json` and `.data/proof-materials-v1.json`,
-asks for the future real Worker placement, the deployment backend for
-adapter-managed Workers, and the Worker-visible Proof Coordinator URL. It
-writes the staged active profile and defaults to:
+asks for the Worker-visible Proof Coordinator URL, and stages external real
+Workers managed by Capacity Manager. It defaults to disabled/mock/observe and
+runs compiler preflight before replacing the topology.
 
-```toml
-mode = "disabled"
-generation = "mock"
-enforcement = "observe"
-```
-
-It runs compiler preflight before replacing the existing topology.
-
-The independent `deployment.workerDeploymentBackend` selects Docker Compose or
-Kubernetes for **real** Workers only. `active.workerLaunch` remains the staged
-real Worker placement. Under PR #1136 mock produces no Worker contract regardless
-of these placement choices. The mock image may still be used as a legacy
-identity-export input; it is not a service to deploy.
+Mock generation produces no Worker contract or Worker service. Real Workers use
+the compiler's external contract; the CLI no longer selects a Compose or local
+Kubernetes worker backend.
 
 ### Step 4: generate charts and native configuration
 
@@ -328,12 +326,10 @@ deployment convention: operators do not copy genesis contents into the native
 Proof Coordinator TOML or change the path in a post-generation environment
 overlay.
 
-The post-#937 Worker handoff bundle has its own `bundleId`, derived from the
-Worker contract, immutable image, Compose document, protocol context,
-materials, and required resources. It does not contain or consume the retired
-`topologyDigest`, `expected_topology_digest`, or
-`DOGEOS_PROOF_TOPOLOGY_DIGEST` fields. Their presence is treated as evidence of
-a stale pre-#937 bundle and fails generation or validation.
+Capacity Manager consumes the compiler Worker contract, the immutable image
+receipt and the verified program publication. Its generated launch command
+checks resource hashes before running the Worker. There is no transferable
+Compose Worker bundle or separate host hydration step.
 
 ### Step 5: export the signer deployment kit
 
@@ -361,23 +357,23 @@ archive of it) unchanged at an immutable URL, copy the printed
 `protocol_instance_id`, kit version and manifest SHA-256 into the deployment
 record, and record the URL with `--published-url`. Only the canonical kit built
 from the deployment inputs can be recorded; to change an endpoint, update the
-deployment input and export again. `proof-config-check` requires the recorded
+deployment input and export again. `deployment-preflight` requires the recorded
 kit for enforcement.
 
 ### Step 6: validate the deployment contract
 
 ```bash
-scrollsdk setup proof-config-check
+scrollsdk setup deployment-preflight
 ```
 
 This checks the source switches, compiler bundle, Helm projection, native
 configuration, Worker contract, material hashes, and secret-file modes without
 network probes or printing secrets. Compiler-owned bundle files, sidecars, and
-the Worker handoff bundle remain strict. Helm values must exist but are not
+the Worker contract and publication receipts remain strict. Helm values must exist but are not
 required to remain byte-identical: deployment-specific overlays such as the
 shadowfork RPC/network projection are intentionally applied after
-`prep-charts`. The Worker bundle's own manifest still verifies all of its
-security-relevant files.
+`prep-charts`. Capacity Manager's generated launch command verifies published
+resource hashes before starting a Worker.
 
 ## 5. Switch operations
 
@@ -392,17 +388,15 @@ Edit only:
 ```
 
 Then regenerate and validate. Deploy WP and PC; keep all legacy mock Workers
-stopped. Do not run `setup proof-worker` for mock. When the compiler declares
+stopped. Mock generation needs no GPU Worker. When the compiler declares
 `eager_materializer`, deploy that service with the matching genesis, namespace
 and prefix-scoped store credential. Verify proof rows reach `succeeded` with
 zero Worker pods/containers, while Attestation Signers remain in `observe`.
 
 ### Mock to real generation
 
-There is no CPU mock Worker to drain on PR #1136. If the already-staged
-`workerLaunch` is `external`, start the real Worker on the
-operator-selected GPU host using the newly generated Compose handoff bundle.
-Edit only:
+There is no CPU mock Worker to drain on PR #1136. Stage `workerLaunch: external`
+and Capacity Manager intent, then edit:
 
 ```diff
  [proof_topology]
@@ -410,7 +404,8 @@ Edit only:
 +generation = "real"
 ```
 
-Regenerate and deploy while enforcement remains `observe`. Watch coordinator
+Regenerate and deploy the proof services and Capacity Manager while enforcement
+remains `observe`. The manager starts external GPU Workers. Watch coordinator
 routing warnings and proof outcomes until real proofs are consistently
 produced and verified. Worker movement is an operational action, not a proof
 identity change.
@@ -427,7 +422,7 @@ After a clean observation window, edit only:
 
 Regenerate and deploy WP/PC configuration, export and publish the deployment
 kit (`export-deployment-kit`, then `--published-url`), and have every partner
-import it. The switch is not accepted until `scrollsdk setup proof-config-check
+import it. The switch is not accepted until `scrollsdk setup deployment-preflight
 --live --kube-context <context> --namespace <namespace>` passes: every
 Attestation signer in the WP `tsoSigners` must show a fresh authenticated TSO
 poll. A failure means liveness, not safety; signing stalls until they poll. This switch does not change Worker image,
@@ -500,36 +495,24 @@ Where each value lives:
 | Master | Secrets Manager property `prover-worker-master`, synced to the coordinator Secret key `prover-worker-token` | Proof Coordinator, capacity manager |
 | Worker credential | Per Worker, minted for that Worker's id | That Worker only |
 
-How each Worker gets its credential:
-
-- **External Docker Compose Worker:** `scrollsdk setup proof-worker` reads the
-  master, mints a credential for the bundle's `--worker-id` and writes only that
-  credential to `prover-worker.token`. The bundle check rejects a token minted
-  for another name, and rejects the master itself. To mint elsewhere, pass the
-  credential in `DOGEOS_PROVER_WORKER_TOKEN` instead.
-- **SDK GPU launcher (`setup proof-workers`):** every planned Worker has its own
-  id and its own dstack secret. `apply` reads the master, mints one credential
-  per Worker and sends only those credentials to dstack. Plans made before this
-  change must be destroyed and planned again.
-- **Capacity manager:** the chart mounts the master from the coordinator Secret
-  as `--worker-credential-master-file`. The manager mints a credential for each
-  run itself, and no dstack project secret is used.
-- **Local Kubernetes Worker:** the Worker mounts only the
-  `prover-worker-credential` key of its dedicated Secret (`workerSecretName`,
-  default: `prover-worker-credentials`), never the coordinator Secret. After
-  `setup prep-charts`, run `scrollsdk setup proof-worker --kube-context <context>
-  --namespace <namespace>` to mint and install the credential for the compiled
-  worker id. An already minted credential can instead come from
-  `DOGEOS_PROVER_WORKER_TOKEN`. The command checks generated-file integrity
-  before reading the master, sends only the worker credential to Kubernetes,
-  and never restarts the Pod automatically. Start or restart the worker after
-  provisioning; its `subPath` token mount cannot refresh in place.
+Capacity Manager mounts the master from the coordinator Secret as
+`--worker-credential-master-file`. The Core controller mints a credential for
+each run; the CLI does not mint or distribute Worker credentials. No dstack
+project secret is used for the Worker credential.
 
 The beta.8 compiler receives separate runtime paths: `workerTokenFile` names
 only the coordinator master (default `/app/secrets/prover-worker-token`), while
 `prover_worker.worker_credential_file` is `/app/secrets/prover-worker-credential`.
-The two paths must differ. Compose and Kubernetes consume the compiler's worker
-path; the dstack launcher maps it to its own credential file.
+The two paths must differ. The generated Capacity Manager launch command maps
+the Worker credential to its own private file.
+
+Select compiler and runtime images that support separate coordinator-master and
+worker credentials. For custom Core tags, verify that every participating image
+supports the `worker_credential_file` schema; tag ordering alone does not establish
+compatibility. If the compiler reports `unknown field worker_credential_file`,
+select a compatible compiler and runtime release while retaining the field and
+credential separation. Verify compiler schema compatibility before deployment in
+addition to the proof manifest and image-pin checks performed by `setup plan`.
 
 **Upgrading from a shared token.** `setup proof-aws-init` adds a fresh
 `prover-worker-master` to an existing secret. It does not reuse the old
@@ -539,9 +522,9 @@ syncing until `setup prep-charts` repoints it.
 
 **Rotation**, from a shared token or for a later rotation:
 
-1. Drain the old fleet. Set capacity to zero and wait until every run has
-   stopped. Run `setup proof-workers destroy` for SDK sessions, and stop any
-   external Workers.
+1. Drain the old fleet using the Capacity Manager operational procedure. Stop
+   scheduling and confirm all owned runs have stopped before rotating credentials.
+   Legacy manual sessions must be retired with their original tooling.
 2. For the first migration, run `scrollsdk setup proof-aws-init` to add a fresh
    master while preserving `proof-work-token`. For full rotation, use
    `--rotate-tokens`: it replaces both `prover-worker-master` and
@@ -552,5 +535,5 @@ syncing until `setup prep-charts` repoints it.
    manager**. WP's token uses a `subPath` mount, so Secret synchronization alone
    does not refresh it. For first-time migration with the proof-work token
    unchanged, restart the coordinator and manager to load the master.
-4. Mint new Worker credentials (`setup proof-worker`, or `setup proof-workers
-   apply` for a new session) and start the Workers again.
+4. Resume Capacity Manager after its new master is loaded. The Core controller
+   mints new credentials when it starts Worker runs.

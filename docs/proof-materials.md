@@ -176,7 +176,7 @@ the release worker's shared `--print-identity-json` document, without the
 `bridge_guest` section. Export it with `setup proof-image-tools --action export
 --require-real-materialization` from the matching release tool image. A full
 Bridge bake bundle is intended for `--generation real` and is rejected by the
-mock compiler. The complete `setup proof-config prepare` transaction performs
+mock compiler. The saved `setup proof-materials` stage performs
 this projection itself and pins the PC image owning the imported materializers;
 when importing manually, select that same PC image digest in chart values.
 A mock preparation or a successful bake is not an accepted real proof.

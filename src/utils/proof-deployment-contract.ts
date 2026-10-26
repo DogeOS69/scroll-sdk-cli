@@ -49,12 +49,10 @@ export interface ProofDeploymentContract {
     resolvedSidecarSha256: string
   }
   worker: {
-    bundleDir?: string
-    bundleId?: string
     contractFile?: string
     contractSha256?: string
     enabled: boolean
-    kind: 'compiled-compose' | 'compiled-external' | 'compiled-local' | 'none'
+    kind: 'compiled-external' | 'none'
   }
 }
 
@@ -83,10 +81,8 @@ export interface ProofDeploymentContractInput {
   tsoValuesFile: string
   withdrawalProcessor: ComponentInput
   worker?: {
-    bundleDir?: string
-    bundleId?: string
     contractFile: string
-    kind: 'compiled-compose' | 'compiled-external' | 'compiled-local'
+    kind: 'compiled-external'
   }
 }
 
@@ -118,12 +114,11 @@ function component(root: string, input: ComponentInput, name: string): ProofDepl
 export function writeProofDeploymentContract(input: ProofDeploymentContractInput): ProofDeploymentContract {
   const root = path.resolve(input.deploymentDir)
   if (input.generation === 'mock' && (input.worker || input.proverWorker.enabled)) throw new Error('mock proving must not deploy a Worker')
+  if (input.proverWorker.enabled || input.worker && input.worker.kind !== 'compiled-external') throw new Error('Standalone workers have been removed; use Capacity Manager')
   const worker = input.mode === 'disabled' || input.generation === 'mock'
     ? {enabled: false, kind: 'none' as const}
     : input.worker
       ? {
-          ...(input.worker.bundleDir ? {bundleDir: relative(root, input.worker.bundleDir)} : {}),
-          ...(input.worker.bundleId ? {bundleId: input.worker.bundleId} : {}),
           contractFile: relative(root, input.worker.contractFile),
           contractSha256: sha256File(path.resolve(root, input.worker.contractFile)),
           enabled: true,
@@ -276,6 +271,7 @@ export function validateProofDeploymentContract(
     catch (error) { problems.push(`selected materials: ${String(error)}`) }
   }
 
+  if (!['compiled-external', 'none'].includes(contract.worker.kind) || 'bundleDir' in contract.worker || 'bundleId' in contract.worker || contract.components.proverWorker.enabled) problems.push('Standalone worker contracts are no longer supported; render for Capacity Manager')
   if (contract.worker.enabled) {
     const file = contract.worker.contractFile && resolveContractFile(root, contract.worker.contractFile)
     if (!file || !fs.existsSync(file) || sha256File(file) !== contract.worker.contractSha256) problems.push('Worker contract checksum mismatch')

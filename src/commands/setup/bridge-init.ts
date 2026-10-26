@@ -336,6 +336,9 @@ export class BridgeInitCommand extends Command {
     }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   private dockerPlatform: string = 'linux/amd64'
   private ethereumDaProbe: string = 'cluster'
   private jsonCtx!: JsonOutputContext

@@ -467,7 +467,7 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
       data: {accessMode: 'ReadWriteOnce', mountPath: '/data', retain: true, size: '1000Gi'},
       engineLegacyStateRoot: true,
       engineSyncAtStartup: 'true',
-      extraArgs: ['--network.legacy-geth-header-transform', 'false', ...(role === 'rpc' && !publicRpc ? ['--rpc.eth-proof-window', '100000'] : [])],
+      extraArgs: [...(sequencer ? [] : ['--consensus.exit-on-signer-rotation']), ...(role === 'rpc' && !publicRpc ? ['--rpc.eth-proof-window', '100000'] : [])],
       genesis: {chainPath: '/app/genesis/genesis.json', configMapName: 'genesis-config', mountPath: '/app/genesis/genesis.json', subPath: 'genesis.json'},
       http: {addr: '0.0.0.0', api: role === 'rpc' && !publicRpc ? 'eth,net,web3,rpc,debug' : 'eth,net,web3,rpc', corsDomain: '*', enabled: true},
       ipcPath: '/tmp/reth.ipc',
