@@ -5,6 +5,7 @@ import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {validateExistingAlb} from './existing-alb.js'
 import {existingNlbEntries} from './existing-nlb.js'
 import {validateMonitoring} from './monitoring-slack.js'
+import {validateNetworkPolicyIntent} from './network-policy-preflight.js'
 import {specDstackController} from './spec-kubernetes-target.js'
 /**
  * DeploymentSpec Generator
@@ -557,6 +558,7 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
 
   const spec = normalizeDeploymentSpec(rawSpec)
   const errors: ValidationError[] = []
+  try {validateNetworkPolicyIntent(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'infrastructure.networkPolicy'})}
   try {validateExistingAlb(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'infrastructure.aws.alb'})}
   try {
     if (spec.infrastructure) existingNlbEntries(spec)
