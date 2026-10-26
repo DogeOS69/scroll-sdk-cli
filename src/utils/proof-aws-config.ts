@@ -38,15 +38,17 @@ export interface ProofAwsConfig {
     region: string
   }
   serviceAccounts: {
+    /** Role ARNs are bound by the aws-roles preparation step. */
     proofCoordinator: {
       name: string
-      roleArn: string
+      roleArn?: string
     }
     withdrawalProcessor: {
       name: string
-      roleArn: string
+      roleArn?: string
     }
   }
+  workloadIdentity?: 'irsa' | 'pod-identity'
 }
 
 export interface ProofAwsConfigInput {
@@ -56,6 +58,7 @@ export interface ProofAwsConfigInput {
   keyPrefix: string
   provisioned: ProofAwsProvisionResult
   withdrawalServiceAccount: string
+  workloadIdentity?: 'irsa' | 'pod-identity'
 }
 
 function requiredString(value: unknown, label: string): string {
@@ -84,6 +87,10 @@ function requiredRoleArn(value: unknown, label: string): string {
   return arn
 }
 
+function optionalRoleArn(value: unknown, label: string): {roleArn?: string} {
+  return value === undefined ? {} : {roleArn: requiredRoleArn(value, label)}
+}
+
 function normalizeArtifactReadTransport(
   raw: unknown,
   label: string,
@@ -104,10 +111,12 @@ function normalizeArtifactReadTransport(
     )
   }
 
-  const expectedStatus = publicReadMode === 'direct-s3'
-    ? 'configured-unverified'
-    : 'operator-managed-unverified'
-  if (value.publicStatus !== expectedStatus) {
+  const expectedStatus = publicReadMode === 'existing-gateway'
+    ? 'operator-managed-unverified'
+    : 'configured-unverified'
+  // Receipts written before the CLI owned existing-public-s3 grants keep their recorded status.
+  const legacy = publicReadMode === 'existing-public-s3' && value.publicStatus === 'operator-managed-unverified'
+  if (value.publicStatus !== expectedStatus && !legacy) {
     throw new Error(`${label}.publicStatus must be ${expectedStatus} for ${publicReadMode}`)
   }
 
@@ -116,7 +125,7 @@ function normalizeArtifactReadTransport(
       requiredString(value.publicEndpointUrl, `${label}.publicEndpointUrl`),
     ),
     publicReadMode,
-    publicStatus: expectedStatus,
+    publicStatus: legacy ? value.publicStatus! : expectedStatus,
   }
   if (!value.vpcEndpoint) return normalized
 
@@ -160,8 +169,10 @@ function normalizeArtifactReadTransport(
 }
 
 export function buildProofAwsConfig(input: ProofAwsConfigInput): ProofAwsConfig {
+  if (input.workloadIdentity !== undefined && input.workloadIdentity !== 'irsa' && input.workloadIdentity !== 'pod-identity') throw new Error('proof AWS workloadIdentity must be irsa or pod-identity')
   const {identity, provisioned} = input
   return {
+    ...(input.workloadIdentity ? {workloadIdentity: input.workloadIdentity} : {}),
     artifactReadTransport: normalizeArtifactReadTransport(
       provisioned.artifactReadTransport,
       'proof AWS artifactReadTransport',
@@ -185,11 +196,11 @@ export function buildProofAwsConfig(input: ProofAwsConfigInput): ProofAwsConfig 
     serviceAccounts: {
       proofCoordinator: {
         name: requiredString(input.coordinatorServiceAccount, 'proof coordinator service account'),
-        roleArn: requiredRoleArn(provisioned.coordinatorRoleArn, 'proof coordinator role ARN'),
+        ...optionalRoleArn(provisioned.coordinatorRoleArn, 'proof coordinator role ARN'),
       },
       withdrawalProcessor: {
         name: requiredString(input.withdrawalServiceAccount, 'withdrawal processor service account'),
-        roleArn: requiredRoleArn(provisioned.withdrawalRoleArn, 'withdrawal processor role ARN'),
+        ...optionalRoleArn(provisioned.withdrawalRoleArn, 'withdrawal processor role ARN'),
       },
     },
   }
@@ -247,21 +258,16 @@ export function validateProofAwsConfig(raw: unknown, label: string): ProofAwsCon
       artifactReadTransport,
       bucket: requiredString(value.artifactStore?.bucket, `${label}.artifactStore.bucket`),
       bucketCreated: false,
-      coordinatorRoleArn: requiredRoleArn(
-        value.serviceAccounts?.proofCoordinator?.roleArn,
-        `${label}.serviceAccounts.proofCoordinator.roleArn`,
-      ),
+      coordinatorRoleArn: value.serviceAccounts?.proofCoordinator?.roleArn,
       secretAction: 'reused',
       secretName: requiredString(value.secret?.name, `${label}.secret.name`),
-      withdrawalRoleArn: requiredRoleArn(
-        value.serviceAccounts?.withdrawalProcessor?.roleArn,
-        `${label}.serviceAccounts.withdrawalProcessor.roleArn`,
-      ),
+      withdrawalRoleArn: value.serviceAccounts?.withdrawalProcessor?.roleArn,
     },
     withdrawalServiceAccount: requiredString(
       value.serviceAccounts?.withdrawalProcessor?.name,
       `${label}.serviceAccounts.withdrawalProcessor.name`,
     ),
+    workloadIdentity: value.workloadIdentity,
   })
 }
 
@@ -274,7 +280,7 @@ export function readProofAwsConfig(
     : path.resolve(deploymentDir, configPath)
   if (!fs.existsSync(resolved)) {
     throw new Error(
-      `proof AWS config not found: ${resolved}; run scrollsdk setup proof-aws-init first`,
+      `proof AWS config not found: ${resolved}; run scrollsdk setup aws first`,
     )
   }
 
@@ -304,15 +310,18 @@ export function readOptionalProofAwsConfig(
 }
 
 export function proofAwsValuesProjection(config: ProofAwsConfig): ProofAwsValuesProjection {
+  const {proofCoordinator, withdrawalProcessor} = config.serviceAccounts
+  if (!proofCoordinator.roleArn || !withdrawalProcessor.roleArn) throw new Error('Proof workload roles are not bound; run setup aws so the aws-roles step prepares them')
   return {
+    ...(config.workloadIdentity ? {workloadIdentity: config.workloadIdentity} : {}),
     artifactRegion: config.artifactStore.region,
     bucket: config.artifactStore.bucket,
-    coordinatorRoleArn: config.serviceAccounts.proofCoordinator.roleArn,
+    coordinatorRoleArn: proofCoordinator.roleArn,
     coordinatorServiceAccount: config.serviceAccounts.proofCoordinator.name,
     keyPrefix: config.artifactStore.keyPrefix,
     secretName: config.secret.name,
     secretRegion: config.secret.region,
-    withdrawalRoleArn: config.serviceAccounts.withdrawalProcessor.roleArn,
+    withdrawalRoleArn: withdrawalProcessor.roleArn,
     withdrawalServiceAccount: config.serviceAccounts.withdrawalProcessor.name,
   }
 }

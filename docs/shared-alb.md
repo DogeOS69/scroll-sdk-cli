@@ -68,7 +68,7 @@ IngressGroup membership limited to trusted releases. Follow the SDK's
 [shared ALB guide](https://github.com/dogeos69/scroll-sdk/blob/main/examples/shared-alb.md)
 for manual production values and acceptance checks.
 
-`setup alb` continues to verify **external** ALBs and their bindings; it does not
+`setup aws` continues to verify **external** ALBs and their bindings; it does not
 claim to verify the controller-created shared ALB. Confirm shared listener,
 certificate and target health after installation, along with RPC POST, Portal
 pages and Blockscout APIs/WebSocket/indexing. The RPC GET health matcher

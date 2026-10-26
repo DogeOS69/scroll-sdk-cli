@@ -28,9 +28,9 @@ Each store has its own writer permissions and versioned bucket:
 
 | Bucket | doge-config | Writer | Readers | Managed by |
 |---|---|---|---|---|
-| DA archive | `[ethereumDa.blobArchive.s3]` | eth-da-submitter (put, no delete) | everyone: our services through the S3 VPC endpoint statement, RPC operators through the public statement (the kill switch) | `setup artifact-access --store da` |
+| DA archive | `[ethereumDa.blobArchive.s3]` | eth-da-submitter (put, no delete) | everyone: our services through the S3 VPC endpoint statement, RPC operators through the public statement (the kill switch) | `artifacts access --store da` |
 | Proof artifacts | `[proofArtifacts.s3]` | proof-coordinator (put, delete for its recovery path), withdrawal-processor (put), eth-da-submitter (sidecar namespace only) | external Workers and attestation signers by key (public, unadvertised); the only artifact origin in signer and CubeSigner allowlists | `setup proof-aws-init` |
-| Bootstrap snapshots | `[snapshots.s3]` | deploy role (put) | our init containers through the VPC endpoint; public read off unless requested | `setup artifact-access --store snapshot` |
+| Bootstrap snapshots | `[snapshots.s3]` | deploy role (put) | our init containers through the VPC endpoint; public read off unless requested | `artifacts access --store snapshot` |
 
 The CLI selects a **deployment prefix**, not a directory name for each artifact
 type. The physical object key is `<keyPrefix>/<core-relative-key>`.
@@ -75,10 +75,11 @@ and delete remain authenticated even for externally readable objects.
 
 `setup proof-aws-init` distinguishes bucket-policy ownership from object-key
 layout. Use `--artifact-public-read-mode existing-public-s3` when the proof
-bucket already has an operator-managed anonymous S3 policy. In that mode the
-command does not change the bucket-wide Public Access Block settings or the
-existing public-read policy; it only manages deployment-scoped proof resources
-and, when selected, the prefix-scoped EKS Gateway endpoint grant. `direct-s3` only when the CLI owns the bucket's public-access posture (it then
+bucket already serves anonymous S3 reads for other deployments. In that mode the
+command does not change the bucket-wide Public Access Block settings or other
+statements; it adds this deployment's prefix-scoped read grant only when the
+policy does not already grant those paths, and manages deployment-scoped proof
+resources and, when selected, the prefix-scoped EKS Gateway endpoint grant. `direct-s3` only when the CLI owns the bucket's public-access posture (it then
 also adds the TLS-only `ScrollSdkDenyInsecureTransport` statement), or
 `existing-gateway` when S3 remains private behind an HTTPS gateway.
 
@@ -92,7 +93,7 @@ their effective access remains the operator's responsibility.
 After configuring the archive, run `scrollsdk setup prep-charts`. It reads
 `.data/doge-config.toml` and projects the settings into `eth-da-submitter`,
 `l1-interface`, `withdrawal-processor`, and every runtime Reth values file.
-`scrollsdk setup gen-rpc-package` independently reads the same canonical
+`scrollsdk rpc export` independently reads the same canonical
 configuration when it generates `L2RETH_BLOB_S3_URL`.
 
 ## DA publisher authority
@@ -169,13 +170,16 @@ EKS-region gateway endpoint when a bucket is cross-region.
 To let the CLI create a missing bucket, use
 `--create-archive-bucket` (the default) instead. The CLI performs
 `HeadBucket`, creates only on a not-found result, blocks all public access, and
-enables SSE-S3 and versioning. With `--role-arn` (or the submitter's service
-account role) it writes the inline policy `eth-da-submitter-s3-archive`:
+enables SSE-S3 and versioning. On the submitter's CLI-owned workload role
+it writes the inline policy `eth-da-submitter-s3-archive`:
 `s3:GetObject` and `s3:PutObject` on the archive prefix and, when
 `[proofArtifacts.s3]` is configured, on the proof store's
 `scroll-chunk-segmentation-sidecars/` and
-`scroll-chunk-segmentation-sidecars-by-height/` namespaces. `setup artifact-access --store
-da` plans and checks the same policy. `setup proof-aws-init` grants
+`scroll-chunk-segmentation-sidecars-by-height/` namespaces. `artifacts access --store
+da` plans and checks the same policy. Every run also reconciles the DA prefix's
+retention lifecycle rule (abort incomplete multipart uploads only, no blob expiry)
+and refuses another enabled rule that would expire, permanently delete or archive
+blobs under the prefix; see [deployment preflight](deployment-preflight.md). `setup proof-aws-init` grants
 `s3:GetObject` and `s3:PutObject` on the proof prefix when it creates or
 manages a proof service IAM role. The Proof Coordinator role additionally receives prefix-conditioned `s3:ListBucket` and `s3:DeleteObject` on
 that prefix so it can retire stale locator objects after an operator-requested
@@ -341,11 +345,11 @@ missing-object behavior.
 Run `scrollsdk setup prep-charts` after updating `.data/doge-config.toml` to
 sync S3 settings into `eth-da-submitter`, `l1-interface`,
 `withdrawal-processor`, and runtime Reth values. Run
-`scrollsdk setup gen-rpc-package` after that when producing an external RPC
+`scrollsdk rpc export` after that when producing an external RPC
 package.
 
 Public read of the DA archive is one bucket-policy statement,
-`ScrollSdkDaArchivePublicRead<scope>`, managed with `setup artifact-access --store da
+`ScrollSdkDaArchivePublicRead<scope>`, managed with `artifacts access --store da
 --public-read` / `--no-public-read`. Removing it cuts anonymous egress while
 our services keep reading through `ScrollSdkDaArchiveReadViaVpcEndpoint<scope>`
 (same-region buckets only).

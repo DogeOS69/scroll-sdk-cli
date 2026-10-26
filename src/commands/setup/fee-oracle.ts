@@ -46,13 +46,6 @@ export default class SetupFeeOracle extends Command {
       default: false,
       description: 'Run without prompts. Uses existing config or provided flags.',
     }),
-    'role-arn': Flags.string({
-      description: 'Existing IAM role ARN to annotate on the fee-oracle service account.',
-    }),
-    'service-account': Flags.string({
-      default: 'fee-oracle',
-      description: 'Kubernetes service account used by fee-oracle.',
-    }),
     'signer-backend': Flags.string({
       description: 'Signer backend for L2_GAS_ORACLE_SENDER / fee-oracle.',
       options: ['local', 'aws-kms'],
