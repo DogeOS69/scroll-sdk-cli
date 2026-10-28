@@ -68,7 +68,6 @@ import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
-import {writeHelmValues} from '../../utils/spec-helm-values.js'
 import {validateServiceNetworkPolicy} from '../../utils/service-network-policy.js'
 import {
   getRequiredManagedSignerAddress,
@@ -76,6 +75,7 @@ import {
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import {writeHelmValues} from '../../utils/spec-helm-values.js'
 import {specDstackController} from '../../utils/spec-kubernetes-target.js'
 import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {TSO_ALB_EDGE_RECEIPT, reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
