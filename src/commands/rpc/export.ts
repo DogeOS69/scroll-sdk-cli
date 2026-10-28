@@ -865,6 +865,297 @@ export default class SetupGenRpcPackage extends Command {
     }),
   }
 
+  protected extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string {
+    const genesisYamlPath = path.resolve(valuesDir, 'genesis.yaml')
+    const l2RpcYamlPath = path.resolve(valuesDir, 'l2-rpc-production.yaml')
+
+    if (!fs.existsSync(genesisYamlPath)) {
+      throw new Error(`genesis.yaml not found at: ${genesisYamlPath}`)
+    }
+
+    try {
+      // Read and parse genesis.yaml
+      const genesisYamlContent = fs.readFileSync(genesisYamlPath, 'utf8')
+      const genesisYaml = yaml.load(genesisYamlContent) as any
+
+      if (!genesisYaml) {
+        throw new Error('Failed to parse genesis.yaml - file appears to be empty or invalid')
+      }
+
+      // Extract genesis.json from the YAML structure
+      // The structure might be: { genesis: "JSON_STRING" } or { genesis: JSON_OBJECT }
+      let genesisJson: unknown
+
+      if (genesisYaml.scrollConfig) {
+        if (typeof genesisYaml.scrollConfig === 'string') {
+          try {
+            genesisJson = JSON.parse(genesisYaml.scrollConfig)
+          } catch (parseError) {
+            throw new Error(`Failed to parse genesis JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
+          }
+        } else if (typeof genesisYaml.scrollConfig === 'object') {
+          genesisJson = genesisYaml.scrollConfig
+        } else {
+          throw new TypeError('Invalid genesis format in genesis.yaml - expected string or object')
+        }
+      } else {
+        // If no 'genesis' key, assume the entire YAML is the genesis data
+        genesisJson = genesisYaml
+      }
+
+      const sourceConfig = requireGenesisObject(
+        requireGenesisObject(genesisJson, '<root>').config, 'config',
+      )
+      let startL1Block: unknown
+      if (sourceConfig.systemContract !== undefined) {
+        if (!fs.existsSync(l2RpcYamlPath)) {
+          throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
+        }
+
+        startL1Block = this.loadConfigMapEnvData(l2RpcYamlPath).L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK
+        if (startL1Block === undefined) {
+          throw new Error(
+            'l2-rpc-production.yaml configMaps.env.data.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK ' +
+            'is required for legacy genesis config.scroll.l1Config.startL1Block',
+          )
+        }
+      }
+
+      const rethGenesis = normalizeGenesisForReth(genesisJson, startL1Block)
+
+      // Create target directory
+      const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
+      fs.mkdirSync(targetDirectory, { recursive: true })
+
+      // Write a deterministic Reth-specific derivative. The source
+      // values/genesis.yaml remains untouched for all consumers.
+      const genesisJsonPath = path.join(targetDirectory, 'l2reth-genesis.json')
+      fs.writeFileSync(genesisJsonPath, `${JSON.stringify(rethGenesis, null, 2)}\n`)
+
+      const legacyGethGenesisPath = path.join(targetDirectory, 'l2geth-genesis.json')
+      if (fs.existsSync(legacyGethGenesisPath)) {
+        fs.rmSync(legacyGethGenesisPath)
+      }
+
+      return genesisJsonPath
+
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Failed to parse genesis')) {
+        throw error
+      }
+
+      throw new Error(`Failed to extract genesis.json: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  protected extractProtocolContextJson(valuesDir: string, rpcPackageDir: string, network: string): string {
+    const protocolContextYamlPath = path.resolve(valuesDir, 'protocol_context.yaml')
+
+    if (!fs.existsSync(protocolContextYamlPath)) {
+      throw new Error(`protocol_context.yaml not found at: ${protocolContextYamlPath}`)
+    }
+
+    try {
+      const protocolContextYamlContent = fs.readFileSync(protocolContextYamlPath, 'utf8')
+      const protocolContextYaml = yaml.load(protocolContextYamlContent) as any
+
+      if (!protocolContextYaml || protocolContextYaml.protocolContext === undefined) {
+        throw new Error('protocol_context.yaml missing top-level `protocolContext` key')
+      }
+
+      // The configMap stores protocol_context as a JSON string (helm `|` block);
+      // accept an already-parsed object too for robustness.
+      let protocolContextJson: any
+
+      if (typeof protocolContextYaml.protocolContext === 'string') {
+        try {
+          protocolContextJson = JSON.parse(protocolContextYaml.protocolContext)
+        } catch (parseError) {
+          throw new Error(`Failed to parse protocolContext JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
+        }
+      } else if (typeof protocolContextYaml.protocolContext === 'object') {
+        protocolContextJson = protocolContextYaml.protocolContext
+      } else {
+        throw new TypeError('Invalid protocolContext format in protocol_context.yaml - expected string or object')
+      }
+
+      // Mirror genesis: write into configs/<network>/ so docker-compose can mount it.
+      const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
+      fs.mkdirSync(targetDirectory, { recursive: true })
+
+      const protocolContextJsonPath = path.join(targetDirectory, 'protocol_context.json')
+      fs.writeFileSync(protocolContextJsonPath, JSON.stringify(protocolContextJson, null, 2))
+
+      return protocolContextJsonPath
+
+    } catch (error) {
+      if (error instanceof Error &&
+        (error.message.includes('protocolContext') || error.message.includes('protocol_context.yaml'))) {
+        throw error
+      }
+
+      throw new Error(`Failed to extract protocol_context.json: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  protected generateL1InterfaceEnvFile(
+    valuesDir: string,
+    rpcPackageDir: string,
+    network: string,
+    _config: any,
+  ): { generatedPath: string } {
+    const l1InterfaceYamlPath = path.resolve(valuesDir, 'l1-interface-production.yaml')
+
+    if (!fs.existsSync(l1InterfaceYamlPath)) {
+      throw new Error(`l1-interface-production.yaml not found at: ${l1InterfaceYamlPath}`)
+    }
+
+    try {
+      const envData = this.loadConfigMapEnvData(l1InterfaceYamlPath)
+
+      // Create target directory
+      const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
+      fs.mkdirSync(targetDirectory, { recursive: true })
+
+      const envFilePath = path.join(targetDirectory, 'l1-interface.env')
+
+      // Generated file holds ONLY deterministic values derived from the values
+      // YAML. Operator-owned keys (local creds / external endpoints), secrets,
+      // celestia, and deprecated keys are excluded so this file can be fully
+      // overwritten on every run without losing operator input.
+      // Runtime defaults first so values-YAML keys override them on collision.
+      const generatedVars: Record<string, string> = {...L1_INTERFACE_RUNTIME_DEFAULTS}
+      for (const [key, value] of Object.entries(envData)) {
+        if (isUserOwnedL1InterfaceEnvKey(key)) continue
+        if (isCelestiaEnvKey(key)) continue
+        if (isSecretLikeEnvKey(key)) continue
+        if (L1_INTERFACE_DEPRECATED_ENV_KEYS.has(key)) continue
+        generatedVars[key] = value
+      }
+
+      // Forced overrides win over both runtime defaults and the source YAML.
+      Object.assign(generatedVars, L1_INTERFACE_FORCED_ENV_OVERRIDES)
+
+      // Full overwrite: a key dropped from the source (or newly deprecated)
+      // disappears here too. This is what prevents stale keys such as
+      // SCROLL_MESSENGER_ADDRESS from surviving across regenerations.
+      this.writeFullEnvFile(envFilePath, generatedVars, [
+        `# L1 Interface ${this.capitalize(network)} Configuration`,
+        '#',
+        '# GENERATED by `scrollsdk rpc export` — DO NOT EDIT.',
+        '# Overwritten on every run. Put operator overrides (L1 RPC endpoint,',
+        '# beacon node, external Dogecoin RPC) in l1-interface.local.env,',
+        '# which docker-compose loads last so it wins.',
+        '',
+      ])
+      this.log(chalk.green(`✓ Wrote generated l1-interface.env (${Object.keys(generatedVars).length} vars)`))
+
+      return { generatedPath: envFilePath }
+
+    } catch (error) {
+      throw new Error(`Failed to generate l1-interface.env: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  protected generateL2NodeEnvFiles(
+    _config: any | undefined,
+    dogeConfig: DogeConfig,
+    rpcPackageDir: string,
+    loadBalancerDomains: Record<string, string | string[]> = {},
+    namespace: string,
+    valuesDir: string,
+  ): L2NodeEnvGenerationResult {
+    const {network} = dogeConfig
+    const networkTitleCase = this.capitalize(network)
+    const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
+    const envFilePathReth = path.join(targetDirectory, 'l2reth.env')
+    const legacyGethEnvFilePath = path.join(targetDirectory, 'l2geth.env')
+    const l2RethRpcYamlPath = path.resolve(valuesDir, 'l2-reth-rpc-production.yaml')
+    const removedLegacyPaths: string[] = []
+
+    // Create directory structure
+    fs.mkdirSync(targetDirectory, { recursive: true })
+
+    if (!fs.existsSync(l2RethRpcYamlPath)) {
+      throw new Error(`l2-reth-rpc-production.yaml not found at: ${l2RethRpcYamlPath}`)
+    }
+
+    const l2RethRpcValues = yaml.load(fs.readFileSync(l2RethRpcYamlPath, 'utf8')) as any
+    const rawNetworkId = l2RethRpcValues?.reth?.networkId
+    const networkId = rawNetworkId === undefined || rawNetworkId === null ? '' : String(rawNetworkId).trim()
+    if (!/^\d+$/.test(networkId)) {
+      throw new Error(`l2-reth-rpc-production.yaml reth.networkId must be a decimal integer, got: ${JSON.stringify(rawNetworkId)}`)
+    }
+
+    const rethBootnodePeers = this.collectRethBootnodePeers(dogeConfig, valuesDir)
+    const peerListValue = this.resolveExternalPeerList(
+      l2RethRpcValues?.reth?.trustedPeers,
+      loadBalancerDomains,
+      rethBootnodePeers,
+    )
+
+    const validSigner = this.resolveL2RethValidSigner(dogeConfig)
+    if (!validSigner) {
+      this.warn('No Reth sequencer index 0 configured; L2RETH_VALID_SIGNER is omitted. Run setup l2-sequencer-reth --index 0 to configure it.')
+    }
+
+    const l2rethVars: EnvVarMap = {}
+    if (peerListValue) {
+      // l2reth_entrypoint.sh currently reads this historical env var name to
+      // build rollup-node --trusted-peers flags.
+      l2rethVars.L2GETH_PEER_LIST = peerListValue
+    }
+
+    l2rethVars.L2RETH_L1_ENDPOINT = l2RethRpcValues?.reth?.l1Url || L1_INTERFACE_RPC_ENDPOINT
+    l2rethVars.L2RETH_NETWORK_ID = networkId
+    const blobS3Url = resolveL2RethBlobS3Url(dogeConfig)
+    if (blobS3Url) {
+      l2rethVars.L2RETH_BLOB_S3_URL = blobS3Url
+    }
+
+    if (validSigner) {
+      l2rethVars.L2RETH_VALID_SIGNER = validSigner
+    }
+
+    const rethWriteResult = this.writeEnvFile(envFilePathReth, l2rethVars, {
+      header: [
+        `# L2Reth ${networkTitleCase} Configuration`,
+        '# Generated for external RPC package usage',
+        '',
+        '# Network specific settings',
+      ],
+      removeKey: key => isCelestiaEnvKey(key) ||
+        key === 'CHAIN_ID' ||
+        key === 'L2RETH_DA_BLOB_BEACON_NODE' ||
+        (key === 'L2RETH_BLOB_S3_URL' && !blobS3Url) ||
+        (key === 'L2RETH_VALID_SIGNER' && !validSigner) ||
+        (key.startsWith('L2GETH_') && key !== 'L2GETH_PEER_LIST'),
+    })
+
+    if (fs.existsSync(legacyGethEnvFilePath)) {
+      fs.rmSync(legacyGethEnvFilePath)
+      removedLegacyPaths.push(legacyGethEnvFilePath)
+    }
+
+    if (rethWriteResult.changed) {
+      this.logEnvWriteChanges('l2reth.env', rethWriteResult)
+    } else {
+      this.log(chalk.green('✓ No changes detected in l2reth.env - file is up to date'))
+    }
+
+    const hasUnresolvedExternalPeers = hasUnresolvedExternalPeer(l2rethVars.L2GETH_PEER_LIST)
+
+    if (hasUnresolvedExternalPeers) {
+      this.addLoadBalancerHint(envFilePathReth, namespace)
+    }
+
+    return {
+      hasUnresolvedExternalPeers,
+      l2rethEnvPath: envFilePathReth,
+      removedLegacyPaths,
+    }
+  }
+
   public async run(): Promise<void> {
     const { flags } = await this.parse(SetupGenRpcPackage)
 
@@ -926,7 +1217,7 @@ export default class SetupGenRpcPackage extends Command {
 
       this.log(chalk.blue(`Network type: ${network}`))
 
-      // Step 4: Setup directory structure  
+      // Step 4: Setup directory structure
       this.log(chalk.blue(`RPC package directory: ${rpcPackageDir}`))
 
       // Step 5: Get LoadBalancer domains
@@ -1084,139 +1375,6 @@ export default class SetupGenRpcPackage extends Command {
     return uniqueStrings(peers)
   }
 
-  private extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string {
-    const genesisYamlPath = path.resolve(valuesDir, 'genesis.yaml')
-    const l2RpcYamlPath = path.resolve(valuesDir, 'l2-rpc-production.yaml')
-
-    if (!fs.existsSync(genesisYamlPath)) {
-      throw new Error(`genesis.yaml not found at: ${genesisYamlPath}`)
-    }
-
-    try {
-      // Read and parse genesis.yaml
-      const genesisYamlContent = fs.readFileSync(genesisYamlPath, 'utf8')
-      const genesisYaml = yaml.load(genesisYamlContent) as any
-
-      if (!genesisYaml) {
-        throw new Error('Failed to parse genesis.yaml - file appears to be empty or invalid')
-      }
-
-      // Extract genesis.json from the YAML structure
-      // The structure might be: { genesis: "JSON_STRING" } or { genesis: JSON_OBJECT }
-      let genesisJson: unknown
-
-      if (genesisYaml.scrollConfig) {
-        if (typeof genesisYaml.scrollConfig === 'string') {
-          try {
-            genesisJson = JSON.parse(genesisYaml.scrollConfig)
-          } catch (parseError) {
-            throw new Error(`Failed to parse genesis JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
-          }
-        } else if (typeof genesisYaml.scrollConfig === 'object') {
-          genesisJson = genesisYaml.scrollConfig
-        } else {
-          throw new TypeError('Invalid genesis format in genesis.yaml - expected string or object')
-        }
-      } else {
-        // If no 'genesis' key, assume the entire YAML is the genesis data
-        genesisJson = genesisYaml
-      }
-
-      const sourceConfig = requireGenesisObject(
-        requireGenesisObject(genesisJson, '<root>').config, 'config',
-      )
-      let startL1Block: unknown
-      if (sourceConfig.systemContract !== undefined) {
-        if (!fs.existsSync(l2RpcYamlPath)) {
-          throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
-        }
-
-        startL1Block = this.loadConfigMapEnvData(l2RpcYamlPath).L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK
-        if (startL1Block === undefined) {
-          throw new Error(
-            'l2-rpc-production.yaml configMaps.env.data.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK ' +
-            'is required for legacy genesis config.scroll.l1Config.startL1Block',
-          )
-        }
-      }
-
-      const rethGenesis = normalizeGenesisForReth(genesisJson, startL1Block)
-
-      // Create target directory
-      const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
-      fs.mkdirSync(targetDirectory, { recursive: true })
-
-      // Write a deterministic Reth-specific derivative. The source
-      // values/genesis.yaml remains untouched for all consumers.
-      const genesisJsonPath = path.join(targetDirectory, 'l2reth-genesis.json')
-      fs.writeFileSync(genesisJsonPath, `${JSON.stringify(rethGenesis, null, 2)}\n`)
-
-      const legacyGethGenesisPath = path.join(targetDirectory, 'l2geth-genesis.json')
-      if (fs.existsSync(legacyGethGenesisPath)) {
-        fs.rmSync(legacyGethGenesisPath)
-      }
-
-      return genesisJsonPath
-
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('Failed to parse genesis')) {
-        throw error
-      }
-
-      throw new Error(`Failed to extract genesis.json: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  private extractProtocolContextJson(valuesDir: string, rpcPackageDir: string, network: string): string {
-    const protocolContextYamlPath = path.resolve(valuesDir, 'protocol_context.yaml')
-
-    if (!fs.existsSync(protocolContextYamlPath)) {
-      throw new Error(`protocol_context.yaml not found at: ${protocolContextYamlPath}`)
-    }
-
-    try {
-      const protocolContextYamlContent = fs.readFileSync(protocolContextYamlPath, 'utf8')
-      const protocolContextYaml = yaml.load(protocolContextYamlContent) as any
-
-      if (!protocolContextYaml || protocolContextYaml.protocolContext === undefined) {
-        throw new Error('protocol_context.yaml missing top-level `protocolContext` key')
-      }
-
-      // The configMap stores protocol_context as a JSON string (helm `|` block);
-      // accept an already-parsed object too for robustness.
-      let protocolContextJson: any
-
-      if (typeof protocolContextYaml.protocolContext === 'string') {
-        try {
-          protocolContextJson = JSON.parse(protocolContextYaml.protocolContext)
-        } catch (parseError) {
-          throw new Error(`Failed to parse protocolContext JSON string: ${parseError instanceof Error ? parseError.message : String(parseError)}`)
-        }
-      } else if (typeof protocolContextYaml.protocolContext === 'object') {
-        protocolContextJson = protocolContextYaml.protocolContext
-      } else {
-        throw new TypeError('Invalid protocolContext format in protocol_context.yaml - expected string or object')
-      }
-
-      // Mirror genesis: write into configs/<network>/ so docker-compose can mount it.
-      const targetDirectory = path.resolve(rpcPackageDir, 'configs', network)
-      fs.mkdirSync(targetDirectory, { recursive: true })
-
-      const protocolContextJsonPath = path.join(targetDirectory, 'protocol_context.json')
-      fs.writeFileSync(protocolContextJsonPath, JSON.stringify(protocolContextJson, null, 2))
-
-      return protocolContextJsonPath
-
-    } catch (error) {
-      if (error instanceof Error &&
-        (error.message.includes('protocolContext') || error.message.includes('protocol_context.yaml'))) {
-        throw error
-      }
-
-      throw new Error(`Failed to extract protocol_context.json: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
   private extractRethBootnodeEnodes(value: unknown, index: number, key = ''): string[] {
     const peers: string[] = []
     const rethBootnodeEnodePattern = new RegExp(`enode://[^@\\s,'"]+@l2-reth-bootnode-${index}(?:[.:][^:\\s,'"]+)*:\\d+`, 'g')
@@ -1246,164 +1404,6 @@ export default class SetupGenRpcPackage extends Command {
     }
 
     return uniqueStrings(peers)
-  }
-
-  private generateL1InterfaceEnvFile(
-    valuesDir: string,
-    rpcPackageDir: string,
-    network: string,
-    _config: any,
-  ): { generatedPath: string } {
-    const l1InterfaceYamlPath = path.resolve(valuesDir, 'l1-interface-production.yaml')
-
-    if (!fs.existsSync(l1InterfaceYamlPath)) {
-      throw new Error(`l1-interface-production.yaml not found at: ${l1InterfaceYamlPath}`)
-    }
-
-    try {
-      const envData = this.loadConfigMapEnvData(l1InterfaceYamlPath)
-
-      // Create target directory
-      const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
-      fs.mkdirSync(targetDirectory, { recursive: true })
-
-      const envFilePath = path.join(targetDirectory, 'l1-interface.env')
-
-      // Generated file holds ONLY deterministic values derived from the values
-      // YAML. Operator-owned keys (local creds / external endpoints), secrets,
-      // celestia, and deprecated keys are excluded so this file can be fully
-      // overwritten on every run without losing operator input.
-      // Runtime defaults first so values-YAML keys override them on collision.
-      const generatedVars: Record<string, string> = {...L1_INTERFACE_RUNTIME_DEFAULTS}
-      for (const [key, value] of Object.entries(envData)) {
-        if (isUserOwnedL1InterfaceEnvKey(key)) continue
-        if (isCelestiaEnvKey(key)) continue
-        if (isSecretLikeEnvKey(key)) continue
-        if (L1_INTERFACE_DEPRECATED_ENV_KEYS.has(key)) continue
-        generatedVars[key] = value
-      }
-
-      // Forced overrides win over both runtime defaults and the source YAML.
-      Object.assign(generatedVars, L1_INTERFACE_FORCED_ENV_OVERRIDES)
-
-      // Full overwrite: a key dropped from the source (or newly deprecated)
-      // disappears here too. This is what prevents stale keys such as
-      // SCROLL_MESSENGER_ADDRESS from surviving across regenerations.
-      this.writeFullEnvFile(envFilePath, generatedVars, [
-        `# L1 Interface ${this.capitalize(network)} Configuration`,
-        '#',
-        '# GENERATED by `scrollsdk rpc export` — DO NOT EDIT.',
-        '# Overwritten on every run. Put operator overrides (L1 RPC endpoint,',
-        '# beacon node, external Dogecoin RPC) in l1-interface.local.env,',
-        '# which docker-compose loads last so it wins.',
-        '',
-      ])
-      this.log(chalk.green(`✓ Wrote generated l1-interface.env (${Object.keys(generatedVars).length} vars)`))
-
-      return { generatedPath: envFilePath }
-
-    } catch (error) {
-      throw new Error(`Failed to generate l1-interface.env: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  private generateL2NodeEnvFiles(
-    _config: any | undefined,
-    dogeConfig: DogeConfig,
-    rpcPackageDir: string,
-    loadBalancerDomains: Record<string, string | string[]> = {},
-    namespace: string,
-    valuesDir: string,
-  ): L2NodeEnvGenerationResult {
-    const {network} = dogeConfig
-    const networkTitleCase = this.capitalize(network)
-    const targetDirectory = path.resolve(rpcPackageDir, 'envs', network)
-    const envFilePathReth = path.join(targetDirectory, 'l2reth.env')
-    const legacyGethEnvFilePath = path.join(targetDirectory, 'l2geth.env')
-    const l2RethRpcYamlPath = path.resolve(valuesDir, 'l2-reth-rpc-production.yaml')
-    const removedLegacyPaths: string[] = []
-
-    // Create directory structure
-    fs.mkdirSync(targetDirectory, { recursive: true })
-
-    if (!fs.existsSync(l2RethRpcYamlPath)) {
-      throw new Error(`l2-reth-rpc-production.yaml not found at: ${l2RethRpcYamlPath}`)
-    }
-
-    const l2RethRpcValues = yaml.load(fs.readFileSync(l2RethRpcYamlPath, 'utf8')) as any
-    const rawNetworkId = l2RethRpcValues?.reth?.networkId
-    const networkId = rawNetworkId === undefined || rawNetworkId === null ? '' : String(rawNetworkId).trim()
-    if (!/^\d+$/.test(networkId)) {
-      throw new Error(`l2-reth-rpc-production.yaml reth.networkId must be a decimal integer, got: ${JSON.stringify(rawNetworkId)}`)
-    }
-
-    const rethBootnodePeers = this.collectRethBootnodePeers(dogeConfig, valuesDir)
-    const peerListValue = this.resolveExternalPeerList(
-      l2RethRpcValues?.reth?.trustedPeers,
-      loadBalancerDomains,
-      rethBootnodePeers,
-    )
-
-    const validSigner = this.resolveL2RethValidSigner(dogeConfig)
-    if (!validSigner) {
-      this.warn('No Reth sequencer index 0 configured; L2RETH_VALID_SIGNER is omitted. Run setup l2-sequencer-reth --index 0 to configure it.')
-    }
-
-    const l2rethVars: EnvVarMap = {}
-    if (peerListValue) {
-      // l2reth_entrypoint.sh currently reads this historical env var name to
-      // build rollup-node --trusted-peers flags.
-      l2rethVars.L2GETH_PEER_LIST = peerListValue
-    }
-
-    l2rethVars.L2RETH_L1_ENDPOINT = l2RethRpcValues?.reth?.l1Url || L1_INTERFACE_RPC_ENDPOINT
-    l2rethVars.L2RETH_NETWORK_ID = networkId
-    const blobS3Url = resolveL2RethBlobS3Url(dogeConfig)
-    if (blobS3Url) {
-      l2rethVars.L2RETH_BLOB_S3_URL = blobS3Url
-    }
-
-    if (validSigner) {
-      l2rethVars.L2RETH_VALID_SIGNER = validSigner
-    }
-
-    const rethWriteResult = this.writeEnvFile(envFilePathReth, l2rethVars, {
-      header: [
-        `# L2Reth ${networkTitleCase} Configuration`,
-        '# Generated for external RPC package usage',
-        '',
-        '# Network specific settings',
-      ],
-      removeKey: key => isCelestiaEnvKey(key) ||
-        key === 'CHAIN_ID' ||
-        key === 'L2RETH_DA_BLOB_BEACON_NODE' ||
-        (key === 'L2RETH_BLOB_S3_URL' && !blobS3Url) ||
-        (key === 'L2RETH_VALID_SIGNER' && !validSigner) ||
-        (key.startsWith('L2GETH_') && key !== 'L2GETH_PEER_LIST'),
-    })
-
-    if (fs.existsSync(legacyGethEnvFilePath)) {
-      fs.rmSync(legacyGethEnvFilePath)
-      removedLegacyPaths.push(legacyGethEnvFilePath)
-    }
-
-    if (rethWriteResult.changed) {
-      this.logEnvWriteChanges('l2reth.env', rethWriteResult)
-    } else {
-      this.log(chalk.green('✓ No changes detected in l2reth.env - file is up to date'))
-    }
-
-    const hasUnresolvedExternalPeers = hasUnresolvedExternalPeer(l2rethVars.L2GETH_PEER_LIST)
-
-    if (hasUnresolvedExternalPeers) {
-      this.addLoadBalancerHint(envFilePathReth, namespace)
-    }
-
-    return {
-      hasUnresolvedExternalPeers,
-      l2rethEnvPath: envFilePathReth,
-      removedLegacyPaths,
-    }
   }
 
   private async getLoadBalancerDomains(namespace: string): Promise<Record<string, string | string[]>> {
