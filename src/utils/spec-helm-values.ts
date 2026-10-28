@@ -3,7 +3,7 @@ import fs from 'node:fs'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
-import {validateFinalValues, type ValuesValidationIntent, type ValuesValidationOptions} from './final-values-validation.js'
+import {type ValuesValidationIntent, type ValuesValidationOptions, validateFinalValues} from './final-values-validation.js'
 import {localPath, privateWrite} from './preparation-io.js'
 import {mergeBootstrapValues} from './spec-bootstrap.js'
 

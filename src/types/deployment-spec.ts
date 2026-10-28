@@ -177,9 +177,6 @@ export interface DeploymentMetadata {
 }
 
 export interface InfrastructureConfig {
-  /** Required enforcer for explicit network-policy preflight; infrastructure tooling owns activation. */
-  networkPolicy?: {provider: 'aws-vpc-cni'}
-
   /** AWS-specific configuration */
   aws?: {
     accountId: string
@@ -231,6 +228,9 @@ export interface InfrastructureConfig {
 
   /** Kubernetes namespace (defaults to default). */
   namespace?: string
+
+  /** Required enforcer for explicit network-policy preflight; infrastructure tooling owns activation. */
+  networkPolicy?: {provider: 'aws-vpc-cni'}
 
   /** Cloud provider: aws, gcp, local */
   provider: 'aws' | 'gcp' | 'local'

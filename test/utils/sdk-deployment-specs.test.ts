@@ -21,7 +21,31 @@ describe('paired SDK deployment starters', () => {
     const charts = process.env.SDK_ALB_CHARTS
     if (!examples || !charts) this.skip()
     const sdk = path.dirname(charts!)
-    const spec = normalizeDeploymentSpec(yaml.load(fs.readFileSync(path.join(examples!, `deployment-spec.${network}.example.yaml`), 'utf8')) as DeploymentSpec)
+    const legacy = yaml.load(fs.readFileSync(path.join(examples!, `deployment-spec.${network}.example.yaml`), 'utf8')) as any
+    // These pinned chart fixtures predate the bridge schema change. Production
+    // must reject them; adapt only this test input to keep testing their wiring.
+    expect(() => normalizeDeploymentSpec(legacy)).to.throw('attestationSigners: has been removed')
+    const current = structuredClone(legacy)
+    current.bridge.attestation = {signers: current.attestationSigners.map((signer: any, index: number) => ({
+      ...signer, name: current.bridge.initialAttestationKeyset.signerIds[index],
+    })), threshold: current.bridge.initialAttestationKeyset.threshold}
+    current.bridge.recovery = {
+      publicKeys: current.preparation.bridge.production.recoveryPublicKeys,
+      threshold: current.bridge.thresholds.recovery,
+      timelock: current.bridge.timelock,
+    }
+    current.bridge.cubesigner = current.signing.cubesigner
+    for (const key of ['attestationSigners', 'signing', 'proofWorkers']) delete current[key]
+    for (const key of ['thresholds', 'keyCounts', 'initialAttestationKeyset', 'timelock']) delete current.bridge[key]
+    delete current.preparation.bridge.production.recoveryPublicKeys
+    // KMS resources are now supplied by external infrastructure, not created by CLI.
+    for (const signer of [current.identities.ethDaSubmitter, current.identities.feeOracle,
+      ...current.identities.sequencers.map((node: any) => node.signer)]) {
+      signer.action = 'reuse'
+      signer.kms = {keyId: 'alias/nonfunctional-fixture/signer'}
+    }
+
+    const spec = normalizeDeploymentSpec(current as DeploymentSpec)
     assertDeploymentSpecFields(spec)
     expect(execFileSync('git', ['-C', sdk, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim(), 'render the exact chart revision selected by the starter').eq(spec.templates!.sdkRevision)
     // Replace only external operator inputs; retain the starter's real topology,

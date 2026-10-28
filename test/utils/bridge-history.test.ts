@@ -34,6 +34,9 @@ function fixture(): DeploymentSpec {
   spec.images = {services: {dogeosBridgeHistory: {tag: 'test-history-release'}, frontends: {tag: 'test-activity-release'}}}
   spec.infrastructure.aws!.sharedAlb = {certificateArn, groupName: 'history-test', services: [HISTORY_SERVICE, 'frontends']}
   spec.dogecoin.indexerStartHeight = 123
+  spec.helmValues = {'tso-service-production.yaml': yaml.dump({
+    networkPolicy: {allowFrom: {edge: [{ipBlock: {cidr: '192.0.2.0/24'}}]}},
+  })}
   return spec
 }
 

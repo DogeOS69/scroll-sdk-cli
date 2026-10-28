@@ -3,7 +3,7 @@ export interface CapacityManagerConfig {
   /** Explicit transport selection. Omit only for legacy prepared HTTPS values. */
   connection?: {
     /** Independently managed internal ALB. No CloudFormation ownership is assumed. */
-    existingAlb?: {loadBalancerArn: string; listenerArn: string; targetGroupArn: string}
+    existingAlb?: {listenerArn: string; loadBalancerArn: string; targetGroupArn: string}
     internalAlb?: {
       awsProfile?: string
       certificateArn: string

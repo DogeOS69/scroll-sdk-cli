@@ -1906,6 +1906,7 @@ describe('deployment-spec-generator', () => {
         } else {
           expect(node.reth.extraArgs).to.include('--consensus.exit-on-signer-rotation');
         }
+
         expect(node).not.to.have.property('configMaps');
       }
 
