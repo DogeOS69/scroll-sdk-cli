@@ -60,9 +60,6 @@ def render(value, params, conditions):
         return render(yes if conditions[condition] else no, params, conditions)
     if set(value) == {"Fn::Sub"}:
         return re.sub(r"\$\{([^}]+)\}", lambda match: str(params[match[1]]), value["Fn::Sub"])
-    if set(value) == {"Fn::Split"}:
-        separator, text = value["Fn::Split"]
-        return render(text, params, conditions).split(separator)
     return {key: render(item, params, conditions) for key, item in value.items()}
 
 
