@@ -209,6 +209,7 @@ USAGE
 * [`scrollsdk plugins unlink [PLUGIN]`](#scrollsdk-plugins-unlink-plugin)
 * [`scrollsdk plugins update`](#scrollsdk-plugins-update)
 * [`scrollsdk rpc export`](#scrollsdk-rpc-export)
+* [`scrollsdk rpc export-network`](#scrollsdk-rpc-export-network)
 * [`scrollsdk setup aws`](#scrollsdk-setup-aws)
 * [`scrollsdk setup bridge-funding`](#scrollsdk-setup-bridge-funding)
 * [`scrollsdk setup cubesigner-policy build`](#scrollsdk-setup-cubesigner-policy-build)
@@ -1170,6 +1171,27 @@ EXAMPLES
 ```
 
 _See code: [src/commands/rpc/export.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/rpc/export.ts)_
+
+## `scrollsdk rpc export-network`
+
+Export chain configuration to the self-contained `<network>/config/` layout of
+dogeos-rpc-package. The existing `rpc export` command retains its old layout and
+behavior.
+
+```bash
+scrollsdk rpc export-network \
+  -d /path/to/dogeos-rpc-package \
+  --doge-config .data/doge-config.toml \
+  --values-dir values --namespace default \
+  --kube-context YOUR_SOURCE_CLUSTER_CONTEXT --spec deployment-spec.yaml
+```
+
+The network is selected from DogeConfig. Generates genesis, protocol context,
+L1 Interface and L2Reth configuration, and updates their Compose images from
+source values; preserves operator `.env`, scripts and persistent data.
+Set `DOGEOS_ETHEREUM_RPC_URL` in the destination
+network's `.env` before startup. Mainnet export does not complete its release
+checklist. See [the export guide](docs/rpc-export-network.md).
 
 ## `scrollsdk setup aws`
 
