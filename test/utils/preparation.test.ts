@@ -149,7 +149,11 @@ describe('resumable preparation plan', () => {
     const frozen = fs.readFileSync(intentFile, 'utf8')
     const calls: string[] = []
     const commands: string[][] = []
-    const charts = new CommandPreparationRunner(async (_root, _step, args) => {commands.push(args)})
+    const charts = new CommandPreparationRunner(async (_root, _step, args) => {
+      commands.push(args)
+      // The mocked chart command must produce its output directory.
+      if (args[0] === 'prep-charts') fs.mkdirSync(path.join(deployment, 'values'), {recursive: true})
+    })
     const runner = {async run(step: typeof plan.steps[number], saved: DeploymentSpec) {
       calls.push(step.id)
       if (step.id === 'bootstrap') {
@@ -973,6 +977,7 @@ else process.exit(1)
     expect(steps.map(step => step.id).slice(-4)).to.deep.equal(['secrets', 'deployment-kit', 'deployment-kit-published', 'proof-check'])
     fs.mkdirSync(path.join(deployment, '.data'), {recursive: true})
     fs.writeFileSync(path.join(deployment, '.data/proof-materials-v1.json'), '{}')
+    fs.mkdirSync(path.join(deployment, 'values'), {recursive: true}) // Mocked prep-charts output.
     await runner.run(steps.find(step => step.id === 'charts-published')!, spec, deployment, plan)
     expect(calls[0]).to.include.members(['prep-charts', '--proof-materials-receipt', '.data/proof-materials-v1.json', '--proof-publication-receipt', '.data/proof-program-publication-v1.json'])
     expect(calls[0]).not.to.include('--proof-preparation')
@@ -1012,6 +1017,7 @@ else process.exit(1)
     fs.writeFileSync(configFile, toml.stringify(config))
     let calls = 0
     const runner = new CommandPreparationRunner(async () => {
+      fs.mkdirSync(path.join(deployment, 'values'), {recursive: true}) // Mocked prep-charts output.
       const prepared: any = toml.parse(fs.readFileSync(configFile, 'utf8'))
       expect(prepared.proof_topology.deployment.publicS3EndpointUrl).to.equal(aws.artifactReadTransport.publicEndpointUrl)
       expect(prepared.preserved).to.equal('operator-setting')
@@ -1073,6 +1079,8 @@ else process.exit(1)
         expect(args).to.include.members(['--service', 'bootnode-reth', '--no-accounts'])
         fs.writeFileSync(file, toml.stringify({bootnodeReth: {instances: [{index: 0}, existing]}}))
       }
+
+      if (args[0] === 'prep-charts') fs.mkdirSync(path.join(deployment, 'values'), {recursive: true})
     })
     const charts = preparationSteps(spec).find(step => step.id === 'charts')!
     await runner.run(charts, spec, deployment, plan)

@@ -95,7 +95,7 @@ describe('KMS resource preparation', () => {
   it('rejects a disabled saved key without creating a replacement', async () => {
     await provisioner.provision(role, identity)
     keyState = 'Disabled'
-    expect(provisioner.inspectAddress(region, keyArn)).to.match(/^0x[0-9a-fA-F]{40}$/)
+    expect(provisioner.inspectAddress(region, keyArn)).to.match(/^0x[\dA-Fa-f]{40}$/)
     const count = calls.length
     try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('must be enabled')}
     expect(calls.slice(count).some(args => /^(create|update|put|delete)-/.test(args[1]))).to.equal(false)
