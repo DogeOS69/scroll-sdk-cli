@@ -72,46 +72,23 @@ TSO permits only `/health` and `/signer` (Exact/Prefix as generated); forwarding
 the whole service is rejected. Preserve backend security groups and NetworkPolicy:
 TSO still requires edge peers when the managed Ingress is disabled.
 
-Disable `preparation.tsoAlbEdge` and configure the chosen ALB's subnet CIDRs in
-operator NetworkPolicy values.
+`setup aws` reads the selected ALB's subnet CIDRs, security groups and DNS name.
+`setup render` writes target-group references and TSO edge peers into production
+values. Keep `preparation.tsoAlbEdge` disabled for externally managed endpoints.
+Infrastructure templates own listener rules, certificates, security groups and
+backend access. The CLI does not audit their policies or routing.
 
-Commands, run from the prepared deployment directory:
+From the prepared deployment directory, run application preflight and install:
 
 ```bash
-# AWS-only read checks. Defaults to frozen .scrollsdk/intent.json, then
-# deployment-spec.yaml. --spec and --aws-profile are explicit overrides.
-scrollsdk setup alb
-
-# Normal application install: the same release owns the Service and binding.
+scrollsdk setup deployment-preflight
 make install-tso
-
-# After installing all selected applications, check Services/CRD/context.
-scrollsdk setup alb --require-services
-
-# Checks references, installed bindings, Services and matching healthy TG targets;
-# does not incorrectly require Kubernetes Ingress objects in this mode.
+# After installing all selected applications:
 scrollsdk test ingress
-
-# Removes bindings and registered targets, retaining external AWS resources.
-make delete-tso
 ```
 
-`setup alb` validates both ALB and target-group ownership tags, VPC/scheme, listener/certificate,
-target type, health checks and explicit host/path coverage. It rejects wider
-routes to a selected target group and forwarding from another listener. Selected
-rules must use a single forward action; ALB OIDC/Cognito authentication is not
-supported for these machine-to-machine endpoints. The
-Service check also requires the spec's explicit kubeContext to resolve to the
-selected EKS cluster. AWS failure details are omitted from normal diagnostics.
-All higher-priority listener rules are checked for interception, including fixed
-responses, redirects and forwarding to unselected target groups. Rules with
-additional conditions or regex paths are rejected when overlap cannot be ruled
-out. Healthy targets alone do not prove that requests reach the selected route.
-Overlapping paths between selected bindings must put the narrower route first;
-for example, Blockscout `/api` and `/api/*` must precede the frontend `/*` rule.
-These checks do not establish live DNS/TLS/application behavior or exhaustively
-analyze priority interactions with unrelated listener rules; validate real
-HTTPS requests, denied TSO paths and target health after installation.
+Check real DNS/TLS, authorized requests and denied TSO paths after installation.
+Runtime target health does not prove listener routing or access controls.
 
 `test ingress` additionally requires one live IP TargetGroupBinding per selected
 target group with the configured Service name and port. Registered targets must
@@ -120,8 +97,7 @@ and backend ports for the target group's IP family, and all targets must be heal
 It rejects stale/manual targets, missing registrations and bindings being deleted.
 During a rollout, rerun after controller reconciliation and target draining finish.
 This requires read access to TargetGroupBindings, Services and EndpointSlices in
-the spec namespace. `setup alb --require-services` remains an installation
-preflight and does not require the bindings to exist yet.
+the spec namespace.
 
 After binding verification, `test ingress` checks the retained ALB hostnames
 alongside ordinary Ingresses in the spec's namespace and Kubernetes context.
@@ -153,5 +129,4 @@ References: [AWS lifecycle pattern](https://aws.amazon.com/blogs/containers/patt
 
 Bootnode NLBs can use the same independent lifecycle with one NLB per node.
 Configure `bootnodePublicP2p[].mode: existing` and follow
-[Existing bootnode NLBs](existing-nlb.md). `setup nlb` checks TCP resources and
-partner source controls; `setup alb` continues to check HTTP/HTTPS resources only.
+[Existing bootnode NLBs](existing-nlb.md). Both resource lifecycles belong to external infrastructure.

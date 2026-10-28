@@ -1,0 +1,38 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-REPLACE"
+  },
+  {
+    "ParameterKey": "ListenerArn",
+    "ParameterValue": "arn:aws:elasticloadbalancing:us-east-2:123456789012:listener/app/example-proof/0000000000000000/0000000000000000"
+  },
+  {
+    "ParameterKey": "Hostname",
+    "ParameterValue": "proof.example.invalid"
+  },
+  {
+    "ParameterKey": "ServiceKind",
+    "ParameterValue": "generic"
+  },
+  {
+    "ParameterKey": "PathPatterns",
+    "ParameterValue": "/*"
+  },
+  {
+    "ParameterKey": "ListenerPriority",
+    "ParameterValue": "100"
+  },
+  {
+    "ParameterKey": "BackendPort",
+    "ParameterValue": "7788"
+  },
+  {
+    "ParameterKey": "HealthCheckPath",
+    "ParameterValue": "/healthz"
+  }
+]

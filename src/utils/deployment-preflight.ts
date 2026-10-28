@@ -12,6 +12,7 @@ import {resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 export interface DeploymentPreflight {
   blockers: string[]
   dstack: {configured: boolean; valuesPresent: boolean}
+  proofConfigured: boolean
   warnings: string[]
 }
 
@@ -24,9 +25,15 @@ export function inspectDeployment(options: {
   deploymentDir: string; dogeConfig?: string; requireDstack?: boolean
 }): DeploymentPreflight {
   const root = path.resolve(options.deploymentDir)
-  const result: DeploymentPreflight = {blockers: [], dstack: {configured: false, valuesPresent: false}, warnings: []}
+  const result: DeploymentPreflight = {blockers: [], dstack: {configured: false, valuesPresent: false}, proofConfigured: false, warnings: []}
   const dogeFile = path.resolve(root, options.dogeConfig ?? '.data/doge-config.toml')
   const config = readToml(dogeFile) as unknown as DogeConfig
+  result.proofConfigured = Boolean(config.proof_topology || fs.existsSync(path.join(root, '.data/proof-deployment.json')))
+  const intentFile = path.join(root, '.scrollsdk/intent.json')
+  if (fs.existsSync(intentFile)) {
+    try {result.proofConfigured ||= Boolean(JSON.parse(fs.readFileSync(intentFile, 'utf8')).proofTopology)} catch {result.blockers.push('Cannot read saved deployment intent (private contents omitted)')}
+  }
+
   try {
     const main = readToml(path.join(root, 'config.toml'))
     result.warnings.push(...inspectContractOwner(main.accounts as Record<string, unknown>).warnings)
@@ -69,6 +76,6 @@ export function inspectDeployment(options: {
     else result.warnings.push(message)
   }
 
-  result.warnings.push('Run setup artifact-access for the current S3 prefix and signer network-check on each Docker signer host; configuration checks do not establish live connectivity.')
+  result.warnings.push('AWS resources and permissions are managed outside the CLI. Run signer network-check on each Docker signer host; configuration checks do not establish live connectivity.')
   return result
 }

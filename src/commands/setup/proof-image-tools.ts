@@ -21,6 +21,9 @@ export default class ProofImageTools extends Command {
     'worker-image': Flags.string({description: 'CPU Worker/tool image providing --print-identity-json; no Worker service is started'}),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   async run(): Promise<void> {
     const {flags} = await this.parse(ProofImageTools)
     const output = new JsonOutputContext('setup proof-image-tools', flags.json)

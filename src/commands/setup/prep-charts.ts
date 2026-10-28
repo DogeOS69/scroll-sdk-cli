@@ -21,6 +21,8 @@ import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
+import {projectDiscoveredAwsValues} from '../../utils/aws-resource-discovery.js'
+import {bindAwsServiceAccount} from '../../utils/aws-workload-identity.js'
 import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
 import {HISTORY_SERVICE, frontendHistoryEnv, historyConfig} from '../../utils/bridge-history.js'
@@ -46,6 +48,7 @@ import {
 } from '../../utils/kubernetes-endpoints.js'
 import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
 import {reconcileMonitoringSlack} from '../../utils/monitoring-slack.js'
+import {reconcileMonitoringStatusPage} from '../../utils/monitoring-status-page.js'
 import {readPreparedSequencerKms} from '../../utils/preparation-sequencer-kms.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {resolveProofReceiptSelection} from '../../utils/proof-deployment-contract.js'
@@ -71,6 +74,7 @@ import {
   isAwsKmsSigner,
   isLocalSigner,
 } from '../../utils/signer-roles.js'
+import {writeHelmValues} from '../../utils/spec-helm-values.js'
 import {specDstackController} from '../../utils/spec-kubernetes-target.js'
 import {reconcileScrollMonitorStatusPage} from '../../utils/status-page-values.js'
 import {TSO_ALB_EDGE_RECEIPT, reconcileTsoAlbEdge} from '../../utils/tso-alb-edge.js'
@@ -1301,6 +1305,9 @@ export default class SetupPrepCharts extends Command {
     'values-dir': Flags.string({ default: './values', description: 'Directory containing values files; must be inside the deployment root for transactional generation' }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   private albSpec?: ReturnType<typeof readExistingAlbSpec>
 
   private bridgeConfig: any = {}
@@ -1434,7 +1441,9 @@ export default class SetupPrepCharts extends Command {
       if (!this.flags['proof-preparation']) reconcileTsoAlbEdge(transaction.stagingRoot, undefined, path.relative(transaction.stagingRoot, stagedValuesDir))
       generation = await this.generateCharts(stagedValuesDir)
       if (this.albSpec) projectExistingAlbDirectory(stagedValuesDir, this.albSpec, !this.flags['proof-preparation'])
+      if (this.albSpec) projectDiscoveredAwsValues(process.cwd(), stagedValuesDir, this.albSpec)
       if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
+      writeHelmValues(transaction.stagingRoot, this.albSpec ?? {dogecoin: {network: this.dogeConfig.network} as any}, {deferIngressValidation: this.flags['proof-preparation']}, path.relative(transaction.stagingRoot, stagedValuesDir))
       process.chdir(deploymentRoot)
       changedFiles = transaction.commit().changedFiles
     } catch (error) {
@@ -1490,7 +1499,6 @@ export default class SetupPrepCharts extends Command {
               contract: proof.contract,
               files: proof.files,
               mode: proof.mode,
-              workerBundle: proof.workerBundle,
             }
           : {configured: false},
         totalSkipped: skippedInstances + skippedBootnodeRethInstances + skippedRethInstances + skippedProduction + skippedConfig,
@@ -1573,6 +1581,7 @@ export default class SetupPrepCharts extends Command {
       secretName: `${getSequencerRethResourceName(index)}-secret-env`,
       signer: {
         address: signer.address,
+        awsWorkloadIdentity: this.dogeConfig.awsWorkloadIdentity,
         backend: signerMode.signerBackend,
         kmsKeyArn: signer.kmsKeyArn,
         kmsKeyId: signer.kmsKeyId,
@@ -2616,11 +2625,12 @@ export default class SetupPrepCharts extends Command {
         const grafanaChanges = [...reconcileScrollMonitorGrafana(productionYaml, this.dogeConfig.grafana), ...reconcileMonitoringSlack(productionYaml, this.dogeConfig.monitoring)]
         changes.push(...grafanaChanges)
         if (grafanaChanges.length > 0) updated = true
-        const monitorChanges = reconcileScrollMonitorBalances(productionYaml, {
+        const monitorChanges = reconcileMonitoringStatusPage(productionYaml, this.dogeConfig.monitoring)
+        monitorChanges.push(...reconcileScrollMonitorBalances(productionYaml, {
           dogeConfig: this.dogeConfig,
           l2ChainId: configuredL2ChainId,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
-        })
+        }))
         if (!this.flags['proof-preparation']) monitorChanges.push(...reconcileScrollMonitorStatusPage(productionYaml, {
           chainId: configuredL2ChainId,
           environment: productionYaml.statusPage?.environment,
@@ -2745,12 +2755,7 @@ export default class SetupPrepCharts extends Command {
 
           productionYaml.serviceAccount ||= {}
           const previousServiceAccount = JSON.stringify(productionYaml.serviceAccount)
-          productionYaml.serviceAccount.create = true
-          productionYaml.serviceAccount.name = signerConfig.serviceAccountName || 'fee-oracle'
-          if (signerConfig.serviceAccountRoleArn) {
-            productionYaml.serviceAccount.annotations ||= {}
-            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = signerConfig.serviceAccountRoleArn
-          }
+          bindAwsServiceAccount(productionYaml, signerConfig.serviceAccountName || 'fee-oracle', signerConfig.serviceAccountRoleArn, this.dogeConfig.awsWorkloadIdentity)
 
           const nextServiceAccount = JSON.stringify(productionYaml.serviceAccount)
           if (previousServiceAccount !== nextServiceAccount) {
@@ -2951,10 +2956,7 @@ export default class SetupPrepCharts extends Command {
             const proofRole = readOptionalProofAwsConfig(process.cwd())?.config.serviceAccounts.withdrawalProcessor
             if (proofRole && (proofRole.roleArn !== prepared.roleArn || proofRole.name !== prepared.serviceAccount)) throw new Error('Withdrawal KMS and proof access must share one service account and IAM role')
             productionYaml.serviceAccount ??= {}
-            productionYaml.serviceAccount.create = true
-            productionYaml.serviceAccount.name = prepared.serviceAccount
-            productionYaml.serviceAccount.annotations ??= {}
-            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = prepared.roleArn
+            bindAwsServiceAccount(productionYaml, prepared.serviceAccount!, prepared.roleArn, this.dogeConfig.awsWorkloadIdentity)
             updated = true
           }
         } else deletePaths.push(['sequencer_signer_kms'])
@@ -3176,12 +3178,7 @@ export default class SetupPrepCharts extends Command {
 
           productionYaml.serviceAccount ||= {}
           const previousServiceAccount = JSON.stringify(productionYaml.serviceAccount)
-          productionYaml.serviceAccount.create = true
-          productionYaml.serviceAccount.name = signerConfig.serviceAccountName || 'eth-da-submitter'
-          if (signerConfig.serviceAccountRoleArn) {
-            productionYaml.serviceAccount.annotations ||= {}
-            productionYaml.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = signerConfig.serviceAccountRoleArn
-          }
+          bindAwsServiceAccount(productionYaml, signerConfig.serviceAccountName || 'eth-da-submitter', signerConfig.serviceAccountRoleArn, this.dogeConfig.awsWorkloadIdentity)
 
           const nextServiceAccount = JSON.stringify(productionYaml.serviceAccount)
           if (previousServiceAccount !== nextServiceAccount) {
@@ -3493,18 +3490,9 @@ export default class SetupPrepCharts extends Command {
     transaction: GenerationTransaction,
     result: ReconcileProofKubernetesResult,
   ): ReconcileProofKubernetesResult {
-    const workerBundle = result.workerBundle
-      ? {
-          ...result.workerBundle,
-          bundleDir: transaction.toOriginalPath(result.workerBundle.bundleDir),
-          files: result.workerBundle.files.map(file => transaction.toOriginalPath(file)),
-          manifestFile: transaction.toOriginalPath(result.workerBundle.manifestFile),
-        }
-      : undefined
     return {
       ...result,
       files: result.files.map(file => transaction.toOriginalPath(file)),
-      ...(workerBundle ? {workerBundle} : {}),
     }
   }
 
@@ -3611,13 +3599,6 @@ export default class SetupPrepCharts extends Command {
     this.jsonCtx.logSuccess(
       `Reconciled ${result.mode} proof K8s configuration; contract ${result.contract.generationId}`,
     )
-    if (result.workerBundle) {
-      this.jsonCtx.addWarning(
-        `Docker Compose worker bundle ${result.workerBundle.bundleId} is credential-pending. `
-        + 'Run setup proof-worker to inject the bearer token, sync the resources and bundle to the worker host, '
-        + 'then run setup proof-worker-check before docker compose up.',
-      )
-    }
 
     return result
   }

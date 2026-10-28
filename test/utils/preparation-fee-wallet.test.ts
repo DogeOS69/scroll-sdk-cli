@@ -62,13 +62,13 @@ describe('production fee wallet from the conventional environment variable', () 
 
   it('plans without the fee key and rejects redundant spec inputs instead of retaining compatibility', () => {
     const publicKey = new bitcore.PrivateKey().toPublicKey().toString()
-    const spec = {attestationSigners: [{attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: 'partner-a', transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}], bridge: {confirmationsRequired: 6, teePubkey: publicKey, thresholds: {attestation: 1, recovery: 1}, timelock: 100_000}, contracts: {feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString()}, dogecoin: {network: 'testnet'}, infrastructure: {aws: {eksClusterName: 'fixture', region: 'us-west-2'}, provider: 'aws'}, metadata: {name: 'test-bridge'}, preparation: {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, recoveryPublicKeys: [publicKey], sequencerKms: {action: 'create'}}}, proofMaterials: {mode: 'existing'}}} as DeploymentSpec
+    const spec = {bridge: {attestation: {signers: [{attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: 'partner-a', transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}], threshold: 1}, confirmationsRequired: 6, cubesigner: {publicKey}, recovery: {publicKeys: [publicKey], threshold: 1, timelock: 100_000}}, contracts: {feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString()}, dogecoin: {network: 'testnet'}, infrastructure: {aws: {accountId: '123456789012', eksClusterName: 'fixture', region: 'us-west-2', roles: {withdrawalProcessor: 'arn:aws:iam::123456789012:role/wp'}}, provider: 'aws'}, metadata: {name: 'test-bridge'}, preparation: {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, sequencerKms: {action: 'reuse', keyId: 'alias/fixture/bridge'}}}, proofMaterials: {mode: 'existing'}}} as DeploymentSpec
     validatePreparation(spec)
-    const steps = preparationSteps(spec)
+    const steps = preparationSteps(spec, true)
     const feeIndex = steps.findIndex(step => step.id === 'bridge-fee-wallet')
     expect(feeIndex).to.be.greaterThan(-1)
     expect(steps[feeIndex].effect).to.equal('local')
-    expect(feeIndex).to.be.lessThan(steps.findIndex(step => step.id === 'bridge-sequencer-kms'))
+    expect(feeIndex).to.be.greaterThan(steps.findIndex(step => step.id === 'bridge-sequencer-kms'))
     for (const field of ['feeWalletPublicKey', 'feeWalletKeyEnv']) {
       const invalid = structuredClone(spec)
       Object.assign(invalid.preparation!.bridge.production!, {[field]: 'NONFUNCTIONAL'})

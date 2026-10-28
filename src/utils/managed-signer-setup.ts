@@ -60,7 +60,6 @@ interface KmsIdentityPromptDefaults {
 
 interface ResolvedKmsSignerInput {
   kmsKeyId?: string
-  roleArn?: string
   serviceAccount: string
 }
 
@@ -114,7 +113,6 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
         archive,
         createArchiveBucket: flags['create-archive-bucket'],
         kmsKeyId: provisionInput.kmsKeyId,
-        roleArn: provisionInput.roleArn,
         serviceAccount: provisionInput.serviceAccount,
       })
       const savedAddress = dogeConfig.accounts?.[accountAddressKey(role) as keyof NonNullable<DogeConfig['accounts']>] || existingSigner?.expectedAddress
@@ -259,8 +257,6 @@ function hasKmsProvisioningInput(options: ManagedSignerCommandOptions): boolean 
     flags['network-alias'] ||
     hasFlag('namespace') ||
     hasFlag('kms-key-id') ||
-    hasFlag('role-arn') ||
-    hasFlag('service-account') ||
     (
       signerKey === 'l1CommitSender' &&
       (
@@ -374,9 +370,7 @@ export function resolveKmsSignerInput(
   existingSigner: ManagedSignerConfig | undefined
 ): ResolvedKmsSignerInput {
   const explicitKmsKeyId = resolveEnvValue(options.flags['kms-key-id'])
-  const explicitRoleArn = resolveEnvValue(options.flags['role-arn'])
   const existingKmsKeyId = existingSigner?.kmsKeyId
-  const existingRoleArn = existingSigner?.serviceAccountRoleArn
 
   return {
     kmsKeyId: explicitKmsKeyId || (
@@ -384,14 +378,8 @@ export function resolveKmsSignerInput(
         ? existingKmsKeyId
         : undefined
     ),
-    roleArn: explicitRoleArn || (
-      shouldReuseExistingRoleArn(existingRoleArn, role, identity)
-        ? existingRoleArn
-        : undefined
-    ),
-    serviceAccount: options.hasFlag('service-account')
-      ? resolveEnvValue(options.flags['service-account']) || role.defaultServiceAccount
-      : existingSigner?.serviceAccountName || role.defaultServiceAccount,
+    // The CLI derives the ServiceAccount; setup aws binds its role.
+    serviceAccount: role.defaultServiceAccount,
   }
 }
 
@@ -411,17 +399,6 @@ function shouldReuseExistingKmsKey(
   return existingKmsKeyId === getDefaultKmsAlias(role, identity)
 }
 
-function shouldReuseExistingRoleArn(
-  existingRoleArn: string | undefined,
-  role: ManagedSignerRole,
-  identity: KmsProvisionIdentity
-): boolean {
-  if (!existingRoleArn) return false
-
-  const expectedRoleName = getDefaultKmsRoleName(role, identity)
-  return existingRoleArn.endsWith(`:role/${expectedRoleName}`) || existingRoleArn.endsWith(`/role/${expectedRoleName}`)
-}
-
 function logKmsProvisionPlan(
   role: ManagedSignerRole,
   identity: KmsProvisionIdentity,
@@ -439,9 +416,8 @@ function logKmsProvisionPlan(
   jsonCtx.info(`    purpose: ${getSignerPurpose(role)}`)
   jsonCtx.info(`    KMS key: ${kmsKeyId}`)
   jsonCtx.info(`    service account: ${identity.namespace}/${input.serviceAccount}`)
-  jsonCtx.info(input.roleArn
-    ? `    IAM role ARN: ${input.roleArn}`
-    : `    IAM role name: ${getDefaultKmsRoleName(role, identity)}`)
+  if (process.env.SCROLLSDK_PREPARATION_STAGE === 'aws') jsonCtx.info('    IAM role: validated and bound from infrastructure.aws.roles')
+  else jsonCtx.info(`    IAM role name: ${getDefaultKmsRoleName(role, identity)}`)
 }
 
 export async function resolveBlobArchive(

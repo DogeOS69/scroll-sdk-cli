@@ -1,0 +1,10 @@
+[
+  {"ParameterKey": "Environment", "ParameterValue": "REPLACE_ENV"},
+  {"ParameterKey": "ResourceClassification", "ParameterValue": "nonproduction-deletable"},
+  {"ParameterKey": "ClusterName", "ParameterValue": "replace-existing-cluster"},
+  {"ParameterKey": "Namespace", "ParameterValue": "pod-identity-nonprod-deletable"},
+  {"ParameterKey": "ServiceAccount", "ParameterValue": "aws-probe-nonprod-deletable"},
+  {"ParameterKey": "SigningKeyArn", "ParameterValue": "arn:aws:kms:us-east-2:123456789012:key/00000000-0000-0000-0000-000000000000"},
+  {"ParameterKey": "BucketName", "ParameterValue": "replace-existing-proof-bucket"},
+  {"ParameterKey": "BucketPrefix", "ParameterValue": "REPLACE_ENV/proof"}
+]

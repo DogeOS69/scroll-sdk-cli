@@ -3,8 +3,10 @@ import * as yaml from 'js-yaml'
 import {isIP} from 'node:net'
 
 import type {BootnodePublicP2p, DeploymentSpec} from '../types/deployment-spec.js'
+import type {DogeConfig} from '../types/doge-config.js'
 
 import {mergeBootstrapValues} from './spec-bootstrap.js'
+import {applyHelmValues} from './spec-helm-values.js'
 
 export function bootnodeP2pMode(entry: BootnodePublicP2p): 'existing' | 'service' {
   return entry.mode ?? (entry.existingNlb ? 'existing' : 'service')
@@ -99,6 +101,10 @@ export function projectBootnodePublicP2p(files: Record<string, string>, spec: De
   validateBootnodePublicP2p(spec.bootnodePublicP2p, indices, spec.infrastructure.provider)
   if (spec.bootnodePublicP2p === undefined) return
   const templateName = 'l2-reth-bootnode-production.yaml'
+  // Indexed values are created before the final overlay pass. Apply the shared
+  // template overlay first so newly created instances inherit operator sizing.
+  const overlay = spec.helmValues?.[templateName]
+  if (overlay !== undefined) applyHelmValues(files, {helmValues: {[templateName]: overlay}})
   const template = files[templateName]
   if (!template) throw new Error('Bootnode public P2P requires a Reth bootnode values template')
   for (const index of indices) {
@@ -112,4 +118,13 @@ export function projectBootnodePublicP2p(files: Record<string, string>, spec: De
   const base = yaml.load(template) as any
   applyBootnodePublicP2p(base, -1, [])
   files[templateName] = yaml.dump(base, {lineWidth: -1, noRefs: true})
+}
+
+export function getRethBootnodeIndices(config: DogeConfig): number[] {
+  const indices = config.bootnodeReth?.instances?.map(instance => instance.index) || []
+  if (indices.length === 0 || indices.some(index => !Number.isSafeInteger(index) || index < 0) || new Set(indices).size !== indices.length) {
+    throw new Error('Configure unique Reth bootnode indices through setup aws before exposing public P2P services.')
+  }
+
+  return indices.sort((a, b) => a - b)
 }

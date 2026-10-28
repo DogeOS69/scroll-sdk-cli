@@ -1,6 +1,15 @@
 /** Inputs to the resumable preparation workflow; credentials are file/env references. */
 export interface PreparationConfig {
-  archive?: {action: 'configure' | 'create'; awsProfile?: string; publicRead?: boolean; writerRoleArn?: string}
+  archive?: {action: 'configure' | 'create'; awsProfile?: string; publicRead?: boolean}
+  /** AWS read credentials. Legacy ownership fields are rejected by plan validation. */
+  awsIam?: {
+    /** Operator profile for the resource discovery and role binding steps; defaults to the standard credential chain. */
+    awsProfile?: string
+    path?: string
+    permissionsBoundaryArn?: string
+    roleNamePrefix?: string
+    tags?: Record<string, string>
+  }
   bridge: {
     /** Mutable, operator-supplied outpoints; relative to the deployment directory. */
     fundingFile?: string
@@ -12,7 +21,6 @@ export interface PreparationConfig {
       ethereumAnchor: {blockNumber?: number; blockTag?: 'finalized'; transactionIndex?: number}
       /** New plans default to helper distribution; external retains manual wallet funding. */
       funding?: 'external' | 'helper'
-      recoveryPublicKeys: string[]
       /** Local signing inputs; mutually exclusive with sequencerKms. */
       sequencerKeyEnv?: string
       /** Apply resolves and pins the public key; no exported private key is needed. */
@@ -21,22 +29,18 @@ export interface PreparationConfig {
         awsProfile?: string
         keyId?: string
         region?: string
-        /** Defaults to the proof AWS withdrawal role when selected. */
-        roleArn?: string
       }
       sequencerPublicKey?: string
     }
   }
   databases?: Array<'blockscout'>
-  /** Explicit S3 publication owns only deployment-kits/<version>/ reads; omission keeps manual publication. */
+  /** Explicit S3 publication writes <keyPrefix>/deployment-kits/<version>/ and ensures the deployment's read grant; omission keeps manual publication. */
   deploymentKitPublication?: {awsProfile?: string; mode: 'manual' | 's3'}
   dstack?: {
     /** Existing AWS networking; controller uses its workload role, never static access keys. */
     aws?: {
       /** Operator profile for controller role preparation; the controller itself uses IRSA. */
       awsProfile?: string
-      /** Created role name; defaults to a deployment/cluster-derived name. An existing role is selected by its annotation. */
-      controllerRoleName?: string
       iamInstanceProfile?: string
       publicIps?: boolean
       vpcIds: Record<string, string>
@@ -59,12 +63,9 @@ export interface PreparationConfig {
   proofAws?: {
     action: 'create' | 'reuse'
     awsProfile?: string
-    /** Existing role names; omitted names are derived from deployment alias and cluster. */
-    coordinatorRoleName?: string
     publicEndpointUrl?: string
     publicReadMode: 'direct-s3' | 'existing-gateway' | 'existing-public-s3'
     secretName?: string
-    withdrawalRoleName?: string
   }
   proofMaterials: {
     batchMaterializer?: string

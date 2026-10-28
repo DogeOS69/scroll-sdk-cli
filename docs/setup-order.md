@@ -1,248 +1,74 @@
 # CLI setup order
 
-This guide describes the dependency order of the CLI setup commands for a new
-DogeOS instance with native Reth genesis. Run them from your deployment directory
-with the current built/installed CLI and matching release inputs. It is not an
-infrastructure bootstrap script or evidence of production deployment acceptance.
-Provision the RPC endpoints, Kubernetes infrastructure, DNS, signer access and
-storage required by your chosen deployment separately.
-
-For configuration generated from a deployment spec, see the
-[spec projection reference](spec-projection.md) for defaults, preserved inputs
-and the remaining setup steps. The [staged preparation workflow](spec-preparation.md)
-orchestrates those steps and resumes after external funding and partner handoffs. For a
-saved plan, run `setup render`, then `setup signer-session` when CubeSigner is
-configured, then `setup upload-secrets` (each accepts `--dir` for the saved
-deployment directory). Rendering does not create the remote session; the explicit
-session stage uses `cubesigner-policy prepare-session` in production mode and
-reuses or creates transport-mode credentials through the existing refresh flow.
-Completed session steps are skipped on retry.
-The manual commands below remain available independently. Before installation,
-follow the [runtime and activation checks](deployment-preflight.md#6-opt-into-cluster-rpc-and-reth-startup-checks);
-after source submission, [check final contract verification](deployment-preflight.md#8-check-final-contract-verification).
-
-Use core images and the topology compiler containing
-[dogeos-core #1483](https://github.com/DogeOS69/dogeos-core/pull/1483) and
-[#1482](https://github.com/DogeOS69/dogeos-core/pull/1482), together with the
-matching charts and partner kit from
-[scroll-sdk #141](https://github.com/DogeOS69/scroll-sdk/pull/141).
-External signer descriptors now include `transportPubkey`; regenerate old
-descriptors with `--print-identity` and import them before `prep-charts`.
-The generated signer directory pins both keys and uses pull delivery for
-external signers, with only `/health` and `/signer` exposed publicly. The
-in-cluster CubeSigner remains push delivery. Coordinate the core, chart and
-partner-signer upgrade; the old unsigned external callbacks are no longer
-public routes.
-
-Configure `[proofArtifacts.s3]` separately from `[ethereumDa.blobArchive.s3]`.
-The compiler owns `[segmentation_sidecar.s3]` and points it at the proof store;
-the submitter's `[s3]` continues to archive raw DA blobs. After selecting these
-stores, reconcile the submitter writer with `setup eth-da-submitter` or
-`setup artifact-access --store da --writer-role-arn <role-arn> --apply` so both
-native sidecar namespaces are writable. See the
-[S3 reference](ethereum-da-s3.md#three-buckets) for permissions and deployment
-prefixes. These configuration changes do not copy historical objects.
-
-See [Local setup-order validation](setup-order-validation.md) for executed checks,
-findings and the cloud/proof/runtime steps that remain unverified.
-The newer [production input review](production-inputs-review.md) records the
-cross-repository corrections and shadowfork configuration rehearsal.
-
-Production Bridge initialization follows the [staged production flow](spec-preparation.md#production-funding-and-resume).
-The legacy full `bridge-init` command uses a deterministic test helper.
-
-For staged CubeSigner deployments, follow [preparation and activation](cubesigner-preparation.md):
-`protocol-context → proof-materials / policy-prepare → proof-publish → signer-kit → render → signer-session → upload-secrets`.
-`signer-kit-publish` is a separate publication handoff. Attachment approval does not
-block expected configuration or an already authorized role's session preparation.
-Only fresh activation verification authorizes the guarded signer install target.
-
-## 1. Prepare configuration and identities
-
-For the spec path, use `generate-from-spec --bootstrap --sdk-dir` with the
-[pinned template and identity inputs](spec-projection.md#start-a-fresh-directory-from-a-pinned-sdk-template),
-then run `gen-keystore --plan` and apply `gen-keystore`. The manual command path
-can instead prepare the following files explicitly.
-
-Prepare the deployment layout before running setup. A lone `config.toml` is not
-sufficient for chart preparation. Use the matching `scroll-sdk` release's
-`examples/values/`, `examples/withdrawal-processor/` and
-`examples/proof-coordinator/` as the starting templates, and supply the
-deployment's reviewed `Makefile`. Keep the native TOML files at
-`withdrawal-processor/WithdrawalProcessor.toml` and
-`proof-coordinator/ProofCoordinator.toml`. `prep-charts` updates those files;
-it does not bootstrap all application templates from an empty directory.
-Select the services, node counts and chart versions in the Makefile for this
-deployment. Keep command logs outside the deployment directory (or list their
-paths in `.scrollsdkignore`), since configuration generation detects concurrent
-changes to its input files. Local `.data/contracts-build` caches can also be
-excluded; required configuration and proof materials must remain included.
-Copy templates only when creating the directory, before generating identities
-or artifacts, so later copies do not overwrite generated values.
-
-Start from `scroll-contracts/docker/templates/config.toml` and fill the required
-environment inputs, including an explicit `accounts.OWNER_ADDR`. See
-[Configuration cleanup](config-cleanup.md) for supported fields and image pins.
-Configure the following before generating genesis or initializing Bridge:
-
-| Inputs | Commands | Dependency |
-| --- | --- | --- |
-| Deployment/activity accounts | `scrollsdk setup gen-keystore --accounts`; add `--activity-helper` if needed | Preserve the selected owner; an empty owner defaults to deployer. |
-| Dogecoin RPC, Ethereum DA and domains | `scrollsdk setup doge-config`, then `scrollsdk setup domains` | Use the intended network and service endpoints. |
-| Application signers | `scrollsdk setup gen-keystore --service eth-da-submitter`; `scrollsdk setup gen-keystore --service fee-oracle` | Select local or AWS KMS signing, or consume the saved spec identity intent. Standalone generation reads the fee oracle public address. The staged `setup genesis` isolates that reader input and defers the service identity to `setup aws`. Configure DA archive access separately with `setup eth-da-submitter`. |
-| Reth node identities | `scrollsdk setup l2-sequencer-reth --index 0`; `scrollsdk setup l2-bootnode-reth` | Configure additional instances as needed; see [Pure Reth configuration](reth-only-peers.md). |
-| Attestation signer inputs | Each signer operator runs `scrollsdk signer init --id <id> --network <network>`, then `attestation_signer --print-identity` and `scrollsdk signer init ... --identity <file>` on their own infrastructure to produce the descriptor (attestation + transport public keys, no endpoint: signers dial out to the TSO), then the bridge operator runs `scrollsdk setup attestation-signer` | Collect the public descriptors in `descriptors/` or pass `--descriptor` for each file. This signer identity flow is independent of DA/Fee Oracle KMS provisioning. |
-| TEE identity and session | `scrollsdk setup cubesigner-init`, then `scrollsdk setup cubesigner-refresh` | Use the intended CubeSigner environment and identity lifecycle; gamma is not a universal requirement. |
-
-These are configuration tasks, not a script to rerun blindly on an existing
-instance. Select the signer backends and instance counts for your environment.
-Prepare matching proof image tools/material inputs for the selected release;
-Bridge-bound real materials must be completed after protocol context exists.
-
-For non-interactive commands, pass `-N --json` only where supported and supply
-the required flags. `attestation-signer` and `signer init` use explicit inputs
-and `--json`, without `-N`. CubeSigner setup requires a prior `cs login`;
-`cubesigner-init -N` requires `--doge-config` and either `--roles` or
-`--new --role-prefix`. `cubesigner-refresh -N` also requires `--doge-config`.
-
-After `setup domains`, verify the RPC endpoints used by both the operator and
-the service network. In regtest, domains projects the public Dogecoin ingress
-URL into `doge-config.rpc.url` and `setup_defaults.toml.dogecoin_rpc_url`.
-If using a directly reachable local RPC instead, configure that endpoint before
-Bridge setup. It must also be reachable from the Bridge tools container.
-
-## 2. Generate native L2 genesis
+Use [staged preparation](spec-preparation.md) as the complete workflow for a new
+DogeOS deployment. Run commands with the current built/installed CLI and matching
+release inputs, from the private operator directory. Preparation does not create
+an EKS cluster or install Helm releases; runtime acceptance follows deployment.
 
 ```bash
-scrollsdk setup gen-l2-artifacts
+scrollsdk setup plan --spec deployment-spec.yaml --output deployment
+scrollsdk setup genesis --dir deployment
+scrollsdk setup aws --dir deployment
 ```
 
-The generator, deployer and verification images use `gen-configs-<revision>`,
-`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.9`.
-Choose a new deployment salt for a new instance. Owner and index-0 Reth signer checks must pass first. This produces
-`values/genesis.yaml`, which Bridge preparation consumes.
+Follow the next stage reported by each command. The plan selects the required
+steps; a stage checks prerequisites and does not execute another stage for you.
+See the [command reference](spec-preparation.md#commands) for Bridge funding,
+protocol context, proof materials, signer kit publication and other handoffs.
 
-For local contract development, use `--contracts-source /path/to/scroll-contracts`
-instead of building the generator Docker image. This option applies to contract
-artifact generation; Bridge initialization still uses its own tools image.
+`setup aws` can be repeated. It rechecks resources, reuses saved keys and
+credentials, and converges the selected workload roles before binding their ARNs.
+A failed repeat blocks dependent stages until AWS preparation succeeds. It does
+not replay genesis or funding. Preserve the deployment directory and its private
+records so an interrupted attempt can resume with the same identities.
 
-## 3. Initialize Bridge using the CLI
+Only current v3 plans are supported. Old plans and incompatible workflow layouts
+are rejected without migration. Preserve old directories and their original CLI
+for recovery. `setup apply` is retired. `gen-keystore`, `eth-da-submitter`,
+`proof-aws-init` and the legacy signer commands are internal resource steps, not
+an independent deployment workflow.
 
-For production, use [plan/apply with `bridge.mode: production`](spec-preparation.md).
-It binds independently funded sequencer outpoints, generates the final Bridge
-address and verifies marked funding before producing the canonical protocol context.
-`bridge-init --production` exposes only artifact stages 1, 3 and 5.
-
-The sequence below is the **test-helper flow** for testnet/regtest. Core beta.6
-labels `generate_test_keys` as test scaffolding; do not use its deterministic
-wallet derivation for production.
+Final configuration and secret preparation use the saved plan:
 
 ```bash
-scrollsdk setup bridge-init
+scrollsdk setup render --dir deployment
+# When selected by the plan:
+scrollsdk setup signer-session --dir deployment
+scrollsdk setup upload-secrets --dir deployment
 ```
 
-Select the Bridge tools image matching the intended core release with
-`--image-tag` or the interactive prompt. This is a
-`dogeos69/bridge-genesis-tools` tag, not a contracts `gen-configs-*` tag.
-The command's default `--step all` executes these stages in order:
+The signer session is an explicit stage, separate from rendering. Preparation
+preserves operator values and the Makefile. Follow the
+[runtime and activation checks](deployment-preflight.md#6-opt-into-cluster-rpc-and-reth-startup-checks)
+before installation and [contract verification](deployment-preflight.md#8-check-final-contract-verification)
+after source submission. The focused operational utilities below are available
+for their stated tasks; they do not replace the staged workflow.
 
-| Stage | Explicit command | Purpose |
-| --- | --- | --- |
-| 1 | `scrollsdk setup bridge-init --step 1-prepare` | Extract genesis and prepare protocol seed inputs. |
-| 2 | `scrollsdk setup bridge-init --step 2-setup` | Generate setup outputs and broadcast the setup transaction. |
-| 3 | `scrollsdk setup bridge-init --step 3-bridge-info` | Generate namespace and Bridge information. |
-| 4 | `scrollsdk setup bridge-init --step 4-fund` | Broadcast the configured funding and/or deposit-seed transactions. |
-| 5 | `scrollsdk setup bridge-init --step 5-protocol-context` | Generate protocol context for downstream services. |
+## Command visibility
 
-Use either the full command or the individual stages, not both in succession.
-When executing stages separately, use the same selected image tag throughout.
-Non-interactive preparation requires `--seed`; preserve the instance's seed and
-outputs privately. Setup and funding stages broadcast transactions and are not
-idempotent. Resume from the appropriate stage after inspecting existing outputs
-and transactions, rather than restarting the full initialization.
+`setup --help` lists deployment stages and independently useful operator tools.
+The lower-level commands below are hidden from the command list because their
+normal deployment use is covered by the saved plan. They remain callable by the
+stage runner and by name for the focused maintenance procedures documented here;
+`setup <command> --help` still explains their flags. Hiding a command does not
+change its execution or bypass its existing safeguards.
 
-Provide valid funding inputs and satisfy the selected network's confirmation
-requirements. Bridge outputs, including `.data/protocol_context.json`, must exist
-before preparing dependent service values and Secrets.
-The funding inputs are `base_funding_utxos` in `.data/setup_defaults.toml`; replace
-the template placeholders with confirmed, unspent outputs controlled by the
-helper derived from this instance's seed. Stage 1 returns the compressed-P2PKH helper funding address without exposing
-the seed. Ethereum DA height discovery defaults to a temporary Kubernetes curl
-pod; configure the intended cluster, or explicitly use
-`--ethereum-da-probe direct` when the operator machine can reach the configured
-RPC. Direct mode queries the actual height and fails on an unreachable RPC.
-The cluster mode's fresh Ethereum devnet fallback to start block zero is not a
-successful cluster/RPC check.
+| Public workflow | Hidden lower-level commands |
+| --- | --- |
+| Spec and plan initialization | `generate-from-spec`, `doge-config`, `attestation-signer`, `domains`, `tls` |
+| `genesis` | `gen-l2-artifacts` |
+| `aws` | `db-init`, `dstack-config` |
+| `bridge-funding` | `bridge-init` |
+| Proof material preparation and compilation | `proof-image-tools`, `proof-release-prepare`, `proof-topology-compile`, `proof-worker-image-check` |
+| `proof-publish` | `proof-bundle-publish` |
+| `signer-kit`, `signer-kit-publish` | `export-deployment-kit`, `publish-deployment-kit` |
+| `render` and earlier chart reconciliation | `prep-charts`, `gen-secrets` |
+| `upload-secrets` | `push-secrets`, `monitoring-secrets` |
 
-After successful stage 2, the CLI records both replay start heights and sets
-`defaults.freshGenesisInit = true`. `prep-charts` projects this explicit new-bridge
-state into both WP and L1I. Existing deployments default to false when this field
-is absent; a snapshot continuation cannot also request fresh-genesis
-initialization. Regenerating protocol context alone does not enable it.
-
-## 4. Prepare proof and service configuration
-
-Production CubeSigner policy mode projects WP's
-`proof_system.correctness_policy_transport = "bridge_proof_ref_v1"` during
-`prep-charts`; proof readiness also rejects a mismatched native configuration.
-The public Proof Coordinator route is limited to `/v1/prover/tasks` and its
-descendants. Its ALB health check still uses the internal `/healthz` endpoint.
-
-For a saved staged plan, complete `setup bridge-funding`, then run
-`scrollsdk setup protocol-context` from the operator directory. This generates
-`deployment/.data/protocol_context.json` and stops before policy/proof builds.
-Use this boundary to hand off the context for an independently reproduced policy
-build. Existing completion records survive the staged-plan migration; do not
-replan or repeat funding. See [stage boundaries](spec-preparation.md#commands).
-
-Follow the [Proof operator runbook](proof-operator-runbook.md) for the selected
-proof mode. For AWS storage, its dependency order is:
-
-```text
-eth-da-submitter archive configuration
-  → setup proof-aws-init
-  → setup proof-materials
-  → setup doge-config --proof-topology
-```
-
-Reuse existing material receipts only when they match the release and instance
-inputs. Real proof materials require the Bridge context and baking process
-described in [Proof material preparation](proof-materials.md).
-`proof-aws-init` requires the enabled canonical Ethereum DA S3 archive first;
-it does not create the archive configuration from nothing. Non-interactive
-`proof-materials --generation mock` requires explicit `--compiler-image` and
-`--mock-worker-image` from the matching release. A skipped or failed proof setup
-does not qualify the later policy export or `proof-config-check` to succeed:
-configure an explicit topology even when the selected proof mode is disabled.
-
-After all required Bridge and service signer inputs are ready:
-
-```bash
-scrollsdk setup prep-charts
-scrollsdk setup gen-secrets
-# enforcing (active/real/enforce) deployments only:
-scrollsdk setup export-deployment-kit
-# publish deployment-kit-<version>/ unchanged at an immutable https URL, then:
-scrollsdk setup export-deployment-kit --published-url <URL>
-scrollsdk setup proof-config-check
-```
-
-Wait for `prep-charts` to finish before exporting the deployment kit. If ingress
-TLS is needed, run `scrollsdk setup tls` against the generated values and review
-the final configuration before deployment. TSO and active Proof Coordinator
-ingress use `TSO_HOST` and `PROOF_COORDINATOR_HOST`; see the
-[ingress configuration notes](config-cleanup.md#active-ingress-hosts).
-
-For Blockscout, run `scrollsdk setup db-init` only when its database or permissions
-need initialization, before generating its Secrets and deploying it.
-`BLOCKSCOUT_DB_CONNECTION_STRING` is the only retained database setting.
-
-For external Reth/RPC peers using independent NLBs, run
-`scrollsdk setup bootnode-public-p2p --spec <spec-path>` after base indexed values
-and saved public identities exist. The focused command validates existing AWS
-resources, updates only selected P2P bindings and prints public enodes; it does
-not deploy Helm or run the full `setup apply` flow. AWS infrastructure owns the
-partner allowlist. See [Reth bootnode public P2P access](bootnode-public-p2p.md).
+Validation, network inspection, worker lifecycle, session recovery and governance
+handoff commands remain visible because preparation stages do not replace those
+operator tasks. The already internal-only signer/resource commands and retired
+`apply` retain their existing execution restrictions.
 
 ## Publish proof programs to an existing AWS S3 store
 
@@ -266,7 +92,7 @@ explicit mode supports direct regional AWS S3; a non-AWS endpoint is rejected.
 The default `--artifact-source proof-aws` continues to use `.data/proof-aws.json`
 and its configured public transport. Neither publishing mode proves that the
 runtime workloads have IAM permissions; provision and validate those separately
-before rollout. The combined `proof-config prepare`/`publish` workflow still
+before rollout. The saved `proof-materials`/`proof-publish` stages still
 requires the provisioned resource facts.
 
 The standalone publisher does not modify the deployment contract. Bind its
@@ -277,7 +103,7 @@ scrollsdk setup prep-charts \
   --proof-materials-receipt .data/proof-materials-v1.json \
   --proof-publication-receipt .data/proof-program-publication-v1.json
 scrollsdk setup gen-secrets
-scrollsdk setup proof-config-check --json
+scrollsdk setup deployment-preflight --json
 ```
 
 For active/real deployments the final check also requires the artifact-store
@@ -389,11 +215,11 @@ receipt permits retry after interruption without creating another policy.
 
 Build/deployment receipts establish compilation and attachment only. They are
 not replacements for the production policy release and live-evidence receipts
-required by `proof-config-check`: validate actual proof retrieval, a valid proof,
+required by `deployment-preflight`: validate actual proof retrieval, a valid proof,
 invalid proof rejection, and the native signing route. Testnet's post-structural
 proof fallback must not be recorded as strict proof-verification success.
 
-## 5. Upload and deploy
+## Upload and deploy
 
 Selectively upload the required Secrets with `scrollsdk setup push-secrets`,
 using the intended backend, AWS region and prefix where applicable. The order is
@@ -407,7 +233,7 @@ Processor proposals for the new protocol. Mock proof generation is internal to
 Proof Coordinator; it does not require a separate mock worker.
 
 For an enforcing deployment, the deployment is **not accepted until**
-`scrollsdk setup proof-config-check --live --kube-context <context> --namespace
+`scrollsdk setup deployment-preflight --proof-live --kube-context <context> --namespace
 <namespace>` passes after the rollout. It requires the published kit and a fresh
 authenticated TSO poll (within the last 60 seconds) from every Attestation
 signer in the WP `tsoSigners`. A failure means liveness, not safety: an
@@ -420,10 +246,15 @@ progress, DA and ingress. Configuration generation and static proof checks alone
 do not establish runtime readiness or transaction/proof acceptance.
 
 After public bootnode Services have usable LoadBalancer endpoints, run
-`scrollsdk setup gen-rpc-package --dogeos-rpc-package-dir /path/to/dogeos-rpc-package
+`scrollsdk rpc export --dogeos-rpc-package-dir /path/to/dogeos-rpc-package
 --namespace YOUR_NAMESPACE` from this deployment directory using the intended
 cluster's kubeconfig. Then start and verify the external RPC node. Public P2P
 values preparation does not itself deploy the bootnodes or establish peering.
+
+For the newer self-contained `testnet/` / `mainnet/` RPC package layout, use
+`scrollsdk rpc export-network` instead; the old command remains supported for
+the old layout. See [network package export](rpc-export-network.md) for inputs,
+generated files, operator settings and release-validation boundaries.
 
 ## Existing instances
 

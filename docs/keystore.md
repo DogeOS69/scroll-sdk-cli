@@ -123,9 +123,8 @@ scrollsdk setup eth-da-submitter \
   --archive-key-prefix devnet --no-create-archive-bucket -N
 ```
 
-Archive setup can create a missing bucket and attach its existing archive
-GetObject/PutObject IAM policy to an existing writer role. `--role-arn` overrides
-the writer role; otherwise the submitter's service-account role is used.
+Archive setup can create a missing bucket and attach its archive
+GetObject/PutObject IAM policy to the submitter's CLI-owned workload role.
 It does not change KMS keys, signer addresses, or role trust. Bucket creation
 retains the previous default for a configured KMS submitter; for a local signer,
 request it explicitly with `--create-archive-bucket`. Disabling the archive does

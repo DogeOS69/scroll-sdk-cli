@@ -1,234 +1,153 @@
-import { expect } from 'chai'
-import { generateKeyPairSync } from 'node:crypto'
+/* eslint-disable @typescript-eslint/no-explicit-any -- In-memory KMS and S3 responses. */
+import {expect} from 'chai'
+import {generateKeyPairSync} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { getAttestationSignerKmsRole } from '../../src/utils/attestation-kms.js'
-import { JsonOutputContext } from '../../src/utils/json-output.js'
-import { KmsSignerProvisioner } from '../../src/utils/kms-signer-provisioner.js'
+import {getAttestationSignerKmsRole} from '../../src/utils/attestation-kms.js'
+import {JsonOutputContext} from '../../src/utils/json-output.js'
+import {KmsSignerProvisioner} from '../../src/utils/kms-signer-provisioner.js'
 
-describe('KMS signer provisioner', () => {
-  let originalPath: string | undefined
-  let tempDir: string
+const region = 'us-west-2'
+const keyArn = `arn:aws:kms:${region}:000000000000:key/fixture`
+const role = getAttestationSignerKmsRole(0)
+const identity = {awsRegion: region, eksCluster: 'cluster', namespace: 'fixture', networkAlias: 'fixture'}
+const aliasName = 'alias/dogeos/fixture/cluster/attestation-signer-0'
 
+describe('KMS resource preparation', () => {
+  let root: string
+  let provisioner: any
+  let calls: string[][]
+  let exists: boolean
+  let alias: string | undefined
+  let failAlias: boolean
+  let tags: any[]
+  let lifecycle: any
+  let keyState: string
+  const metadata = () => ({Arn: keyArn, KeyId: 'fixture', KeySpec: 'ECC_SECG_P256K1', KeyState: keyState, KeyUsage: 'SIGN_VERIFY'})
   beforeEach(() => {
-    originalPath = process.env.PATH
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kms-provisioner-'))
-    const awsPath = path.join(tempDir, 'aws')
-    fs.writeFileSync(awsPath, `#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >> "$AWS_TEST_LOG"
-case "$*" in
-  "iam list-role-policies"*) printf '%s\\n' '{"PolicyNames":[]}' ;;
-  "iam list-attached-role-policies"*) printf '%s\\n' '{"AttachedPolicies":[]}' ;;
-  "kms list-aliases"*) printf '%s\\n' '{"Aliases":[]}' ;;
-  "kms create-key"*) printf '%s\\n' '{"KeyMetadata":{"Arn":"arn:aws:kms:us-west-2:123456789012:key/key-123","KeyId":"key-123"}}' ;;
-  "kms create-alias"*) printf '%s\\n' '{}' ;;
-  "kms get-public-key"*) printf '%s\\n' "$AWS_TEST_PUBLIC_KEY" ;;
-  "sts get-caller-identity"*) printf '%s\\n' '123456789012' ;;
-  "eks describe-cluster"*) printf '%s\\n' 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE' ;;
-  "iam get-role"*) printf '%s\\n' 'NoSuchEntity' >&2; exit 254 ;;
-  "iam create-role"*) printf '%s\\n' '{}' ;;
-  "iam put-role-policy"*) printf '%s\\n' '{}' ;;
-  *) printf 'Unsupported fake AWS command: %s\\n' "$*" >&2; exit 2 ;;
-esac
-`, { mode: 0o755 })
-    process.env.PATH = `${tempDir}:${originalPath}`
-    process.env.AWS_TEST_LOG = path.join(tempDir, 'aws.log')
-    process.env.AWS_TEST_PUBLIC_KEY = generateKeyPairSync('ec', { namedCurve: 'secp256k1' })
-      .publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
-  })
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'kms-resource-'))
+    calls = []; exists = false; alias = undefined; failAlias = false; tags = []; lifecycle = undefined
+    keyState = 'Enabled'
+    provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true), undefined, root)
+    const publicKey = generateKeyPairSync('ec', {namedCurve: 'secp256k1'}).publicKey.export({format: 'der', type: 'spki'}).toString('base64')
+    provisioner.fetchKmsPublicKey = () => publicKey
+    provisioner.awsJson = (args: string[]) => {
+      calls.push(args)
+      switch (args[1]) {
+        case 'list-aliases': { return {Aliases: alias ? [{AliasName: aliasName, TargetKeyId: alias}] : []}
+        }
 
-  afterEach(() => {
-    process.env.PATH = originalPath
-    delete process.env.AWS_TEST_LOG
-    delete process.env.AWS_TEST_PUBLIC_KEY
-    fs.rmSync(tempDir, { force: true, recursive: true })
-  })
+        case 'describe-key': {
+          if (!exists) throw new Error('NotFoundException')
+          return {KeyMetadata: metadata()}
+        }
 
-  it('creates a KMS key, alias, and IRSA role when overrides are omitted', async () => {
-    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true), 'test-profile')
-    const result = await provisioner.provision(
-      getAttestationSignerKmsRole(0),
-      {
-        awsRegion: 'us-west-2',
-        eksCluster: 'dogeos-testnet-cluster',
-        namespace: 'default',
-        networkAlias: 'testnet',
+        case 'list-resource-tags': { return {Tags: tags}
+        }
+
+        case 'create-key': {
+          exists = true
+          tags = JSON.parse(args[args.indexOf('--tags') + 1])
+          return {KeyMetadata: metadata()}
+        }
+
+        case 'create-alias': {
+          // The immutable identity must be durable before an alias write.
+          expect(JSON.parse(fs.readFileSync(path.join(root, fs.readdirSync(root)[0]), 'utf8')).keyArn).to.equal(keyArn)
+          if (failAlias) throw new Error('Injected alias failure')
+          alias = 'fixture'
+          return {}
+        }
+
+        case 'get-bucket-lifecycle-configuration': {
+          if (!lifecycle) throw new Error('NoSuchLifecycleConfiguration')
+          return lifecycle
+        }
+
+        case 'put-bucket-lifecycle-configuration': {
+          lifecycle = JSON.parse(args[args.indexOf('--lifecycle-configuration') + 1]); return {}
+        }
+
+        default: { throw new Error(`Unexpected operation ${args[0]} ${args[1]}`)
+        }
       }
-    )
-
-    expect(result.signerConfig.kmsKeyId).to.equal('alias/dogeos/testnet/dogeos-testnet-cluster/attestation-signer-0')
-    expect(result.roleArn).to.equal('arn:aws:iam::123456789012:role/dogeos-testnet-dogeos-testnet-cluster-attestation-signer-0-kms')
-    expect(result.serviceAccount).to.equal('attestation-signer-0')
-    expect(result.publicKeyBase64).to.equal(process.env.AWS_TEST_PUBLIC_KEY)
-
-    const calls = fs.readFileSync(process.env.AWS_TEST_LOG as string, 'utf8')
-    expect(calls).to.include('kms create-key --key-spec ECC_SECG_P256K1 --key-usage SIGN_VERIFY')
-    expect(calls).to.include('kms create-alias --alias-name alias/dogeos/testnet/dogeos-testnet-cluster/attestation-signer-0')
-    expect(calls).to.include('iam create-role --role-name dogeos-testnet-dogeos-testnet-cluster-attestation-signer-0-kms')
-    expect(calls).to.include('system:serviceaccount:default:attestation-signer-0')
-    expect(calls).to.include('iam put-role-policy --role-name dogeos-testnet-dogeos-testnet-cluster-attestation-signer-0-kms')
-    expect(calls).to.include('kms:GetPublicKey')
-    expect(calls).to.include('kms:Sign')
-    expect(calls).to.include('--profile test-profile')
-  })
-
-  it('uses the native normalized prefix for standalone archive grants and supports an explicit bucket-root archive', async () => {
-    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
-    const calls: string[][] = []
-    provisioner.awsJson = (args: string[]) => { if (args[1] === 'list-role-policies') return {PolicyNames: []}; if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}; calls.push(args); return {} }
-    const archive = {bucket: 'shared-bucket', created: false, enabled: true, keyPrefix: ' /instances//new/ '}
-    await provisioner.provisionArchive(archive, {createBucket: false, roleArn: 'arn:aws:iam::123456789012:role/archive-writer'})
-    const policy = JSON.parse(calls[0][calls[0].indexOf('--policy-document') + 1])
-    expect(archive.keyPrefix).to.equal('instances/new')
-    expect(policy.Statement[0]).to.deep.equal({Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::shared-bucket/instances/new/*', Sid: 'DaArchivePut'})
-    expect(policy.Statement).to.have.length(1)
-    expect(JSON.stringify(policy)).not.to.include('DeleteObject')
-    expect(JSON.stringify(policy)).not.to.include('ListBucket')
-
-    await provisioner.provisionArchive({...archive, keyPrefix: ''}, {createBucket: false, roleArn: 'arn:aws:iam::123456789012:role/root-archive-writer'})
-    const rootPolicy = JSON.parse(calls[1][calls[1].indexOf('--policy-document') + 1])
-    expect(rootPolicy.Statement[0].Resource).to.equal('arn:aws:s3:::shared-bucket/*')
-    expect(rootPolicy.Statement).to.have.length(1)
-  })
-
-  it('scopes newly created signer roles to the configured archive prefix', async () => {
-    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true))
-    await provisioner.provision({...getAttestationSignerKmsRole(0), service: 'eth-da-submitter'},
-      {awsRegion: 'us-west-2', eksCluster: 'test', namespace: 'default', networkAlias: 'test'},
-      {archive: {bucket: 'shared-bucket', created: false, enabled: true, keyPrefix: 'instances/new'}, createArchiveBucket: false})
-    const calls = fs.readFileSync(process.env.AWS_TEST_LOG as string, 'utf8')
-    expect(calls).to.include('arn:aws:s3:::shared-bucket/instances/new/*')
-    expect(calls).not.to.include('arn:aws:s3:::shared-bucket/*')
-    expect(calls).not.to.include('s3:ListBucket')
-  })
-
-  for (const extraKmsGrant of [false, true]) it(`reuses an identity role with existing archive grants, extra KMS grant=${extraKmsGrant}`, async () => {
-    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
-    const calls: string[][] = []
-    provisioner.ensureKmsKey = () => ({keyArn: 'existing-key', keyId: 'existing-key', kmsKeyIdForConfig: 'existing-key'})
-    provisioner.fetchKmsPublicKey = () => process.env.AWS_TEST_PUBLIC_KEY
-    provisioner.awsText = (args: string[]) => args[0] === 'sts' ? '123456789012' : 'https://oidc.eks.us-west-2.amazonaws.com/id/EXAMPLE'
-    provisioner.awsJson = (args: string[]) => {
-      calls.push(args)
-      if (args[1] === 'list-role-policies') return {PolicyNames: ['eth-da-submitter-s3-archive', ...(extraKmsGrant ? ['extra-kms'] : [])]}
-      if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
-      if (args[1] === 'get-role-policy') return {PolicyDocument: {Statement: [args.at(-1) === 'extra-kms'
-        ? {Action: ['kms:Sign'], Effect: 'Allow', Resource: '*'}
-        : {Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: ['arn:aws:s3:::example-blob/da/*', 'arn:aws:s3:::example-proof/proofs/scroll-chunk-segmentation-sidecars/*']}]}}
-      return {}
-    }
-
-    let failure: unknown
-    try {
-      // A fresh directory has no saved role ARN, but the deterministic role exists.
-      await provisioner.provision({...getAttestationSignerKmsRole(0), service: 'eth-da-submitter'},
-        {awsRegion: 'us-west-2', eksCluster: 'test', namespace: 'default', networkAlias: 'test'},
-        {archive: {enabled: false}})
-    } catch (error) { failure = error }
-
-    if (extraKmsGrant) {
-      expect(String(failure)).to.include('extra or unprovable kms grant')
-      expect(calls.some(args => args[1] === 'put-role-policy')).to.equal(false)
-    } else {
-      expect(failure).to.equal(undefined)
-      const writes = calls.filter(args => args[1] === 'put-role-policy')
-      expect(writes).to.have.length(1)
-      expect(writes[0][writes[0].indexOf('--policy-name') + 1]).to.equal('eth-da-submitter-kms-sign')
-      expect(calls.some(args => args[1] === 'delete-role-policy')).to.equal(false)
     }
   })
+  afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
-  it('still rejects extra S3 grants when preparing the archive with its full intent', async () => {
-    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
-    const calls: string[][] = []
-    provisioner.awsJson = (args: string[]) => {
-      calls.push(args)
-      if (args[1] === 'list-role-policies') return {PolicyNames: ['unrelated-bucket-access']}
-      if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
-      if (args[1] === 'get-role-policy') return {PolicyDocument: {Statement: [{Action: ['s3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::unrelated-bucket/*'}]}}
-      throw new Error('Unexpected AWS call')
-    }
-
-    let failure: unknown
-    try {
-      await provisioner.provisionArchive({bucket: 'example-blob', created: false, enabled: true, keyPrefix: 'da'}, {
-        createBucket: false,
-        roleArn: 'arn:aws:iam::123456789012:role/example-da',
-        sidecarStore: {bucket: 'example-proof', keyPrefix: 'proofs'},
-      })
-    } catch (error) { failure = error }
-
-    expect(String(failure)).to.include('extra or unprovable s3 grant')
-    expect(calls.some(args => args[1] === 'put-role-policy')).to.equal(false)
+  it('reuses one immutable key across alias failure and repeated successful preparation', async () => {
+    failAlias = true
+    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('Injected alias failure')}
+    expect(exists).to.equal(true)
+    failAlias = false
+    const first = await provisioner.provision(role, identity)
+    const second = await provisioner.provision(role, identity)
+    expect(second).to.deep.equal(first)
+    expect(first.signerConfig.kmsKeyId).to.equal(keyArn)
+    expect(first.signerConfig).not.to.have.property('serviceAccountRoleArn')
+    expect(calls.filter(args => args[1] === 'create-key')).to.have.length(1)
+    expect(calls.some(args => args[0] === 'iam')).to.equal(false)
+    expect(fs.statSync(path.join(root, fs.readdirSync(root)[0])).mode % 0o1000).to.equal(0o600)
   })
 
-  it('grants both native sidecar keys in the independent proof bucket', async () => {
-    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
-    const calls: string[][] = []
-    provisioner.awsJson = (args: string[]) => { if (args[1] === 'list-role-policies') return {PolicyNames: []}; if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}; calls.push(args); return {} }
-    await provisioner.provisionArchive({bucket: 'da-bucket', created: false, enabled: true, keyPrefix: '/deployments//one/'}, {
-      createBucket: false,
-      roleArn: 'arn:aws:iam::123456789012:role/archive-writer',
-      sidecarStore: {bucket: 'proof-bucket', keyPrefix: 'deployments/one'},
-    })
-    const policy = JSON.parse(calls[0][calls[0].indexOf('--policy-document') + 1])
-    expect(policy.Statement[0].Resource).to.equal('arn:aws:s3:::da-bucket/deployments/one/*')
-    expect(policy.Statement[1].Resource).to.deep.equal([
-      'arn:aws:s3:::proof-bucket/deployments/one/scroll-chunk-segmentation-sidecars/*',
-      'arn:aws:s3:::proof-bucket/deployments/one/scroll-chunk-segmentation-sidecars-by-height/*',
-    ])
-    expect(JSON.stringify(policy)).not.to.include('arn:aws:s3:::proof-bucket/deployments/one/*')
-    expect(JSON.stringify(policy)).not.to.match(/s3:(DeleteObject|ListBucket)/)
+  it('rejects a disabled saved key without creating a replacement', async () => {
+    await provisioner.provision(role, identity)
+    keyState = 'Disabled'
+    expect(provisioner.inspectAddress(region, keyArn)).to.match(/^0x[\dA-Fa-f]{40}$/)
+    const count = calls.length
+    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('must be enabled')}
+    expect(calls.slice(count).some(args => /^(create|update|put|delete)-/.test(args[1]))).to.equal(false)
+  })
+
+  it('does not replace a saved key that has disappeared', async () => {
+    await provisioner.provision(role, identity)
+    exists = false; alias = undefined
+    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('NotFoundException')}
+    expect(calls.filter(args => args[1] === 'create-key')).to.have.length(1)
+  })
+
+  it('refuses to retarget an alias away from a different key', async () => {
+    await provisioner.provision(role, identity)
+    alias = 'another-key'
+    const count = calls.length
+    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('refusing to retarget')}
+    expect(calls.slice(count).some(args => /^(create|update|put|delete)-/.test(args[1]))).to.equal(false)
+  })
+
+  it('only implicitly reuses aliases belonging to this deployment', async () => {
+    exists = true; alias = 'fixture'
+    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('did not create')}
+    expect(calls.some(args => /^(create|update|put|delete)-/.test(args[1]))).to.equal(false)
+  })
+
+  it('resolves an explicitly supplied key to its ARN without changing the key or alias', async () => {
+    exists = true
+    const result = await provisioner.provision(role, identity, {kmsKeyId: 'alias/operator-owned'})
+    expect(result.owned).to.equal(false)
+    expect(result.signerConfig.kmsKeyId).to.equal(keyArn)
+    expect(calls.map(args => args[1])).to.deep.equal(['describe-key'])
+    expect(fs.readdirSync(root)).to.deep.equal([])
+  })
+
+  it('normalizes archive prefixes and reconciles retention without writing IAM grants', async () => {
+    const archive = {bucket: 'fixture-bucket', created: false, enabled: true, keyPrefix: ' /instances//one/ '}
+    await provisioner.provisionArchive(archive, {createBucket: false})
+    const before = structuredClone(lifecycle)
+    await provisioner.provisionArchive(archive, {createBucket: false})
+    expect(archive.keyPrefix).to.equal('instances/one')
+    expect(lifecycle).to.deep.equal(before)
+    expect(calls.filter(args => args[1] === 'put-bucket-lifecycle-configuration')).to.have.length(1)
+    expect(calls.some(args => args[0] === 'iam')).to.equal(false)
   })
 
   it('rejects unsafe archive prefixes before any AWS operation', async () => {
-    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
-    let calls = 0
-    provisioner.awsJson = () => { calls++; return {} }
-    provisioner.ensureS3Bucket = () => { calls++; return false }
-    provisioner.ensureKmsKey = () => { calls++; throw new Error('unexpected KMS call') }
     for (const keyPrefix of ['instances/*', 'instances/../other', 'instances/%2f', 'instances/a b']) {
-      for (const standalone of [true, false]) {
-        const archive = {bucket: 'shared-bucket', created: false, enabled: true, keyPrefix}
-        let failure: unknown
-        try {
-          await (standalone ? provisioner.provisionArchive(archive, {createBucket: true}) : provisioner.provision(getAttestationSignerKmsRole(0),
-            {awsRegion: 'us-west-2', eksCluster: 'test', namespace: 'default', networkAlias: 'test'}, {archive}));
-        } catch (error) { failure = error }
-
-        expect(String(failure)).to.include('S3 archive key prefix')
-      }
+      try {await provisioner.provisionArchive({bucket: 'fixture-bucket', created: false, enabled: true, keyPrefix}, {createBucket: true}); expect.fail('must fail')}
+      catch (error) {expect(String(error)).to.include('S3 archive key prefix')}
     }
 
-    expect(calls).to.equal(0)
-  })
-
-  it('grants the requested archive prefix when reusing a role without replacing its other policies', async () => {
-    const provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true)) as any
-    const roleArn = 'arn:aws:iam::123456789012:role/existing-da-role'
-    const calls: string[][] = []
-    provisioner.ensureKmsKey = () => ({keyArn: 'existing-key', keyId: 'existing-key', kmsKeyIdForConfig: 'existing-key'})
-    provisioner.fetchKmsPublicKey = () => process.env.AWS_TEST_PUBLIC_KEY
-    provisioner.awsJson = (args: string[]) => {
-      if (args[1] === 'list-role-policies') return {PolicyNames: []}
-      if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
-      calls.push(args)
-      return args[1] === 'get-role' ? {Role: {Arn: roleArn}} : {}
-    }
-
-    await provisioner.provision({...getAttestationSignerKmsRole(0), service: 'eth-da-submitter'},
-      {awsRegion: 'us-west-2', eksCluster: 'test', namespace: 'default', networkAlias: 'test'},
-      {archive: {bucket: 'shared-bucket', created: false, enabled: true, keyPrefix: 'instances/new'}, createArchiveBucket: false, kmsKeyId: 'existing-key',
-        roleArn})
-    expect(calls.map(args => args[1])).to.deep.equal(['get-role', 'put-role-policy'])
-    const put = calls[1]
-    expect(put[put.indexOf('--policy-name') + 1]).to.match(/^eth-da-submitter-archive-[\da-f]{16}$/)
-    const policy = JSON.parse(put[put.indexOf('--policy-document') + 1])
-    expect(policy.Statement[0].Resource).to.equal('arn:aws:s3:::shared-bucket/instances/new/*')
-    expect(policy.Statement).to.have.length(1)
-    expect(policy.Statement[0].Action).to.deep.equal(['s3:GetObject', 's3:PutObject'])
+    expect(calls).to.have.length(0)
   })
 })

@@ -10,10 +10,14 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {PreparationPlan, PreparationRunner, PreparationStep} from './preparation-plan.js'
 
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
+import {discoverAwsResources} from './aws-resource-discovery.js'
 import {prepareCapacityManager} from './capacity-manager.js'
+import {prepareDstackNetworkForSpec} from './capacity-manager-network.js'
 import {writeContractsHelmValues} from './contracts-helm-values.js'
+import {cubesignerSessionExpiration} from './cubesigner-session-format.js'
 import {parseDatabaseUrl} from './dstack-database.js'
 import {resolveEnvValue} from './non-interactive.js'
+import {prepareAwsRoles} from './preparation-aws-roles.js'
 import {prepareCubesignerPolicy} from './preparation-cubesigner-policy.js'
 import {awaitDeploymentKitPublication, exportPreparationDeploymentKit} from './preparation-deployment-kit.js'
 import {bindPreparedDstackAws, prepareDstackAws} from './preparation-dstack-aws.js'
@@ -27,6 +31,7 @@ import {AwaitingInput, localPath, privateWrite} from './preparation-io.js'
 import {importPreparationPolicyReceipts} from './preparation-policy-receipts.js'
 import {bindPreparedProofAws, reuseProofAws} from './preparation-proof-aws.js'
 import {prepareSequencerKms, productionSequencer} from './preparation-sequencer-kms.js'
+import {checkProofDeployment} from './proof-deployment-check.js'
 import {exportCoordinatorMaterializers} from './proof-image-tools.js'
 import {readProofMaterials} from './proof-materials.js'
 import {readProofSoftwareRelease} from './proof-software-release.js'
@@ -44,7 +49,8 @@ export const invokePreparationCommand: Invoke = async (root, step, args, environ
   const fd = fs.openSync(path.join(logs, `${step}.log`), 'a', 0o600)
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(process.execPath, [CLI, 'setup', ...args, '--json'], {cwd: root, env: {...process.env, ...environment}, stdio: ['ignore', fd, fd]})
+      const commandArgs = args[0] === 'cubesigner' ? args : ['setup', ...args]
+      const child = spawn(process.execPath, [CLI, ...commandArgs, '--json'], {cwd: root, env: {...process.env, ...environment, SCROLLSDK_PREPARATION_STEP: step}, stdio: ['ignore', fd, fd]})
       child.once('error', () => reject(new Error(`Unable to start ${step}`)))
       child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Step ${step} failed; inspect .scrollsdk/logs/${step}.log privately`)))
     })
@@ -71,12 +77,9 @@ export class CommandPreparationRunner implements PreparationRunner {
     })
     const bridgeArgs = ['-N', '--image', p.bridge.image, '--ethereum-da-probe', 'direct', ...(p.bridge.mode === 'production' ? ['--production'] : [])]
     switch (step.id) {
-      case 'capacity-manager': {prepareCapacityManager(root); break}
+      case 'dstack-network': {prepareDstackNetworkForSpec(root, spec); break}
 
-      case 'proof-workers-intent': {
-        // Capacity apply runs only after the operator installs the services.
-        break
-      }
+      case 'capacity-manager': {prepareCapacityManager(root); break}
 
       case 'bootstrap': {
         await command(['generate-from-spec', '--spec', '.scrollsdk/intent.json', '--output', '.', '--bootstrap', '--sdk-dir', plan.sdkDirectory, '--force'])
@@ -86,25 +89,18 @@ export class CommandPreparationRunner implements PreparationRunner {
       case 'genesis-local': {await prepareLocalGenesis(root, spec, this.invoke); break}
 
       case 'identities': {
-        await command(['gen-keystore', '-N']); break
+        await command(['gen-keystore', '-N', ...optional('aws-profile', p.awsIam?.awsProfile)]); break
       }
 
       case 'bridge-sequencer-kms': {prepareSequencerKms(root, spec); break}
 
+      case 'aws-roles': {prepareAwsRoles(root, spec); break}
+
       case 'bridge-fee-wallet': {productionFeeWallet(root, spec); break}
 
-      case 'archive': {
-        await command(['eth-da-submitter', '-N', p.archive!.action === 'create' ? '--create-archive-bucket' : '--no-create-archive-bucket', ...optional('aws-profile', p.archive!.awsProfile), ...optional('role-arn', p.archive!.writerRoleArn)]); break
-      }
+      case 'aws-resources': {discoverAwsResources(root, spec); break}
 
-      case 'archive-access': {
-        await command(['artifact-access', '--store', 'da', '--apply', ...(p.archive!.publicRead ? ['--public-read', '--allow-bucket-public-policy'] : ['--no-public-read']), ...optional('aws-profile', p.archive!.awsProfile)]); break
-      }
-
-      case 'proof-aws': {
-        if (p.proofAws!.action === 'reuse') {reuseProofAws(root, spec); break}
-        await command(['proof-aws-init', '-N', '--yes', '--aws-region', spec.infrastructure.aws!.region, '--eks-cluster', spec.infrastructure.aws!.eksClusterName!, '--namespace', spec.infrastructure.namespace ?? 'default', '--deployment-alias', spec.metadata.name, '--artifact-public-read-mode', p.proofAws!.publicReadMode, ...optional('artifact-public-endpoint-url', p.proofAws!.publicEndpointUrl), ...optional('aws-profile', p.proofAws!.awsProfile), ...optional('secret-name', p.proofAws!.secretName), ...optional('coordinator-service-account', spec.proofCoordinator?.serviceAccount?.name), ...optional('withdrawal-service-account', spec.proofCoordinator?.withdrawalProcessorServiceAccount?.name)]); break
-      }
+      case 'proof-aws': {reuseProofAws(root, spec); break}
 
       case 'dstack-aws': {prepareDstackAws(root, spec); break}
 
@@ -215,7 +211,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         this.exportMaterializers({expectedRevision: selected.manifest.revision, image: selected.manifest.images['proof-coordinator'], outputDir: localPath(root, '.data/proof-release-materializers')}); break
       }
 
-      case 'proof-worker-check': {
+      case 'proof-worker-image-check': {
         const release = p.proofRelease!
         const selected = readProofSoftwareRelease(requiredFile(root, release.manifest, 'approved proof release manifest'), release.sha256!)
         await command(['proof-worker-image-check', '--image', selected.manifest.images['prover-worker-cuda'], '--preparation-receipt', '.data/proof-release-preparation/proof-release-preparation-v1.json', '--output', '.data/proof-worker-image-check-v1.json']); break
@@ -247,8 +243,8 @@ export class CommandPreparationRunner implements PreparationRunner {
         const topology = buildProofTopology({artifactStore: previous.active!.artifactStore, deploymentName: spec.metadata.name, enforcement: previous.enforcement, generation: previous.generation, materials, mode: previous.mode, runtime: {
           artifactKeyPrefix: previous.deployment.artifactKeyPrefix, blockWitnessDir: previous.active!.realScroll.chunkBlockWitnessDir, observeRealProofDeadlineMs: previous.observeRealProofDeadlineMs,
           proofCoordinatorPublicUrl: previous.deployment.proverPublicUrl!, publicS3EndpointUrl: previous.deployment.publicS3EndpointUrl,
-          rpcWitnessUrl: previous.active!.realScroll.chunkWitnessRpcUrl, witnessSource: previous.active!.realScroll.chunkWitnessSource, workerDeploymentBackend: previous.deployment.workerDeploymentBackend,
-          workerLaunch: previous.active!.workerLaunch, workerNodeSelector: previous.deployment.workerNodeSelector, workerResources: previous.deployment.workerResources, workerRuntimeClassName: previous.deployment.workerRuntimeClassName, workerSecretName: previous.deployment.workerSecretName, workerTolerations: previous.deployment.workerTolerations,
+          rpcWitnessUrl: previous.active!.realScroll.chunkWitnessRpcUrl, witnessSource: previous.active!.realScroll.chunkWitnessSource,
+          workerLaunch: previous.active!.workerLaunch,
         }})
         const file = path.join(root, '.data/doge-config.toml')
         const config = toml.parse(fs.readFileSync(file, 'utf8')) as any
@@ -258,7 +254,7 @@ export class CommandPreparationRunner implements PreparationRunner {
       }
 
       case 'charts': case 'charts-published': case 'render-final': {
-        if (spec.signing?.cubesigner?.mode === 'production_verifier_key_policy') importPreparationPolicyReceipts(root)
+        if (spec.bridge?.cubesigner?.mode === 'production_verifier_key_policy') importPreparationPolicyReceipts(root)
         if (step.id === 'charts' && spec.identities?.bootnodes?.length) {
           const file = localPath(root, '.data/doge-config.toml')
           const before = toml.parse(fs.readFileSync(file, 'utf8')) as any
@@ -287,7 +283,7 @@ export class CommandPreparationRunner implements PreparationRunner {
         if (p.proofPublication && step.id !== 'charts') args.push('--proof-publication-receipt', '.data/proof-program-publication-v1.json')
         await command(args)
         if (step.id === 'render-final') writeContractsHelmValues(root)
-        writeHelmValues(root, spec)
+        writeHelmValues(root, spec, {deferIngressValidation: step.id !== 'render-final' && Boolean(step.stage)})
         break
       }
 
@@ -318,13 +314,13 @@ export class CommandPreparationRunner implements PreparationRunner {
             let session: any
             try {session = JSON.parse(fs.readFileSync(localPath(root, files[0]), 'utf8'))} catch {throw new AwaitingInput({message: 'Existing runtime session is invalid; explicit recovery is required, no session was rotated'})}
             const role = config.cubesigner?.roles?.[0]
-            if (!role || session.role_id !== role.role_id || !(session.session_exp > Date.now() / 1000) || !(session.session_info?.refresh_token_exp > Date.now() / 1000)
+            if (!role || session.role_id !== role.role_id || !((cubesignerSessionExpiration(session) ?? 0) > Date.now() / 1000) || !(session.session_info?.refresh_token_exp > Date.now() / 1000)
               || fs.readFileSync(localPath(root, files[1]), 'utf8').trim() !== `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${role.keys[0].key_id}"`) throw new AwaitingInput({message: 'Existing runtime session/key/expiry mismatch; explicit recovery is required, no session was rotated'})
           }
 
           if (!files.every(file => fs.existsSync(localPath(root, file)) && fs.statSync(localPath(root, file)).size > 0)) {
             if (files.some(file => fs.existsSync(localPath(root, file)))) throw new AwaitingInput({message: 'Partial CubeSigner session files require explicit recovery; no session was rotated'})
-            await command(['cubesigner-refresh', '-N', '--doge-config', '.data/doge-config.toml'])
+            await command(['cubesigner', 'refresh-session', '-N', '--doge-config', '.data/doge-config.toml'])
           }
         }
 
@@ -333,14 +329,14 @@ export class CommandPreparationRunner implements PreparationRunner {
 
       case 'deployment-kit': {await exportPreparationDeploymentKit(root); break}
       case 'deployment-kit-published': {
-        await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, step.stage ? 'scrollsdk setup signer-kit-publish' : 'scrollsdk setup apply'));
+        await (p.deploymentKitPublication?.mode === 's3' ? command(['publish-deployment-kit', '--apply', ...optional('aws-profile', p.deploymentKitPublication.awsProfile)]) : awaitDeploymentKitPublication(root, 'scrollsdk setup signer-kit-publish'));
         break
       }
 
-      case 'proof-check': {await command(['proof-config-check', ...(step.stage ? ['--scope', 'preparation'] : [])]); break}
+      case 'proof-check': {await checkProofDeployment({deploymentDir: root, scope: step.stage ? 'preparation' : 'activation'}); break}
       case 'secret-upload': case 'cubesigner-secret-upload': {
         const signerOnly = step.id === 'cubesigner-secret-upload'
-        if (spec.signing?.cubesigner && (signerOnly || !step.stage)) {
+        if (spec.bridge?.cubesigner && (signerOnly || !step.stage)) {
           for (const name of ['cubesigner-signer-session.json', 'cubesigner-signer.env']) {
             const file = localPath(root, `secrets/${name}`)
             if (!fs.existsSync(file) || !fs.statSync(file).isFile() || fs.statSync(file).size === 0) throw new AwaitingInput({file, message: 'Required CubeSigner runtime Secret input is missing or empty. Run scrollsdk setup cubesigner-policy prepare-session --dir . for the prepared production workflow, or explicitly recover legacy credentials, then rerun setup upload-secrets. Uploading other available files does not satisfy this prerequisite.'})

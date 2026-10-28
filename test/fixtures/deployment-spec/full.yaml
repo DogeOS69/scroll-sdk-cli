@@ -121,47 +121,39 @@ ethereumDa:
   finalizationDepth: 64
 
 bridge:
-  seedString: "dogeos-devnet-seed-v1"
-  thresholds:
-    attestation: 2
-    recovery: 2
-  keyCounts:
-    attestation: 3
-    recovery: 3
-  # Bootstrap-only M-of-N cohort. Current state after RotateKey is read from
-  # the chain and must not be inferred from this initial list.
-  initialAttestationKeyset:
-    signerIds: [signer-0, signer-1, signer-2]
+  attestation:
+    signers:
+    - name: signer-0
+      attestationPubkey: 03a6edc77459a686e1ebb5d9a5c5e77ece92b8c30b8ebd72075e4812a1f3db0363
+      transportPubkey: 02676da0ab7136916bad82add5eb490b1b5b4e56d39944067f0fba0c80c4521012
+    - name: signer-1
+      attestationPubkey: 032eea251ba53efdee68493a6a1d99d6eaa76a6bc38535869ffb1219c3d6773473
+      transportPubkey: 03f930eef16eb65b89585d0806da55e21b45b3898e3dead82d7d728dba1f6c16bc
+    - name: signer-2
+      attestationPubkey: 03a46480e19a3a6ed57ec844d3a4f11cc17f0e71ceea9ea60a201d3915a28295d0
+      transportPubkey: 0362c5c051c254bdbf420d30f2d9ae0fe9a4eac1ada498c31e4c8f7209217c9f61
     threshold: 2
-  # TEE public key is populated by `scrollsdk setup cubesigner-init`.
-  timelock: 100
+  cubesigner:
+    mode: transport_only
+  recovery:
+    publicKeys:
+    - 03a8b3bfeecf29706aa9ca206fa19ed017ce23662bff3f4266640d8c563ecd9724
+    - 021aae0719a8231197dd88ffcdb92a852a5ceef3a55ac99f96de493f73d2ddf14d
+    - 035cba9c22b0b6bbc12497d93b7dd5c551c7d90be8a13bf817c52002d311112dd0
+    threshold: 2
+    timelock: 100
+  seedString: dogeos-devnet-seed-v1
   feeRateSatsPerKvb: 1000000
   targetAmountsSats:
-    sequencer: 42069000       # Fixed WF sequencer output: 0.42069 DOGE
+    sequencer: 42069000
     feeWallet: 500000000
     bridge: 5000000000
   confirmationsRequired: 1
   fees:
-    depositFeeSats: "100000000" # 1 DOGE (Dogecoin uses 8 decimals)
-    withdrawalFeeWei: "100000000000000000" # 0.1 DOGE (L2 uses 18 decimals)
-    minWithdrawalAmountWei: "1000000000000000000" # 1 DOGE
-  feeRecipient: "0x0000000000000000000000000000000000000000"
-
-signing:
-  # CubeSigner provides the single TEE key. Roles are populated by `scrollsdk setup cubesigner-init`.
-  cubesigner:
-    # This devnet example starts in observe mode. Mainnet deployments
-    # must select production_verifier_key_policy and supply policyReceipts.
-    mode: transport_only
-  # Attestation signers are partner-operated services. For the spec workflow,
-  # declare their public identities in top-level attestationSigners entries:
-  # {name: signer-0, attestationPubkey: <compressed key>, transportPubkey: <compressed key>}.
-  # Repeat for every signer selected by bridge.initialAttestationKeyset.signerIds.
-  # See scroll-sdk/examples/deployment-spec.example.yaml for the production form.
-  # The independent manual workflow can still import partner descriptors with
-  # `scrollsdk setup attestation-signer --threshold <T>` before bridge-init.
-  # Current dogeos-core requires canonical protocol context in every mode, so
-  # runtime preflight occurs after the post-genesis signer bundle is installed.
+    depositFeeSats: '100000000'
+    withdrawalFeeWei: '100000000000000000'
+    minWithdrawalAmountWei: '1000000000000000000'
+  feeRecipient: '0x0000000000000000000000000000000000000000'
 
 # The compiler-backed proof topology is optional. The recommended non-spec flow
 # imports producer output with `setup proof-materials`, then lets `setup
@@ -199,9 +191,8 @@ signing:
 #     # Use withdrawal_mock_prover_real_materialize for production-shaped
 #     # segmentation/materialization with mock proof generation.
 #     profile: withdrawal_mock_prover_real_materialize
-#     # Staged real Worker compute/ownership placement. Mock renders as
-#     # adapter-managed local_cpu independently of this value.
-#     workerLaunch: external # local_cpu | local_cuda | external
+#     # Capacity Manager owns external real Workers; mock runs inside Coordinator.
+#     workerLaunch: external
 #     artifactStore:
 #       kind: s3_compatible
 #       maxReadBodyBytes: 536870912
@@ -226,9 +217,6 @@ signing:
 #       l2RangeAggregationProgramCommitmentHashHex: 0x<64-lowercase-hex>
 #
 #   deployment:
-#     # How scroll-sdk-cli installs adapter-managed local_cpu/local_cuda
-#     # Workers. docker_compose is suitable for a managed EC2 host.
-#     workerDeploymentBackend: docker_compose # docker_compose | kubernetes
 #     protocolContextPath: /app/protocol_context.json
 #     generatedMaterialsRoot: /app/data/proof-topology
 #     proofWorkBind: 0.0.0.0:9300

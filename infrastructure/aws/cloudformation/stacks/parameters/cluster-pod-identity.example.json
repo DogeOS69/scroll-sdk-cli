@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "ResourceClassification",
+    "ParameterValue": "nonproduction-deletable"
+  },
+  {
+    "ParameterKey": "ClusterName",
+    "ParameterValue": "replace-existing-cluster"
+  },
+  {
+    "ParameterKey": "AddonVersion",
+    "ParameterValue": "v1.3.10-eksbuild.3"
+  }
+]

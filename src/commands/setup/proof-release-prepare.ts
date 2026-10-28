@@ -24,6 +24,9 @@ export default class ProofReleasePrepare extends Command {
     'protocol-context': Flags.string({description: 'Override artifact-root/protocol_context.json'}),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   async run(): Promise<void> {
     const {flags} = await this.parse(ProofReleasePrepare)
     const output = new JsonOutputContext('setup proof-release-prepare', flags.json)

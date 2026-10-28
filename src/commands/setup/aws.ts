@@ -3,7 +3,7 @@ import {Command} from '@oclif/core'
 import {preparationStageFlags, runPreparationStage} from '../../utils/preparation-stage-command.js'
 
 export default class Aws extends Command {
-  static description = 'Prepare declared service identities, AWS resources and database inputs; never allocate GPU capacity'
+  static description = 'Read external AWS resource information before genesis and bind it to production configuration'
   static flags = preparationStageFlags
 
   async run(): Promise<void> {

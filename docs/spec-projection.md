@@ -6,7 +6,7 @@ For resumable orchestration of the full preparation sequence, see
 
 DeploymentSpec generation and `setup prep-charts` share the following inputs.
 The core service image fallback is `v0.3.0-beta.8`; explicit image overrides
-remain authoritative. Contracts use `dogeos-v0.3.0-rc.9`. Reth is independently
+remain authoritative. Contracts use `dogeos-v0.3.0-rc.10`. Reth is independently
 released and defaults to `v0.3.0-beta.2`; it does not inherit the Core tag.
 
 ## Frontend live deposit destination
@@ -59,7 +59,7 @@ The generated Reth values use 30,000,000 gas, a 2000 ms block interval and a
 1400 ms payload build window. Empty blocks are disabled by default
 (`reth.sequencer.allowEmptyBlocks: false`); the sequencer produces blocks when
 there is eligible work. The same genesis gas limit enters `config.toml`
-for rc.9 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
+for rc.10 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
 that file also sets the concrete Reth nodes' builder gas limit. If the field is
 absent from an older deployment, prep preserves its values setting. Prep does
 not rewrite the operator's existing block interval/build window or image pin.
@@ -79,6 +79,13 @@ for contract/genesis configuration, protocol seed, frontend and contract Helm
 values. `network.l1ChainId` is no longer a supported spec field; remove it from
 existing specs. `network.l2ChainId` remains operator-selected, and the separate
 Ethereum DA chain ID keeps its existing configuration.
+
+Both spec generation and `prep-charts` pass the selected Dogecoin network to
+`REACT_APP_DOGE_NETWORK` without renaming it. Frontend releases containing
+[PR #18](https://github.com/DogeOS69/scroll-sdk-frontends/pull/18) require exactly
+`mainnet`, `testnet` or `regtest`: there is no default, and `livenet`, uppercase
+or whitespace-padded names are invalid. This selects Dogecoin L1 address
+validation, independently of `REACT_APP_CHAIN_ID_L2`.
 
 ## Bridge fee units
 
@@ -122,18 +129,25 @@ direct values generation. Custom submitter L2 RPC selection is retained through
 both generic environment reconciliation and submitter-specific reconciliation.
 Batch, publication, archive and proof-store inputs keep their existing paths.
 
-## Initial signer selection
+## Initial signer list
 
 ```yaml
 bridge:
-  initialAttestationKeyset:
-    signerIds: [partner-c, partner-a]
+  attestation:
+    signers:
+      - name: partner-c
+        attestationPubkey: REPLACE_WITH_PARTNER_C_ATTESTATION_PUBLIC_KEY
+        transportPubkey: REPLACE_WITH_PARTNER_C_TRANSPORT_PUBLIC_KEY
+      - name: partner-a
+        attestationPubkey: REPLACE_WITH_PARTNER_A_ATTESTATION_PUBLIC_KEY
+        transportPubkey: REPLACE_WITH_PARTNER_A_TRANSPORT_PUBLIC_KEY
     threshold: 1
 ```
 
-The generator records the selected IDs and threshold in doge-config and uses
-their count/threshold in setup defaults. IDs must be unique DNS labels and the
-threshold must be between one and the selected signer count.
+Every listed signer is an initial member. The generator records their names in
+list order and the threshold in doge-config, and writes the matching ordered
+public keys and count to setup defaults. Names must be unique DNS labels and the
+threshold must be between one and the list length. No separate ID list is needed.
 
 `setup attestation-signer` still requires real partner-generated public
 descriptors. Without explicit selection flags, it preserves the configured
@@ -302,14 +316,14 @@ The following intent matches one sequencer and one bootnode:
 ```yaml
 identities:
   feeOracle:
-    action: create
+    action: reuse
     backend: aws_kms
+    kms: {keyId: alias/dogeos/ENV/fee-oracle}
   ethDaSubmitter:
     action: reuse
     backend: aws_kms
     kms:
       keyId: EXISTING_KMS_KEY_ID
-      roleArn: arn:aws:iam::000000000000:role/EXISTING_ROLE
   sequencers:
     - index: 0
       nodekey: {action: create}
@@ -325,7 +339,9 @@ identities:
 Provide real resource references privately. `privateKeyEnv` is the name of an
 environment variable, not the key or a `$ENV:` expression. Configuration
 projection saves this public intent without reading that variable or contacting
-AWS. Supply the variable when applying `gen-keystore`. Every configured node
+AWS. Supply the variable when applying `gen-keystore`. KMS `reuse` selects only
+the key; select its external role through `infrastructure.aws.roles`, so
+`kms.roleArn` and `kms.serviceAccount` are rejected. Every configured node
 index must appear exactly once; the two service signers are required when the
 identity block is present.
 
@@ -336,13 +352,12 @@ identity. Reuse requires an already saved local key. An optional signer
 `expectedAddress` checks imported/reused public identity; it is incompatible
 with create.
 
-KMS supports create/reuse. Create may allocate a KMS key and IAM role through the
-existing provider; reuse requires both a key reference and a role ARN and reads
-the key's public identity. Region and EKS cluster default from
-`infrastructure.aws`; namespace and resource alias default from the deployment.
-They can be overridden under `kms`, together with service-account name. These
-inputs identify an existing cluster; they do not create one. Do not duplicate
-KMS identities in `accounts.l1CommitSender` or `accounts.l2GasOracleSender`.
+KMS supports reuse only in the spec workflow. Prepare keys and roles outside the
+CLI, then provide key references and corresponding `infrastructure.aws.roles`
+ARNs. The AWS stage reads and pins public identities and resolves selected role ARNs.
+Region/EKS default from infrastructure; namespace defaults from deployment.
+Do not duplicate KMS identities in `accounts.l1CommitSender` or
+`accounts.l2GasOracleSender`.
 
 `setup gen-keystore` consumes saved intent automatically. `--from-spec` explicitly
 selects another spec's identity intent. `--plan` reports selections without key

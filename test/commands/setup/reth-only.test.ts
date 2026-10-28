@@ -7,9 +7,9 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import {getRethBootnodeIndices} from '../../../src/commands/setup/bootnode-public-p2p.js'
 import {isRetiredGethSecretFile} from '../../../src/commands/setup/push-secrets.js'
 import {AWSNodeLBProvider} from '../../../src/providers/aws-node-public-p2p.js'
+import {getRethBootnodeIndices} from '../../../src/utils/bootnode-public-p2p.js'
 import {archiveRetiredGethValues} from '../../../src/utils/retired-geth.js'
 
 const cli = path.resolve('bin/run.js')
@@ -27,7 +27,7 @@ describe('pure Reth account generation', () => {
 
   function run(...args: string[]) {
     return spawnSync(process.execPath, [cli, 'setup', 'gen-keystore', '--accounts', '-N', '--json', ...args], {
-      cwd: dir, encoding: 'utf8', timeout: 30_000,
+      cwd: dir, encoding: 'utf8', env: {...process.env, SCROLLSDK_PREPARATION_STEP: 'identities'}, timeout: 30_000,
     })
   }
 
@@ -100,7 +100,7 @@ describe('pure Reth account generation', () => {
       'l2geth-node': {image: 'fixture/retired'},
       'l2reth-node': {image: 'fixture/reth'},
     }}))
-    const result = spawnSync(process.execPath, [cli, 'setup', 'gen-rpc-package', '--doge-config', 'doge-config.toml', '-d', output, '-n', 'fixture'], {
+    const result = spawnSync(process.execPath, [cli, 'rpc', 'export', '--doge-config', 'doge-config.toml', '-d', output, '-n', 'fixture'], {
       cwd: dir, encoding: 'utf8', env: {...process.env, PATH: `${shim}:${process.env.PATH}`},
       timeout: 30_000,
     })

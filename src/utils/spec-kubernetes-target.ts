@@ -35,13 +35,8 @@ export function bindMakefileTarget(source: string, spec: DeploymentSpec): string
     source = declaration.test(source) ? source.replace(declaration, line) : `${line}\n${source}`
   }
 
-  if (spec.capacityManager) {
-    const recipe = '\tscrollsdk setup capacity-manager credentials --dir . --kube-context "$(KUBE_CONTEXT)" --namespace "$(NAMESPACE)"\n'
-    if (!/^install-capacity-manager:/m.test(source)) throw new Error('SDK Makefile lacks install-capacity-manager; use the matching capacity-manager SDK checkout')
-    // The operator invokes Make only. This API synchronization happens after
-    // dstack startup, before Helm can start a manager and rent workers.
-    source = source.replace(/^(install-capacity-manager:[^\n]*\n)(?:\tscrollsdk setup capacity-manager credentials[^\n]*\n)?/m, `$1${recipe}`)
-  }
+  // Remove only the retired generated callback; initialization now belongs to Helm.
+  if (spec.capacityManager) source = source.replaceAll(/^\tscrollsdk setup capacity-manager credentials[^\n]*\n/gm, '')
 
   // Older SDK templates used a separate namespace. Normal spec deployments do not.
   return source.replaceAll(/^DSTACK_NAMESPACE\s*\?=.*\n/gm, '').replaceAll('$(DSTACK_NAMESPACE)', '$(NAMESPACE)')

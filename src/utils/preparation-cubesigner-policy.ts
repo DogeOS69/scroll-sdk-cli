@@ -12,7 +12,7 @@ export const POLICY_COMPILER_INPUT = '.scrollsdk/inputs/cubesigner-policy/compil
 export const POLICY_OUTPUT = '.data/cubesigner-policy'
 
 export function needsPreparationPolicy(spec: DeploymentSpec): boolean {
-  return Boolean(spec.signing?.cubesigner && spec.signing.cubesigner.mode !== 'transport_only')
+  return Boolean(spec.bridge?.cubesigner && spec.bridge.cubesigner.mode !== 'transport_only')
 }
 
 /** Export only; publication and governed attachment remain separate operator actions. */

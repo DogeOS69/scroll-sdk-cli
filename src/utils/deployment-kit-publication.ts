@@ -11,12 +11,11 @@ import type {DeploymentKitRecord} from './deployment-kit.js'
 import {AwsCliRunner} from './aws-cli.js'
 import {DEPLOYMENT_KIT_MANIFEST_FILE, DEPLOYMENT_KIT_MANIFEST_SCHEMA, DEPLOYMENT_KIT_VERSION} from './deployment-kit.js'
 import {digest, privateWrite} from './preparation-io.js'
-import {normalizeProofBucketName, proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
+import {normalizeProofBucketName, normalizeProofKeyPrefix, proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {proofRegularFile} from './proof-software-release.js'
 
 const FILES = ['advance-l2-agg-verifying-key.bin', 'deployment-kit.env', 'deployment-kit.json', 'protocol_context.json']
 const MAX_BYTES = 64 * 1024 * 1024
-type Policy = {Statement?: Record<string, unknown> | Record<string, unknown>[]; Version?: string}
 export interface KitPublicationDependencies {
   anonymousRead?: (url: string) => Promise<Buffer>
   aws?: Pick<AwsCliRunner, 'json'>
@@ -45,21 +44,6 @@ export function readPublicationKit(kit: DeploymentKitRecord): Map<string, Buffer
   return files
 }
 
-/** Own a single version grant. Preserve all other policy statements exactly. */
-export function kitReadPolicy(existing: Policy, bucket: string, version: string): Policy {
-  normalizeProofBucketName(bucket)
-  if (!DEPLOYMENT_KIT_VERSION.test(version)) throw new Error('Invalid deployment kit version')
-  const statement = {
-    Action: 's3:GetObject', Condition: {Bool: {'aws:SecureTransport': 'true'}}, Effect: 'Allow', Principal: '*',
-    Resource: `arn:aws:s3:::${bucket}/deployment-kits/${version}/*`, Sid: `ScrollSdkKit${version.replaceAll('-', '')}`,
-  }
-  const statements = existing.Statement === undefined ? [] : Array.isArray(existing.Statement) ? existing.Statement : [existing.Statement]
-  if (statements.some(value => !value || typeof value !== 'object')) throw new Error('Invalid bucket policy')
-  const owned = statements.filter(value => value.Sid === statement.Sid)
-  if (owned.length > 1 || (owned.length === 1 && !isDeepStrictEqual(owned[0], statement))) throw new Error('Deployment kit policy Sid conflicts with an existing statement')
-  return {...existing, Statement: owned.length > 0 ? statements : [...statements, statement], Version: existing.Version ?? '2012-10-17'}
-}
-
 async function anonymousRead(url: string): Promise<Buffer> {
   const response = await fetch(url, {redirect: 'error', signal: AbortSignal.timeout(60_000)})
   if (!response.ok || !response.body) throw new Error('Published kit is not anonymously readable')
@@ -79,7 +63,7 @@ async function anonymousRead(url: string): Promise<Buffer> {
   return Buffer.concat(chunks)
 }
 
-/** Explicit S3 publication, safe to resume. No IAM, bucket creation or public-access-block changes. */
+/** Explicit S3 publication, safe to resume. Publishes objects only; external infrastructure owns bucket policy and permissions. */
 export async function publishDeploymentKit(kit: DeploymentKitRecord, store: ArtifactStore, profile?: string, dependencies: KitPublicationDependencies = {}): Promise<{manifest_sha256: string; url: string}> {
   const bucket = normalizeProofBucketName(store.bucket)
   if (!/^[a-z]{2}-[a-z]+-\d$/.test(store.region)) throw new Error('Kit publication requires a commercial AWS region')
@@ -89,20 +73,7 @@ export async function publishDeploymentKit(kit: DeploymentKitRecord, store: Arti
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'scrollsdk-kit-publication-'))
   const aws = dependencies.aws ?? new AwsCliRunner(profile)
   const json = (args: string[]) => aws.json(args, {region: store.region})
-  const keyPrefix = `deployment-kits/${kit.kitVersion}/`
-  const policy = (): Policy => {
-    let result: {Policy?: string}
-    try {result = json(['s3api', 'get-bucket-policy', '--bucket', bucket])} catch (error) {
-      if (/\(NoSuchBucketPolicy\)/.test(String(error))) return {}
-      throw new Error('Cannot read deployment kit bucket policy (provider details omitted)')
-    }
-
-    try {
-      const parsed = JSON.parse(result.Policy ?? '')
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid policy mapping')
-      return parsed
-    } catch {throw new Error('Invalid deployment kit bucket policy (contents omitted)')}
-  }
+  const keyPrefix = `${normalizeProofKeyPrefix(store.keyPrefix)}/deployment-kits/${kit.kitVersion}/`
 
   try {
     for (const [name, bytes] of files) privateWrite(path.join(temp, name), bytes)
@@ -111,8 +82,6 @@ export async function publishDeploymentKit(kit: DeploymentKitRecord, store: Arti
     const archive = `deployment-kit-${kit.kitVersion}.tar.gz`
     files.set(archive, gzipSync(tar))
     privateWrite(path.join(temp, archive), files.get(archive)!)
-    const previousPolicy = policy()
-    const nextPolicy = kitReadPolicy(previousPolicy, bucket, kit.kitVersion)
     const remote = path.join(temp, 'remote-object')
     const matches = (name: string): boolean => {
       try {json(['s3api', 'get-object', '--bucket', bucket, '--key', keyPrefix + name, remote])} catch (error) {
@@ -133,12 +102,6 @@ export async function publishDeploymentKit(kit: DeploymentKitRecord, store: Arti
       }
 
       if (!matches(name)) throw new Error('Kit upload readback failed')
-    }
-
-    if (!isDeepStrictEqual(previousPolicy, nextPolicy)) {
-      if (!isDeepStrictEqual(policy(), previousPolicy)) throw new Error('Bucket policy changed during publication; retry to preserve the new statements')
-      privateWrite(path.join(temp, 'policy.json'), JSON.stringify(nextPolicy))
-      try {json(['s3api', 'put-bucket-policy', '--bucket', bucket, '--policy', `file://${path.join(temp, 'policy.json')}`])} catch {throw new Error('Cannot grant kit HTTPS reads; check bucket/account public-access policy (provider details omitted)')}
     }
 
     const base = `${endpoint}/${bucket}/${keyPrefix}`

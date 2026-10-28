@@ -15,7 +15,7 @@ the existing Bridge. Follow that handoff before retrying the terminal WP job.
 From the deployment directory:
 
 ```bash
-scrollsdk setup cubesigner-refresh --doge-config .data/doge-config.toml -N --json
+scrollsdk cubesigner refresh-session --doge-config .data/doge-config.toml -N --json
 scrollsdk setup push-secrets --cubesigner-only --provider aws \
   --aws-region us-east-1 --aws-prefix dogeos/devnet-20260909 \
   --values-file values/cubesigner-signer-production.yaml -N --json

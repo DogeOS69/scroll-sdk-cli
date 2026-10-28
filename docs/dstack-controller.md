@@ -5,60 +5,17 @@ The CLI generates `values/dstack-controller-production.yaml` for the independent
 dstack `0.21.5`). This manages the controller's deployment configuration;
 Worker fleet/task generation and GPU provisioning are separate operations.
 
-For spec-driven GPU lifecycle after service installation, use `setup proof-workers
-plan`, `apply`, `status`, `drain` and `destroy` from the generated runtime directory. This
-reuses the controller and its Vast.ai backend; the operator does not need a local
-dstack login. See the SDK's `examples/proof-workers.md` for resource defaults,
-pricing admission, persistent cleanup watchdog and explicit outage boundaries.
-This adapter is pinned to dstack 0.21.5 and uses its native fleet/run API.
+Core Capacity Manager owns GPU lifecycle after service installation. Declare
+`capacityManager.provider` (`aws` or `vastai`), its project/fleets and explicit
+cost/capacity limits in the spec. Use the [AWS preparation workflow](dstack-aws-preparation.md)
+for controller provisioning permissions. Configuration preparation does not rent
+GPUs; the installed Core manager submits runs and mints per-worker credentials.
 
-For continuous capacity and private controller HTTPS, see
-[Prepare and activate Capacity Manager](capacity-manager-activation.md).
-
-## Choose AWS or Vast.ai workers
-
-`proofWorkers.backend` selects one provider per session; omitted means Vast.ai.
-AWS initially targets one L4 per `g6.4xlarge`. Both providers use on-demand
-capacity. There is no automatic fallback; `maxPricePerHourUsd` is the existing
-per-machine rental ceiling. For a bounded two-hour AWS session, set:
-
-```yaml
-proofWorkers:
-  backend: aws
-  gpu: L4
-  cpu: 16
-  regions: [us-east-1]
-  maxPricePerHourUsd: 1.50
-  rentalBudgetUsd: 5
-```
-
-AWS requires those explicit placement and budget fields. Other defaults stay
-unchanged: one worker, 64 GB RAM, 200 GB disk and the existing cleanup timers.
-The example reserves $4.25 including startup/drain/idle/polling; storage, network,
-tax and delayed deletion remain outside that estimate. L4 requires a
-release-matched, digest-pinned Worker image checked for CUDA architecture 89.
-
-Reuse dogeos-core's [AWS server configuration, IAM policies, preflight and image
-receipt](https://github.com/DogeOS69/dogeos-core/tree/v0.3.0-develop/tools/real-proving/dstack)
-and [AWS setup and balance-alert runbook](https://github.com/DogeOS69/dogeos-core/blob/15b09e4f26590ebf3f1549656e0a57a04ec20021/docs/engineering/aws-gpu-dstack.md)
-(stock-dstack version in core PR #1513).
-Add AWS to the dstack project selected by `preparation.dstack.project` (default
-`main`), retaining its Vast backend. Use the [AWS preparation workflow](dstack-aws-preparation.md)
-to import backend settings and prepare the controller role, or retain externally
-managed controller Secrets (`preparation.dstack.mode: external`), an existing
-scoped AWS controller role and the chart's credential-chain opt-in. The artifact/workload roles from
-`setup proof-aws-init` do not grant GPU provisioning. Keep the SDK's checked
-Worker contract/image and generated fleet/task ownership; do not submit the
-core Capacity Manager fleet/env wrappers or copy a different release's image.
-
-To switch, drain current proof work and rerun `setup proof-workers destroy`
-until it reports `destroyed` (use `status` to inspect); confirm provider billing.
-Then run `setup proof-workers plan --spec <updated-spec.yaml> --new-session <name>`
-and `apply`. For rollback, restore the previous Vast `proofWorkers` block and
-repeat that session transition. AWS names use `sdk-aws-`; existing Vast names
-and plans are preserved. Updating the SDK is required; no new service or
-modified dstack binary is needed. Qualify a real AWS proof and cleanup before
-relying on this path for production; this change does not deploy resources.
+Use `scrollsdk capacity-manager status --kube-context <context>` or the explicit
+`probe` action for runtime diagnostics. See [Capacity Manager activation](capacity-manager-activation.md).
+Manual bounded rental sessions and self-hosted Compose worker bundles are removed.
+An old recorded session must be retired with its original tooling and verified
+at the provider before switching; the new CLI does not adopt or delete it.
 
 ## Workflow and effects
 
@@ -416,9 +373,9 @@ the native AWS backend with `creds.type: default` in the referenced projects Sec
 and grant the role only its intended provider permissions. The switch alone does
 not create a role. The credential importer supports AWS via explicit existing
 VPCs as well as Vast.ai/GCP. Importing the AWS provider prepares IAM/IRSA
-automatically: it creates the controller role, or verifies the role named by an
-existing annotation; follow the [AWS preparation runbook](dstack-aws-preparation.md).
-This preparation also enables default credentials and binds the role annotation. For externally
+by validating `infrastructure.aws.roles.dstackController`; follow the
+[AWS preparation runbook](dstack-aws-preparation.md). This preparation also
+enables default credentials and writes the selected role annotation; a conflicting annotation is rejected. For externally
 managed controller Secrets, select `preparation.dstack.mode: external` and provide
 those Secrets separately. Default
 Vast.ai deployments need no change. Hand-edited generated values are replaced on

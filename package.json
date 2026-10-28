@@ -105,6 +105,15 @@
       },
       "test": {
         "description": "Test your chain configuration and setup"
+      },
+      "contracts": {
+        "description": "Verify deployed contract sources and inspect verification status"
+      },
+      "monitoring": {
+        "description": "Manage monitoring integrations and public status pages"
+      },
+      "rpc": {
+        "description": "Export deployment configuration for external RPC nodes"
       }
     }
   },

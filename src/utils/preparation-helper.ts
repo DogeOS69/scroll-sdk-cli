@@ -31,7 +31,7 @@ export async function checkHelperRecoveryTimelock(spec: DeploymentSpec, rpc: Rpc
   if (!Number.isSafeInteger(height) || height < 0) throw new Error('Invalid Dogecoin block height')
   // The setup transaction cannot be anchored before the next block.
   const minimum = height + 1 + MIN_RECOVERY_DELAY_BLOCKS
-  if (spec.bridge.timelock < minimum) throw new AwaitingInput({message: `Recovery timelock must be at least ${minimum} (next possible genesis anchor plus ${MIN_RECOVERY_DELAY_BLOCKS} blocks); allow additional margin for funding delays`})
+  if (spec.bridge.recovery.timelock < minimum) throw new AwaitingInput({message: `Recovery timelock must be at least ${minimum} (next possible genesis anchor plus ${MIN_RECOVERY_DELAY_BLOCKS} blocks); allow additional margin for funding delays`})
 }
 
 export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
@@ -41,8 +41,8 @@ export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
   const fee = productionFeeWallet(root, spec)
   if (sequencer.publicKey === fee.publicKey) throw new Error('Sequencer and fee wallet must have different keys')
   const config = readToml(root, 'setup_defaults.toml')
-  const topology = resolveSpecAttestationSigners(spec, true)!
-  const active = topology.external.filter(signer => topology.activeSignerIds.includes(signer.id))
+  const topology = resolveSpecAttestationSigners(spec)!
+  const active = topology.activeSignerIds.map(id => topology.external.find(signer => signer.id === id)!)
   Object.assign(config, {
     attestation_key_count: active.length, attestation_pubkeys: active.map(signer => signer.publicKey),
     attestation_threshold: topology.threshold,
@@ -50,11 +50,11 @@ export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
     bridge_funding_tx_count: 1,
     confirmations_required: spec.bridge.confirmationsRequired,
     enable_deposit_seed_txs: false, network: coreHelperNetwork(spec.dogecoin.network),
-    recovery_key_count: policy.recoveryPublicKeys.length, recovery_pubkeys: policy.recoveryPublicKeys,
-    recovery_threshold: spec.bridge.thresholds.recovery, seed_string: helperSeed(root),
+    recovery_key_count: spec.bridge.recovery.publicKeys.length, recovery_pubkeys: spec.bridge.recovery.publicKeys,
+    recovery_threshold: spec.bridge.recovery.threshold, seed_string: helperSeed(root),
     sequencer_pubkey: sequencer.publicKey,
-    sequencer_target_amount: GENESIS_SEQUENCER_AMOUNT_SATS, tee_pubkey: spec.bridge.teePubkey,
-    timelock: spec.bridge.timelock, watch_derived_addresses_in_wallet: false,
+    sequencer_target_amount: GENESIS_SEQUENCER_AMOUNT_SATS, tee_pubkey: spec.bridge.cubesigner!.publicKey,
+    timelock: spec.bridge.recovery.timelock, watch_derived_addresses_in_wallet: false,
   })
   // Omission deliberately asks Core to derive this wallet from the helper seed.
   if (process.env[FEE_WALLET_KEY_ENV]) config.fee_wallet_pubkey = fee.publicKey
@@ -140,7 +140,7 @@ export async function verifyManagedHelperFunding(root: string, spec: DeploymentS
   const funding = data.initial_bridge_funding_utxos
   if (!Array.isArray(funding) || funding.length !== 1) throw new Error('Expected one marked Bridge funding output from Core')
   const bridgeFact = await inspectFunding(funding[0], {address: bridge.p2sh_address, confirmations: spec.bridge.confirmationsRequired, marker: true, minimumSats: setup.bridge_funding_target_amount}, rpc)
-  if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
+  if (await rpc('getblockcount', []) >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
   writeJson(path.join(root, '.data/production-wallet-funding.json'), {feeWalletOutputs: feeFacts, sequencer})
   writeJson(path.join(root, '.data/production-bridge-funding.json'), bridgeFact)
   const config = readToml(root, 'doge-config.toml')

@@ -719,6 +719,9 @@ export default class SetupPushSecrets extends Command {
     }),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   private flags: any
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false

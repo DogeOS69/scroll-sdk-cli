@@ -1,4 +1,18 @@
+> Worker lifecycle update (2026-10-23): standalone Worker hydration and manual GPU sessions described below have been removed. Capacity Manager owns remote Workers; see [the current activation guide](capacity-manager-activation.md).
+
 # CubeSigner and proof configuration generation design
+
+> Historical architecture design. The standalone proof-config prepare/publish
+> interface described below has been removed. Current operator instructions are
+> in [the saved-spec proof workflow](proof-config-transactions.md). The internal
+> transaction library remains tested; it is not a second supported setup flow.
+
+
+> Workflow update (2026-10-23): this document retains historical commands and
+> design assumptions. `setup cubesigner-init` has been removed. Current staged
+> deployments select an existing `bridge.cubesigner.identity` before `setup plan`
+> and prepare runtime sessions with `setup signer-session`. See
+> [the current preparation guide](spec-preparation.md).
 
 Status: proposed design; no new command described here is implemented yet.
 
@@ -57,7 +71,7 @@ The current proof configuration path already has the right foundations:
 - the topology compiler produces one canonical compiled bundle;
 - `prep-charts` projects that bundle into Withdrawal Processor, Proof
   Coordinator, Worker, DA submitter, and eager-materializer configuration;
-- `proof-config-check` validates the deployment contract and compiled Worker
+- `deployment-preflight` validates the deployment contract and compiled Worker
   bundle without contacting Kubernetes;
 - proof-work and Worker credentials are separate;
 - `proof-worker` hydrates a compiler-generated Worker bundle without making the
@@ -143,8 +157,8 @@ version attachment, logs, and rollback remain with the audited dogeos-core
 tools and operator procedure. In particular, configuration generation must
 never remove or replace an existing key policy.
 
-The imported attachment must match the CubeSigner key selected by
-`cubesigner-init`. A receipt for another key, role, organization, policy
+The imported attachment must match the CubeSigner key resolved from
+`bridge.cubesigner.identity` and frozen by `setup plan`. A receipt for another key, role, organization, policy
 version, artifact, or resolver authority fails closed.
 
 ### P0: Live evidence can name a file that is not mounted
@@ -161,7 +175,7 @@ The configuration compiler must do one of the following atomically:
    chart values expose the same container path.
 
 The file digest is checked before generation and again by
-`proof-config-check`. A configured path without a generated or declared mount
+`deployment-preflight`. A configured path without a generated or declared mount
 is invalid.
 
 ### P0: No supported producer creates a complete preparation root
@@ -319,7 +333,7 @@ only fields owned by the proof compiler, for example:
 - signer proof-artifact base URL;
 - CubeSigner policy mode and imported evidence identities.
 
-`proof-config-check` recomputes these semantic digests from the final values.
+`deployment-preflight` recomputes these semantic digests from the final values.
 Unrelated chart overlays remain legal. A change to a managed field requires
 regeneration, not a manual waiver.
 
@@ -525,7 +539,7 @@ Observe mode may generate the handoff without them and list them as pending.
 
 The supported real-proof sequence currently spans release preparation, Worker
 image checking, material import, topology selection/compilation, `prep-charts`,
-signer-policy export, publication, and `proof-config-check`. These remain useful
+signer-policy export, publication, and `deployment-preflight`. These remain useful
 diagnostic primitives, but they should not be seven mandatory production
 operator steps. Compiler-owned outputs can also describe different generations
 when one primitive fails or is rerun concurrently.
@@ -817,12 +831,12 @@ only the partner handoff from the already selected deployment contract.
    deployment contract instead of the default receipt.
 10. Make signer-policy output transactional.
 11. Add semantic managed-block digests and enforce them in
-   `proof-config-check`.
+   `deployment-preflight`.
 
 ### Phase 1: receipt-backed policy configuration
 
 1. Define and validate CubeSigner policy release and attachment schemas.
-2. Bind attachment evidence to the key selected by `cubesigner-init`.
+2. Bind attachment evidence to the CubeSigner identity frozen by `setup plan`.
 3. Generate or validate the live-evidence mount.
 4. Define the external Attestation Signer policy-validation receipt.
 5. Add the full enforcement-readiness gate and actionable pending evidence in
@@ -913,7 +927,7 @@ This design is complete when:
 5. One failed or concurrent generation cannot leave chart values, signer
    handoff, Worker contract, and proof deployment contract at different
    generations.
-6. `proof-config-check` detects changes to proof-managed fields while allowing
+6. `deployment-preflight` detects changes to proof-managed fields while allowing
    legitimate environment overlays.
 7. A provider-neutral Worker contract can be deployed on operator-supplied
    infrastructure without the CLI renting, installing, or managing that

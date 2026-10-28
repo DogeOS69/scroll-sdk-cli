@@ -2,11 +2,13 @@
 
 import { parse as parseToml } from '@iarna/toml'
 import { createHash, randomBytes } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 
 import type { JsonOutputContext } from './json-output.js'
 
 import { AwsCliRunner } from './aws-cli.js'
-import {auditRolePolicies} from './iam-role-policy-audit.js'
+import {bindAwsServiceAccount} from './aws-workload-identity.js'
+import {ensureRetentionLifecycle} from './bucket-retention.js'
 
 export interface ProofAwsIdentity {
   /** Region containing the proof artifact bucket. */
@@ -18,30 +20,23 @@ export interface ProofAwsIdentity {
   namespace: string
 }
 
-export interface ProofAwsRolePlan {
-  description: string
-  roleName: string
-  serviceAccount: string
-}
-
 export interface ProofAwsProvisionInput {
   artifactRead?: ProofArtifactReadPlan
   bucket: string
-  coordinatorRole: ProofAwsRolePlan
   keyPrefix: string
   rotateTokens?: boolean
   secretName: string
-  withdrawalRole: ProofAwsRolePlan
 }
 
 export interface ProofAwsProvisionResult {
   artifactReadTransport: ProofArtifactReadTransportResult
   bucket: string
   bucketCreated: boolean
-  coordinatorRoleArn: string
+  /** Bound by the aws-roles preparation step, never by resource provisioning. */
+  coordinatorRoleArn?: string
   secretAction: 'created' | 'migrated' | 'reused' | 'rotated'
   secretName: string
-  withdrawalRoleArn: string
+  withdrawalRoleArn?: string
 }
 
 export interface ProofArtifactReadPlan {
@@ -108,9 +103,10 @@ export function denyInsecureTransportStatement(bucket: string): Record<string, a
 
 /**
  * Logical object namespaces read without AWS credentials by external proof
- * Workers or partner Attestation Signers. DA blobs live in the separate DA
- * archive bucket. The segmentation sidecar namespace is deliberately absent
- * because it is a PC-internal input.
+ * Workers or partner Attestation Signers, including published signer
+ * deployment kits. DA blobs live in the separate DA archive bucket. The
+ * segmentation sidecar namespace is deliberately absent because it is a
+ * PC-internal input.
  */
 export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
   'input-specs/*',
@@ -120,6 +116,7 @@ export const PUBLIC_ARTIFACT_OBJECT_PATTERNS = [
   'proofs/*',
   'proof-programs/*',
   'signer-policy-evidence/*',
+  'deployment-kits/*',
 ] as const
 
 export function publicArtifactObjectResources(bucket: string, keyPrefix: string): string[] {
@@ -182,6 +179,7 @@ export interface ProofAwsValuesProjection {
   secretRegion: string
   withdrawalRoleArn: string
   withdrawalServiceAccount: string
+  workloadIdentity?: 'irsa' | 'pod-identity'
 }
 
 function upsertEnv(values: Record<string, any>, name: string, value: string, label: string): void {
@@ -373,6 +371,137 @@ export function upsertProofArtifactPublicReadPolicy(
   }
 }
 
+/** This deployment's read grant alone; never adds or rewrites bucket-wide statements. */
+export function grantProofArtifactPublicRead(
+  existingPolicy: Record<string, any>,
+  bucket: string,
+  keyPrefix: string,
+): Record<string, any> {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  return {
+    ...existingPolicy,
+    Statement: [
+      ...preserveOtherReadStatements(existingPolicy, bucket, prefix, 'public'),
+      {
+        Action: 's3:GetObject',
+        Effect: 'Allow',
+        Principal: '*',
+        Resource: publicArtifactObjectResources(bucket, prefix),
+        Sid: proofArtifactPolicySid('public', bucket, prefix),
+      },
+    ],
+    Version: existingPolicy.Version || '2012-10-17',
+  }
+}
+
+const HTTPS_ONLY = [{Bool: {'aws:SecureTransport': 'true'}}, {Bool: {'aws:SecureTransport': true}}]
+const HTTP_ONLY = [{Bool: {'aws:SecureTransport': 'false'}}, {Bool: {'aws:SecureTransport': false}}]
+
+function statementMatchesObject(statement: Record<string, any>, objectArn: string): boolean {
+  const resources = Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]
+  return resources.some((resource: unknown) => typeof resource === 'string' && wildcardMatches(resource, objectArn))
+}
+
+/**
+ * External-consumer namespaces of one deployment prefix that the bucket policy
+ * does not make readable by anonymous HTTPS GetObject. Negated or conditional
+ * grants never count; any Deny that could apply to such a request does.
+ */
+export function missingPublicArtifactReads(policy: Record<string, any>, bucket: string, keyPrefix: string, patterns: readonly string[] = PUBLIC_ARTIFACT_OBJECT_PATTERNS): string[] {
+  const prefix = normalizeProofKeyPrefix(keyPrefix)
+  const statements: Record<string, any>[] = (Array.isArray(policy.Statement) ? policy.Statement : policy.Statement ? [policy.Statement] : [])
+    .filter((statement: unknown) => statement && typeof statement === 'object')
+  return patterns.filter(pattern => {
+    const object = `arn:aws:s3:::${bucket}/${prefix}/${pattern.slice(0, -1)}scrollsdk-read-check`
+    const granted = statements.some(statement => statement.Effect === 'Allow'
+      && principalIncludesWildcard(statement.Principal) && actionCanGetObject(statement.Action) && statementMatchesObject(statement, object)
+      && statement.NotPrincipal === undefined && statement.NotAction === undefined && statement.NotResource === undefined
+      && (statement.Condition === undefined || HTTPS_ONLY.some(condition => isDeepStrictEqual(statement.Condition, condition))))
+    const denied = statements.some(statement => statement.Effect === 'Deny'
+      && (statement.NotPrincipal !== undefined || principalIncludesWildcard(statement.Principal))
+      && (statement.NotAction !== undefined || actionCanGetObject(statement.Action))
+      && (statement.NotResource !== undefined || statementMatchesObject(statement, object))
+      && !HTTP_ONLY.some(condition => isDeepStrictEqual(statement.Condition, condition)))
+    return !granted || denied
+  })
+}
+
+/**
+ * Public Access Block settings that would make a public bucket policy fail or
+ * be ignored. Only the bucket-level block may be relaxed, and only when the
+ * caller owns that decision; account-level protection is never changed.
+ */
+export function assertPublicBucketPolicyAllowed(
+  aws: Pick<AwsCliRunner, 'json' | 'run' | 'text'>,
+  bucket: string,
+  region: string,
+  allowBucketPublicPolicy = false,
+): {after: Record<string, any>; before: Record<string, any>} | undefined {
+  let change: {after: Record<string, any>; before: Record<string, any>} | undefined
+  const account = aws.text(['sts', 'get-caller-identity'], {query: 'Account'})
+  // Account-level protection must be checked for the bucket owner, not an
+  // unrelated caller account with cross-account read access.
+  aws.run(['s3api', 'head-bucket', '--bucket', bucket, '--expected-bucket-owner', account], {region})
+  for (const [scope, args] of [
+    ['bucket', ['s3api', 'get-public-access-block', '--bucket', bucket]],
+    ['account', ['s3control', 'get-public-access-block', '--account-id', account]],
+  ] as const) {
+    try {
+      const config = aws.json([...args], {region}).PublicAccessBlockConfiguration
+      if (!config || typeof config !== 'object') throw new Error(`Missing ${scope} Public Access Block response`)
+      if (config.BlockPublicPolicy || config.RestrictPublicBuckets) {
+        if (scope === 'bucket' && allowBucketPublicPolicy) {
+          change = {after: {BlockPublicAcls: true, BlockPublicPolicy: false, IgnorePublicAcls: true, RestrictPublicBuckets: false}, before: config}
+          continue
+        }
+
+        throw new Error(`${scope} Public Access Block prevents public read; have the bucket owner allow public bucket policies (ACLs stay blocked)`)
+      }
+    } catch (error) {
+      if (!String(error).includes('NoSuchPublicAccessBlockConfiguration')) throw error
+    }
+  }
+
+  return change
+}
+
+/**
+ * Make one deployment's external-consumer namespaces anonymously readable on an
+ * existing, possibly shared, bucket. A policy that already grants them is left
+ * byte-identical; otherwise only this deployment's own statement is added.
+ * Other statements and every Public Access Block are never changed.
+ */
+export function ensureProofArtifactPublicRead(
+  aws: Pick<AwsCliRunner, 'json' | 'run' | 'text'>,
+  store: {bucket: string; keyPrefix: string; region: string},
+): {changed: boolean} {
+  const bucket = normalizeProofBucketName(store.bucket)
+  const prefix = normalizeProofKeyPrefix(store.keyPrefix)
+  assertPublicBucketPolicyAllowed(aws, bucket, store.region)
+  const before = readProofBucketPolicy(aws, store.region, bucket)
+  if (missingPublicArtifactReads(before, bucket, prefix).length === 0) return {changed: false}
+  const after = grantProofArtifactPublicRead(before, bucket, prefix)
+  const blocked = missingPublicArtifactReads(after, bucket, prefix)
+  if (blocked.length > 0) throw new Error(`Bucket policy denies anonymous HTTPS reads of s3://${bucket}/${prefix}/ (${blocked.join(', ')}); review its Deny statements with the bucket owner`)
+  // Bucket policy replacement has no compare-and-swap; never overwrite a concurrent edit.
+  if (!isDeepStrictEqual(readProofBucketPolicy(aws, store.region, bucket), before)) throw new Error('Bucket policy changed while granting proof artifact reads; rerun to preserve the new statements')
+  aws.run(['s3api', 'put-bucket-policy', '--bucket', bucket, '--policy', JSON.stringify(after)], {region: store.region})
+  if (missingPublicArtifactReads(readProofBucketPolicy(aws, store.region, bucket), bucket, prefix).length > 0) throw new Error('Bucket policy readback does not grant proof artifact reads')
+  return {changed: true}
+}
+
+export function readProofBucketPolicy(aws: Pick<AwsCliRunner, 'text'>, region: string, bucket: string): Record<string, any> {
+  try {
+    const parsed = JSON.parse(aws.text(['s3api', 'get-bucket-policy', '--bucket', bucket], {query: 'Policy', region}))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new TypeError('bucket policy is not a JSON object')
+    return parsed
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('NoSuchBucketPolicy')) return {Statement: [], Version: '2012-10-17'}
+    throw new Error(`cannot read existing bucket policy for ${bucket}: ${message}`)
+  }
+}
+
 function principalIncludesWildcard(principal: unknown): boolean {
   if (principal === '*') return true
   if (!principal || typeof principal !== 'object' || Array.isArray(principal)) return false
@@ -486,16 +615,6 @@ export function assertNoUnmanagedPublicProofBucketGrant(
   }
 }
 
-function bindIrsaServiceAccount(values: Record<string, any>, name: string, roleArn: string): void {
-  values.serviceAccount ||= {}
-  values.serviceAccount.create = true
-  // Pin the name: the IRSA trust policy binds a stable namespace/ServiceAccount
-  // OIDC subject, so the chart must not derive it from the release name.
-  values.serviceAccount.name = name
-  values.serviceAccount.annotations ||= {}
-  values.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = roleArn
-}
-
 function hasProofTokenMappings(values: Record<string, any>): boolean {
   const mappedKeys = new Set(
     Object.values(values.externalSecrets || {})
@@ -568,7 +687,7 @@ export function applyProofAwsValues(
     }
   }
 
-  bindIrsaServiceAccount(coordinatorValues, projection.coordinatorServiceAccount, projection.coordinatorRoleArn)
+  bindAwsServiceAccount(coordinatorValues, projection.coordinatorServiceAccount, projection.coordinatorRoleArn, projection.workloadIdentity)
 
   if (!hasProofTokenMappings(coordinatorValues)) {
     coordinatorValues.externalSecrets ||= {}
@@ -590,8 +709,8 @@ export function applyProofAwsValues(
   projectManagedAwsProofSecret(coordinatorValues, projection.secretName, projection.secretRegion)
 
   withdrawalValues.withdrawalProof ||= {}
-  withdrawalValues.withdrawalProof.s3AuthMode = 'irsa'
-  bindIrsaServiceAccount(withdrawalValues, projection.withdrawalServiceAccount, projection.withdrawalRoleArn)
+  withdrawalValues.withdrawalProof.s3AuthMode = projection.workloadIdentity === 'pod-identity' ? 'ambient' : 'irsa'
+  bindAwsServiceAccount(withdrawalValues, projection.withdrawalServiceAccount, projection.withdrawalRoleArn, projection.workloadIdentity)
   // Legacy WP templates mix the remote proof token into the service-key Secret.
   // Split that mapping so ordinary push-secrets cannot overwrite its independent
   // authority, and so token/service secrets may use different AWS regions.
@@ -697,70 +816,58 @@ export class ProofAwsProvisioner {
         bucket,
         keyPrefix,
       )
+    } else if (publicReadMode === 'existing-public-s3') {
+      // An existing bucket may be shared: add only this deployment's grant.
+      const {changed} = ensureProofArtifactPublicRead(this.aws, {bucket, keyPrefix, region: artifactRegion})
+      this.jsonCtx.info(`proof-aws: ${changed ? 'added' : 'verified'} anonymous GetObject for required external-consumer paths under ${bucket}/${keyPrefix}; other statements and Public Access Block unchanged`)
     }
 
     // Every deployment bucket is versioned, so an overwrite never loses the
     // previous object. Idempotent; independent of who owns the read policy.
     this.aws.run(['s3api', 'put-bucket-versioning', '--bucket', bucket, '--versioning-configuration', 'Status=Enabled'], {region: artifactRegion})
+    // Proof retention is a control-plane decision; S3 lifecycle never removes artifacts.
+    if (ensureRetentionLifecycle(this.aws, 'proof', {bucket, keyPrefix, region: artifactRegion}).changed) {
+      this.jsonCtx.info(`proof-aws: set the retention lifecycle rule for s3://${bucket}/${keyPrefix}; no artifact expires`)
+    }
 
     const vpcEndpoint = input.artifactRead.vpcEndpoint?.enabled
       ? this.ensureVpcEndpointArtifactRead(identity, bucket, keyPrefix, input.artifactRead.vpcEndpoint)
       : undefined
     // `existing-gateway` is explicitly operator-managed.  In that mode the
     // CLI must not rewrite either the bucket policy or Public Access Block:
-    // an existing archive bucket can already expose raw DA objects through a
-    // policy or gateway whose scope the proof adapter does not own.  Toggling
-    // Public Access Block here can silently break that established download
-    // path.  Direct S3 is the only mode in which scroll-sdk-cli owns and
-    // reconciles anonymous-read policy.
+    // the gateway, not anonymous S3 reads, is the download path.  Direct S3
+    // owns the bucket's anonymous-read posture; existing-public-s3 (above)
+    // owns only this deployment's grant.
     if (publicReadMode === 'direct-s3') {
       this.reconcileDirectS3ArtifactRead(
         artifactRegion,
         bucket,
         keyPrefix,
       )
-    } else {
+    } else if (publicReadMode === 'existing-gateway') {
       this.jsonCtx.info(
         `proof-aws: preserved operator-managed bucket policy and Public Access Block settings for ${bucket} (${publicReadMode})`,
       )
-      this.jsonCtx.addWarning('New artifact prefixes do not inherit old-instance grants. Public read of this proof prefix remains operator-managed in this mode. Grant the eth-da-submitter its segmentation-sidecar put with setup artifact-access --store da --writer-role-arn <eth-da-submitter-role>.')
+      this.jsonCtx.addWarning('New artifact prefixes do not inherit old-instance grants. Public read of this proof prefix remains operator-managed in this mode.')
     }
 
     const artifactReadTransport: ProofArtifactReadTransportResult = {
       publicEndpointUrl,
       publicReadMode,
-      publicStatus: publicReadMode === 'direct-s3'
-        ? 'configured-unverified'
-        : 'operator-managed-unverified',
+      publicStatus: publicReadMode === 'existing-gateway'
+        ? 'operator-managed-unverified'
+        : 'configured-unverified',
       ...(vpcEndpoint ? {vpcEndpoint} : {}),
     }
-    const trust = this.discoverIrsaTrust(identity)
-    const withdrawalRoleArn = this.ensureIrsaRole(identity, trust, input.withdrawalRole, bucket, keyPrefix, false)
-    const coordinatorRoleArn = this.ensureIrsaRole(identity, trust, input.coordinatorRole, bucket, keyPrefix, true)
     const secretAction = this.ensureTokenSecret(identity.awsRegion, input.secretName, input.rotateTokens === true)
 
     return {
       artifactReadTransport,
       bucket,
       bucketCreated,
-      coordinatorRoleArn,
       secretAction,
       secretName: input.secretName,
-      withdrawalRoleArn,
     }
-  }
-
-  private discoverIrsaTrust(identity: ProofAwsIdentity): { accountId: string; issuerHostPath: string } {
-    const accountId = this.aws.text(['sts', 'get-caller-identity'], { query: 'Account' })
-    const issuer = this.aws.text(
-      ['eks', 'describe-cluster', '--name', identity.eksCluster],
-      { query: 'cluster.identity.oidc.issuer', region: identity.awsRegion }
-    )
-    if (!issuer || issuer === 'None') {
-      throw new Error(`EKS cluster ${identity.eksCluster} does not expose an OIDC issuer; IRSA cannot be configured`)
-    }
-
-    return { accountId, issuerHostPath: issuer.replace(/^https:\/\//, '') }
   }
 
   private ensureBucket(region: string, bucket: string, createIfMissing: boolean): boolean {
@@ -815,6 +922,11 @@ export class ProofAwsProvisioner {
   ): void {
     const existingPolicy = this.readBucketPolicy(region, bucket)
     const updatedPolicy = upsertProofArtifactPublicReadPolicy(existingPolicy, bucket, keyPrefix, true)
+    const blocked = missingPublicArtifactReads(updatedPolicy, bucket, keyPrefix)
+    if (blocked.length > 0) {
+      throw new Error(`Bucket policy denies anonymous HTTPS reads under s3://${bucket}/${keyPrefix}/ (${blocked.join(', ')}); review its Deny statements`)
+    }
+
 
     this.aws.run([
       's3api',
@@ -843,75 +955,6 @@ export class ProofAwsProvisioner {
     this.jsonCtx.info(
       `proof-aws: configured anonymous GetObject for required external-consumer paths under ${bucket}/${keyPrefix}; list/write/delete remain private`,
     )
-  }
-
-  private ensureIrsaRole(
-    identity: ProofAwsIdentity,
-    trust: { accountId: string; issuerHostPath: string },
-    plan: ProofAwsRolePlan,
-    bucket: string,
-    keyPrefix: string,
-    deleteObjects: boolean,
-  ): string {
-    const roleArn = `arn:aws:iam::${trust.accountId}:role/${plan.roleName}`
-    const trustPolicyDocument = JSON.stringify({
-      Statement: [{
-        Action: 'sts:AssumeRoleWithWebIdentity',
-        Condition: {
-          StringEquals: {
-            [`${trust.issuerHostPath}:aud`]: 'sts.amazonaws.com',
-            [`${trust.issuerHostPath}:sub`]: `system:serviceaccount:${identity.namespace}:${plan.serviceAccount}`,
-          },
-        },
-        Effect: 'Allow',
-        Principal: {
-          Federated: `arn:aws:iam::${trust.accountId}:oidc-provider/${trust.issuerHostPath}`,
-        },
-      }],
-      Version: '2012-10-17',
-    })
-
-    try {
-      this.aws.json(['iam', 'get-role', '--role-name', plan.roleName])
-      auditRolePolicies(this.aws, plan.roleName, buildProofArtifactStorePolicy(bucket, keyPrefix, {deleteObjects, listObjects: deleteObjects}), ['proof-artifact-store'])
-      this.aws.json(['iam', 'update-assume-role-policy', '--role-name', plan.roleName, '--policy-document', trustPolicyDocument])
-      this.jsonCtx.info(`proof-aws: updated IAM role trust policy: ${plan.roleName}`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!message.includes('NoSuchEntity')) throw error
-
-      this.aws.json([
-        'iam',
-        'create-role',
-        '--role-name',
-        plan.roleName,
-        '--assume-role-policy-document',
-        trustPolicyDocument,
-        '--description',
-        plan.description,
-      ])
-      this.jsonCtx.info(`proof-aws: created IAM role: ${plan.roleName}`)
-    }
-
-    // GetObject + PutObject cover artifact transport and staging->accepted
-    // promotion (CopyObject authorizes as a read plus a write). DeleteObject is
-    // required to retire stale locator objects after a proof identity global
-    // regeneration. Only the coordinator lists for recovery scans. WP uses
-    // exact-key readers/publishers and must not receive ListBucket. All scans
-    // are restricted to the deployment's
-    // normalized object prefix.
-    this.aws.json([
-      'iam',
-      'put-role-policy',
-      '--role-name',
-      plan.roleName,
-      '--policy-name',
-      'proof-artifact-store',
-      '--policy-document',
-      JSON.stringify(buildProofArtifactStorePolicy(bucket, keyPrefix, {deleteObjects, listObjects: deleteObjects})),
-    ])
-    this.jsonCtx.info(`proof-aws: updated IAM proof artifact policy: ${plan.roleName} -> ${bucket}/${keyPrefix}/*`)
-    return roleArn
   }
 
   private ensureTokenSecret(region: string, secretName: string, rotate: boolean): 'created' | 'migrated' | 'reused' | 'rotated' {
@@ -1162,21 +1205,6 @@ export class ProofAwsProvisioner {
   }
 
   private readBucketPolicy(region: string, bucket: string): Record<string, any> {
-    try {
-      const raw = this.aws.text(
-        ['s3api', 'get-bucket-policy', '--bucket', bucket],
-        { query: 'Policy', region }
-      )
-      const parsed = JSON.parse(raw)
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new TypeError('bucket policy is not a JSON object')
-      }
-
-      return parsed
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (message.includes('NoSuchBucketPolicy')) return { Statement: [], Version: '2012-10-17' }
-      throw new Error(`cannot read existing bucket policy for ${bucket}: ${message}`)
-    }
+    return readProofBucketPolicy(this.aws, region, bucket)
   }
 }

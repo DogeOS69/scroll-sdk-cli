@@ -1,0 +1,38 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-REPLACE"
+  },
+  {
+    "ParameterKey": "ListenerArn",
+    "ParameterValue": "arn:aws:elasticloadbalancing:us-east-2:123456789012:listener/app/example-dstack/0000000000000000/0000000000000000"
+  },
+  {
+    "ParameterKey": "Hostname",
+    "ParameterValue": "dstack.example.invalid"
+  },
+  {
+    "ParameterKey": "ServiceKind",
+    "ParameterValue": "generic"
+  },
+  {
+    "ParameterKey": "PathPatterns",
+    "ParameterValue": "/*"
+  },
+  {
+    "ParameterKey": "ListenerPriority",
+    "ParameterValue": "100"
+  },
+  {
+    "ParameterKey": "BackendPort",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "HealthCheckPath",
+    "ParameterValue": "/"
+  }
+]

@@ -111,11 +111,11 @@ verify existing deterministic contract predictions with the new deploy image.
 
 Reproducible configuration sequence:
 
-1. Run `setup gen-keystore --service fee-oracle --signer-backend aws-kms` with the existing key and
-   a role trusting this deployment's EKS OIDC and fee-oracle ServiceAccount.
-   When the key and cluster regions differ, supply a pre-provisioned matching
-   `--role-arn`; `--aws-region` selects the key region in that path. Do not reuse
-   an old-cluster role just because the KMS alias contains that cluster's name.
+1. Run `setup gen-keystore --service fee-oracle --signer-backend aws-kms` with the existing key.
+   The CLI prepares its own fee-oracle role trusting this deployment's EKS OIDC
+   and fee-oracle ServiceAccount. When the key and cluster regions differ,
+   `--aws-region` selects the key region and `--eks-region` the cluster region.
+   An old-cluster role is never reused just because the KMS alias names that cluster.
 2. Confirm root config.toml/config.public.toml contain the actual
    L2_GAS_ORACLE_SENDER_ADDR. Remove a stale local fee private-key field from
    root config.toml if one remains. Do not invent a KMS private key.

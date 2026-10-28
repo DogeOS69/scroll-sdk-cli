@@ -4,8 +4,10 @@ import {isDeepStrictEqual} from 'node:util'
 import type {ArtifactStore} from './artifact-stores.js'
 import type {AwsCliRunner} from './aws-cli.js'
 
+import {ARCHIVE_WRITER_POLICY_NAMES} from './aws-role-catalog.js'
+import {buildRetentionLifecycle, putLifecycleConfiguration, readLifecycleConfiguration} from './bucket-retention.js'
 import {auditRolePolicies} from './iam-role-policy-audit.js'
-import {DENY_INSECURE_TRANSPORT_SID, denyInsecureTransportStatement, findUnmanagedAnonymousGrant, normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
+import {DENY_INSECURE_TRANSPORT_SID, assertPublicBucketPolicyAllowed, denyInsecureTransportStatement, findUnmanagedAnonymousGrant, normalizeProofBucketName, normalizeProofKeyPrefix} from './proof-aws-provisioner.js'
 
 type Document = Record<string, unknown>
 type Aws = Pick<AwsCliRunner, 'json' | 'run' | 'text'>
@@ -36,7 +38,7 @@ export function archivePolicySids(kind: ArchiveStoreKind, bucket: string, keyPre
 
 // The DA name is the one setup eth-da-submitter has always used, so both
 // commands manage, and narrow in place, the same inline policy.
-export const ARCHIVE_WRITER_POLICY_NAMES = {da: 'eth-da-submitter-s3-archive', snapshot: 'ScrollSdkSnapshotWrite'} as const
+export {ARCHIVE_WRITER_POLICY_NAMES} from './aws-role-catalog.js'
 
 export interface ArtifactAccessOptions {
   /** Explicitly allow bucket public policies; account-level protection is never changed. */
@@ -56,6 +58,8 @@ export interface ArtifactAccessPlan {
   bucketPolicy: {after: Document; before: Document; changed: boolean}
   keyPrefix: string
   kind: ArchiveStoreKind
+  /** The bucket lifecycle configuration with this prefix's retention rule. */
+  lifecycle: {after: Document; before: Document; changed: boolean}
   publicAccessBlock?: {after: Document; before: Document}
   region: string
   versioning: {before: string; changed: boolean}
@@ -189,35 +193,6 @@ export function buildArchiveWriterPolicy(kind: ArchiveStoreKind, store: {bucket:
   }
 }
 
-function assertPublicAccessBlock(aws: Aws, bucket: string, region: string, allowBucketPublicPolicy = false): ArtifactAccessPlan['publicAccessBlock'] {
-  let change: ArtifactAccessPlan['publicAccessBlock']
-  const account = aws.text(['sts', 'get-caller-identity'], {query: 'Account'})
-  // Account-level protection must be checked for the bucket owner, not an
-  // unrelated caller account with cross-account read access.
-  aws.run(['s3api', 'head-bucket', '--bucket', bucket, '--expected-bucket-owner', account], {region})
-  for (const [scope, args] of [
-    ['bucket', ['s3api', 'get-public-access-block', '--bucket', bucket]],
-    ['account', ['s3control', 'get-public-access-block', '--account-id', account]],
-  ] as const) {
-    try {
-      const config = aws.json([...args], {region}).PublicAccessBlockConfiguration
-      if (!config || typeof config !== 'object') throw new Error(`Missing ${scope} Public Access Block response`)
-      if (config.BlockPublicPolicy || config.RestrictPublicBuckets) {
-        if (scope === 'bucket' && allowBucketPublicPolicy) {
-          change = {after: {BlockPublicAcls: true, BlockPublicPolicy: false, IgnorePublicAcls: true, RestrictPublicBuckets: false}, before: config}
-          continue
-        }
-
-        throw new Error(`${scope} Public Access Block prevents public read; have the bucket owner allow public bucket policies (ACLs stay blocked)`)
-      }
-    } catch (error) {
-      if (!String(error).includes('NoSuchPublicAccessBlockConfiguration')) throw error
-    }
-  }
-
-  return change
-}
-
 /**
  * The requested posture only holds if no statement the CLI does not own also
  * grants anonymous access to the prefix (e.g. a legacy setup artifact-access
@@ -265,7 +240,7 @@ export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: Arti
   if (options.allowBucketPublicPolicy && options.publicRead !== true) throw new Error('Allowing bucket public policies requires explicit public read')
   if (options.publicRead) {
     if (store.endpointUrl && ![`https://s3.${store.region}.amazonaws.com`, 'https://s3.amazonaws.com'].includes(store.endpointUrl)) throw new Error('Public S3 policy requires the AWS S3 endpoint; configure a custom gateway with its owner')
-    plan.publicAccessBlock = assertPublicAccessBlock(aws, bucket, store.region, options.allowBucketPublicPolicy)
+    plan.publicAccessBlock = assertPublicBucketPolicyAllowed(aws, bucket, store.region, options.allowBucketPublicPolicy)
   }
 
   const before = bucketPolicy(aws, plan)
@@ -282,6 +257,9 @@ export function planArtifactAccess(aws: Aws, kind: ArchiveStoreKind, store: Arti
   plan.bucketPolicy = {after, before, changed: !isDeepStrictEqual(before, after)}
   const status = versioningStatus(aws, plan)
   plan.versioning = {before: status, changed: status !== 'Enabled'}
+  const lifecycleBefore = readLifecycleConfiguration(aws, plan)
+  const lifecycleAfter = buildRetentionLifecycle(lifecycleBefore, kind, bucket, keyPrefix)
+  plan.lifecycle = {after: lifecycleAfter, before: lifecycleBefore, changed: !isDeepStrictEqual(lifecycleBefore, lifecycleAfter)}
 
   if (options.writerRoleArn) {
     if (!/^arn:aws:iam::\d{12}:role\/[\w+,./=@-]+$/.test(options.writerRoleArn)) throw new Error('Expected an AWS IAM writer role ARN')
@@ -302,13 +280,14 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
   if (plan.kind === 'da' && plan.writerPolicy) auditRolePolicies(aws, plan.writerPolicy.roleName, plan.writerPolicy.after, [plan.writerPolicy.name])
   // Re-read every mutation target before the first write. AWS bucket policy
   // replacement has no compare-and-swap; serialize policy updates operationally.
-  if (!isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.before)) throw new Error('Bucket policy changed after planning; rerun artifact-access')
-  if (plan.writerPolicy && !isDeepStrictEqual(rolePolicy(aws, plan.writerPolicy.roleName, plan.writerPolicy.name), plan.writerPolicy.before)) throw new Error('Writer policy changed after planning; rerun artifact-access')
+  if (!isDeepStrictEqual(bucketPolicy(aws, plan), plan.bucketPolicy.before)) throw new Error('Bucket policy changed after planning; rerun artifacts access')
+  if (!isDeepStrictEqual(readLifecycleConfiguration(aws, plan), plan.lifecycle.before)) throw new Error('Bucket lifecycle changed after planning; rerun artifacts access')
+  if (plan.writerPolicy && !isDeepStrictEqual(rolePolicy(aws, plan.writerPolicy.roleName, plan.writerPolicy.name), plan.writerPolicy.before)) throw new Error('Writer policy changed after planning; rerun artifacts access')
   if (plan.publicAccessBlock) {
     const before = aws.json(['s3api', 'get-public-access-block', '--bucket', plan.bucket], {region: plan.region}).PublicAccessBlockConfiguration
-    if (!isDeepStrictEqual(before, plan.publicAccessBlock.before)) throw new Error('Bucket Public Access Block changed after planning; rerun artifact-access')
+    if (!isDeepStrictEqual(before, plan.publicAccessBlock.before)) throw new Error('Bucket Public Access Block changed after planning; rerun artifacts access')
     // Recheck account-level protection before any mutation.
-    assertPublicAccessBlock(aws, plan.bucket, plan.region, true)
+    assertPublicBucketPolicyAllowed(aws, plan.bucket, plan.region, true)
     aws.run(['s3api', 'put-public-access-block', '--bucket', plan.bucket, '--public-access-block-configuration', JSON.stringify(plan.publicAccessBlock.after)], {region: plan.region})
     const after = aws.json(['s3api', 'get-public-access-block', '--bucket', plan.bucket], {region: plan.region}).PublicAccessBlockConfiguration
     if (!isDeepStrictEqual(after, plan.publicAccessBlock.after)) throw new Error('Bucket Public Access Block readback mismatch')
@@ -318,6 +297,8 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
     aws.run(['s3api', 'put-bucket-versioning', '--bucket', plan.bucket, '--versioning-configuration', 'Status=Enabled'], {region: plan.region})
     if (versioningStatus(aws, plan) !== 'Enabled') throw new Error('Bucket versioning readback mismatch')
   }
+
+  if (plan.lifecycle.changed) putLifecycleConfiguration(aws, plan, plan.lifecycle.after)
 
   if (plan.bucketPolicy.changed) {
     aws.run(['s3api', 'put-bucket-policy', '--bucket', plan.bucket, '--policy', JSON.stringify(plan.bucketPolicy.after)], {region: plan.region})
@@ -340,7 +321,7 @@ export function applyArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
  */
 export function checkArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
   if (plan.publicAccessBlock) throw new Error('Bucket Public Access Block differs from the requested state; review the plan, then --apply')
-  if (plan.bucketPolicy.changed || plan.versioning.changed) throw new Error('Bucket policy or versioning differs from the requested state; review the plan, then --apply')
+  if (plan.bucketPolicy.changed || plan.versioning.changed || plan.lifecycle?.changed) throw new Error('Bucket policy, versioning or lifecycle differs from the requested state; review the plan, then --apply')
   if (plan.writerPolicy?.changed) throw new Error(`Writer inline policy ${plan.writerPolicy.name} on ${plan.writerPolicy.roleName} differs from the managed policy; review the plan, then --apply`)
   if (!plan.writerPolicy) return
   if (plan.kind === 'da') auditRolePolicies(aws, plan.writerPolicy.roleName, plan.writerPolicy.after, [plan.writerPolicy.name])
@@ -352,7 +333,7 @@ export function checkArtifactAccess(aws: Aws, plan: ArtifactAccessPlan): void {
       const rows = result.EvaluationResults
       for (const action of actions) {
         const matches = Array.isArray(rows) ? rows.filter(row => row.EvalActionName === action && row.EvalResourceName === resource) : []
-        if (matches.length !== 1 || matches[0].EvalDecision !== 'allowed' || matches[0].MissingContextValues?.length) throw new Error(`Writer IAM simulation did not allow ${action} on ${resource}; run artifact-access --writer-role-arn ... --apply and check external denies`)
+        if (matches.length !== 1 || matches[0].EvalDecision !== 'allowed' || matches[0].MissingContextValues?.length) throw new Error(`Writer IAM simulation did not allow ${action} on ${resource}; run artifacts access --writer-role-arn ... --apply and check external denies`)
       }
     }
   }

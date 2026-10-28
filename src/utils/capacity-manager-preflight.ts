@@ -19,7 +19,7 @@ export function capacityPreflight(plan: any, values: any, run: (args: string[], 
   // Probe the selected immutable manager binary before installing it or creating fleets.
   // --help exits without starting reconciliation or accessing provider credentials.
   const {fallbackFleet} = values.manager.dstack
-  if (Boolean(plan.fallbackProvider) !== Boolean(fallbackFleet)) throw new Error('Fallback plan and values differ; prepare capacity-manager again')
+  if (Boolean(plan.fallbackProvider) !== Boolean(fallbackFleet)) throw new Error('Fallback plan and values differ; rerun setup render')
   const initContainers = fallbackFleet ? [{args: ['--dstack-fallback-fleet', fallbackFleet, '--help'], command: ['/usr/local/bin/capacity-manager'],
     image: `${values.image.repository}@${values.image.digest}`, name: 'manager-fallback-capability'}] : []
   const env = Object.entries({DSTACK_TOKEN: values.dstackAuth, WORKER_MASTER: values.workerCredentialMaster, WP_TOKEN: values.wpAuth}).map(([name, ref]: [string, any]) => {

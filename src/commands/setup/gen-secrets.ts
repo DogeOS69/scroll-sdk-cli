@@ -63,6 +63,9 @@ export default class SetupGenSecrets extends Command {
     spec: Flags.string({dependsOn: ['dstack-only'], description: 'DeploymentSpec YAML for --dstack-only', exclusive: ['doge-config']}),
   }
 
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
+
   private dogeConfig: DogeConfig = {} as DogeConfig
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false

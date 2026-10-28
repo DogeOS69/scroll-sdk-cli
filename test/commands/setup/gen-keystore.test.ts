@@ -26,7 +26,10 @@ describe('unified keystore preparation', () => {
   const read = () => toml.parse(fs.readFileSync('.data/doge-config.toml', 'utf8')) as any
   const save = (extra: any = {}) => fs.writeFileSync('.data/doge-config.toml', toml.stringify({network: 'regtest', wallet: {path: '.data/wallet.json'}, ...extra}))
   const run = (args: string[] = []) => GenKeystore.run([...args, '-N', '--json'], CLI_ROOT)
+  let preparationStep: string | undefined
   beforeEach(() => {
+    preparationStep = process.env.SCROLLSDK_PREPARATION_STEP
+    process.env.SCROLLSDK_PREPARATION_STEP = 'identities'
     originalCwd = process.cwd()
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'unified-keystore-'))
     process.chdir(directory)
@@ -38,6 +41,8 @@ describe('unified keystore preparation', () => {
     archive = sinon.stub(KmsSignerProvisioner.prototype, 'provisionArchive').rejects(new Error('Unexpected archive operation'))
   })
   afterEach(() => {
+    if (preparationStep === undefined) delete process.env.SCROLLSDK_PREPARATION_STEP
+    else process.env.SCROLLSDK_PREPARATION_STEP = preparationStep
     sinon.restore()
     process.chdir(originalCwd)
     fs.rmSync(directory, {force: true, recursive: true})
@@ -238,12 +243,13 @@ describe('unified keystore preparation', () => {
     const signer = {backend: 'aws_kms', expectedAddress: address, kmsKeyId: 'alias/existing', kmsRegion: 'us-east-1', role: 'L1_COMMIT_SENDER', service: 'eth-da-submitter', serviceAccountRoleArn: 'arn:aws:iam::123456789012:role/submitter'}
     save({accounts: {L1_COMMIT_SENDER_ADDR: address}, signers: {l1CommitSender: signer}})
     archive.resolves()
+    process.env.SCROLLSDK_PREPARATION_STEP = 'archive'
     await Archive.run(['--archive-bucket', 'archive', '--archive-key-prefix', 'instance', '-N', '--json'], CLI_ROOT)
     expect(read().signers.l1CommitSender).to.deep.equal(signer)
     expect(read().accounts.L1_COMMIT_SENDER_ADDR).to.equal(address)
     expect(read().ethereumDa.blobArchive.s3.keyPrefix).to.equal('instance')
     expect(cloud.called).to.equal(false)
-    expect(archive.firstCall.args[1]).to.deep.equal({createBucket: true, roleArn: signer.serviceAccountRoleArn})
+    expect(archive.firstCall.args[1]).to.deep.equal({createBucket: true})
   })
 
   it('reuses DeploymentSpec service inputs without rewriting unselected service identities', async () => {
@@ -288,6 +294,7 @@ describe('unified keystore preparation', () => {
 
   it('disabling archive never invokes AWS or changes signer configuration', async () => {
     save({accounts: {L1_COMMIT_SENDER_ADDR: address, L1_COMMIT_SENDER_PRIVATE_KEY: key}, ethereumDa: {blobArchive: {s3: {bucket: 'archive', enabled: true}}}})
+    process.env.SCROLLSDK_PREPARATION_STEP = 'archive'
     await Archive.run(['--disable-archive', '-N', '--json'], CLI_ROOT)
     expect(read().ethereumDa.blobArchive.s3.enabled).to.equal(false)
     expect(read().accounts.L1_COMMIT_SENDER_PRIVATE_KEY).to.equal(key)
@@ -301,29 +308,29 @@ describe('unified keystore preparation', () => {
     expect(planKeystore({}, {})).to.deep.equal([])
   })
 
-  it('archive provisioning only calls S3 and its own IAM policy, never KMS or trust updates', async () => {
+  it('archive resource preparation only calls S3; role grants are prepared separately', async () => {
     archive.restore()
     const provisioner: any = new KmsSignerProvisioner(new JsonOutputContext('test', true))
     sinon.stub(provisioner, 'ensureS3Bucket').returns(false)
+    let lifecycle: {Rules: unknown[]} | undefined
     const aws = sinon.stub(provisioner, 'awsJson').callsFake((args: any) => {
       if (args[1] === 'list-role-policies') return {PolicyNames: []}
       if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
       if (args[1] === 'put-role-policy') return {}
+      if (args[1] === 'get-bucket-lifecycle-configuration') {
+        if (!lifecycle) throw new Error('NoSuchLifecycleConfiguration')
+        return lifecycle
+      }
+
+      if (args[1] === 'put-bucket-lifecycle-configuration') {
+        lifecycle = {Rules: JSON.parse(args[args.indexOf('--lifecycle-configuration') + 1]).Rules}
+        return {}
+      }
+
       throw new Error('Unexpected AWS mutation or API')
     })
-    await provisioner.provisionArchive({bucket: 'archive', created: false, enabled: true, keyPrefix: 'mainnet/batches', region: 'us-east-1'}, {createBucket: true, roleArn: 'arn:aws:iam::123456789012:role/path/submitter', sidecarStore: {bucket: 'proofs', keyPrefix: 'mainnet/proofs'}})
-    expect(aws.getCalls().map(call => call.args[0][1])).to.deep.equal(['list-role-policies', 'list-attached-role-policies', 'put-role-policy'])
-    const update = aws.lastCall.args[0]
-    expect(update.slice(0, 4)).to.deep.equal(['iam', 'put-role-policy', '--role-name', 'submitter'])
-    expect(update).to.include('eth-da-submitter-s3-archive')
-    // Scoped to the DA prefix and both proof sidecar namespaces, never the whole bucket.
-    const policy = JSON.parse(update.at(-1))
-    expect(policy.Statement.map((statement: {Resource: string | string[]}) => statement.Resource)).to.deep.equal([
-      'arn:aws:s3:::archive/mainnet/batches/*',
-      [
-        'arn:aws:s3:::proofs/mainnet/proofs/scroll-chunk-segmentation-sidecars/*',
-        'arn:aws:s3:::proofs/mainnet/proofs/scroll-chunk-segmentation-sidecars-by-height/*',
-      ],
-    ])
+    await provisioner.provisionArchive({bucket: 'archive', created: false, enabled: true, keyPrefix: 'mainnet/batches', region: 'us-east-1'}, {createBucket: true})
+    expect(aws.getCalls().map(call => call.args[0][1])).to.deep.equal(['get-bucket-lifecycle-configuration', 'put-bucket-lifecycle-configuration', 'get-bucket-lifecycle-configuration'])
+
   })
 })

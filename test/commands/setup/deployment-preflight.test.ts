@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+
 const cli = path.resolve('bin/run.js')
 describe('deployment preflight CLI', () => {
   let root: string
@@ -23,6 +24,26 @@ describe('deployment preflight CLI', () => {
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  for (const source of ['config', 'saved-intent', 'contract', 'explicit']) it(`requires proof validation for ${source} even when the contract is missing or invalid`, () => {
+    if (source === 'config') fs.appendFileSync(path.join(root, '.data/doge-config.toml'), '[proof_topology]\nmode="active"\n')
+    if (source === 'saved-intent') {
+      fs.mkdirSync(path.join(root, '.scrollsdk'))
+      fs.writeFileSync(path.join(root, '.scrollsdk/intent.json'), JSON.stringify({proofTopology: {mode: 'active'}}))
+    }
+
+    if (source === 'contract') fs.writeFileSync(path.join(root, '.data/proof-deployment.json'), '{}')
+    const result = run(['setup', 'deployment-preflight', '--json', ...(source === 'explicit' ? ['--proof'] : [])])
+    expect(result.status).equal(1)
+    expect(JSON.parse(result.stdout).error.context.runtimeChecks).include({proof: 'failed', proofLive: 'not-checked'})
+  })
+
+  it('requires explicit context and activation scope for post-rollout proof checks', () => {
+    expect(run(['setup', 'deployment-preflight', '--proof-live']).status).not.equal(0)
+    const result = run(['setup', 'deployment-preflight', '--proof-live', '--kube-context', 'selected', '--proof-scope', 'preparation', '--json'])
+    expect(result.status).equal(1)
+    expect(result.stdout).include('--proof-live requires activation scope')
+  })
+
   it('checks the current configuration without changing files or requiring a release selector', () => {
     const file = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
     const before = fs.readFileSync(file, 'utf8')
@@ -30,6 +51,22 @@ describe('deployment preflight CLI', () => {
     expect(result.status, result.stderr).to.equal(0)
     expect(JSON.parse(result.stdout).data.dstackRuntime).to.equal('not-checked')
     expect(fs.readFileSync(file, 'utf8')).to.equal(before)
+  })
+
+  it('does not require an installed dstack Deployment for pre-install cluster checks', () => {
+    fs.appendFileSync(path.join(root, '.data/doge-config.toml'), '[dstackController]\nenabled=true\n')
+    fs.writeFileSync(path.join(root, 'values/dstack-controller-production.yaml'), 'replicaCount: 1\n')
+    fs.writeFileSync(path.join(root, 'bin/kubectl'), `#!${process.execPath}\nrequire('node:fs').writeFileSync('unexpected-kube', 'called');process.exit(1);`, {mode: 0o700})
+    const result = run(['setup', 'deployment-preflight', '--kube-context', 'selected', '--json'])
+    expect(result.status, result.stdout + result.stderr).equal(0)
+    expect(JSON.parse(result.stdout).data.dstackRuntime).equal('not-checked')
+    expect(fs.existsSync(path.join(root, 'unexpected-kube'))).false
+  })
+
+  for (const flag of ['--alb', '--nlb', '--artifact-access', '--alb-require-services', '--nlb-require-targets']) it(`rejects retired AWS audit flag ${flag}`, () => {
+    const result = run(['setup', 'deployment-preflight', flag])
+    expect(result.status).not.equal(0)
+    expect(result.stderr).include('Nonexistent flag')
   })
 
   it('reports missing dstack and passes the exact selected context to a read-only runtime check', () => {

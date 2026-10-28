@@ -1,7 +1,9 @@
-/** Persistent, queue-driven capacity. Mutually exclusive with bounded proofWorkers sessions. */
+/** Persistent, queue-driven remote GPU capacity managed by Core. */
 export interface CapacityManagerConfig {
   /** Explicit transport selection. Omit only for legacy prepared HTTPS values. */
   connection?: {
+    /** Independently managed internal ALB. No CloudFormation ownership is assumed. */
+    existingAlb?: {listenerArn: string; loadBalancerArn: string; targetGroupArn: string}
     internalAlb?: {
       awsProfile?: string
       certificateArn: string
@@ -12,7 +14,7 @@ export interface CapacityManagerConfig {
       subnets: string[]
       vpcId: string
     }
-    mode: 'existing-https' | 'internal-alb'
+    mode: 'existing-alb' | 'existing-https' | 'internal-alb'
     serverUrl?: string
   }
   /** Core #1612: a separately priced Vast fleet used after primary AWS capacity failures. */

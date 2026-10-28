@@ -4,7 +4,6 @@ import * as path from 'node:path'
 
 import type {DogeConfig} from '../types/doge-config.js'
 import type {ProofTopologySpec} from '../types/proof-topology.js'
-import type {CompiledProverWorkerBundleResult} from './compiled-prover-worker-bundle.js'
 import type {ProofAwsConfig} from './proof-aws-config.js'
 import type {ProofDeploymentContract} from './proof-deployment-contract.js'
 import type {ResolvedProofIntent} from './proof-intent.js'
@@ -50,7 +49,6 @@ export interface ReconcileProofKubernetesResult {
   files: string[]
   mode: ProofTopologySpec['mode']
   proofAwsConfigPath?: string
-  workerBundle?: CompiledProverWorkerBundleResult
 }
 
 function readValues(filePath: string): Record<string, unknown> {
@@ -139,15 +137,6 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
   const workerContract = compiled.bundle.manifest.prover_worker
     ? path.join(compiled.bundle.bundleDir, compiled.bundle.manifest.prover_worker)
     : undefined
-  const workerDeploymentBackend = options.intent.proofTopology.deployment.workerDeploymentBackend
-    || 'docker_compose'
-  const kubernetesWorker = compiled.worker?.desired_state === 'local_deployment'
-    && workerDeploymentBackend === 'kubernetes'
-  const workerKind = compiled.worker?.desired_state === 'external'
-    ? 'compiled-external' as const
-    : workerDeploymentBackend === 'docker_compose'
-      ? 'compiled-compose' as const
-      : 'compiled-local' as const
   const contract = writeProofDeploymentContract({
     ...(fs.existsSync(path.join(valuesDir, 'cubesigner-signer-production.yaml')) ? {cubesignerSigner: {enabled: true, valuesFile: path.join(valuesDir, 'cubesigner-signer-production.yaml')}} : {}),
     ...(compiled.eagerMaterializerValuesPath ? {eagerMaterializer: {
@@ -170,7 +159,7 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
       valuesFile: path.join(valuesDir, 'proof-coordinator-production.yaml'),
     },
     proverWorker: {
-      enabled: kubernetesWorker,
+      enabled: false,
       valuesFile: path.join(valuesDir, 'prover-worker-production.yaml'),
     },
     publicationReceipt: options.publicationReceipt,
@@ -186,10 +175,8 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
       valuesFile: path.join(valuesDir, 'withdrawal-processor-production.yaml'),
     },
     worker: compiled.worker && workerContract ? {
-      bundleDir: compiled.workerBundle?.bundleDir,
-      bundleId: compiled.workerBundle?.bundleId,
       contractFile: workerContract,
-      kind: workerKind,
+      kind: 'compiled-external',
     } : undefined,
   })
   return {
@@ -198,6 +185,5 @@ export function reconcileProofKubernetes(options: ReconcileProofKubernetesOption
     files: compiled.files,
     mode: options.intent.proofTopology.mode,
     proofAwsConfigPath,
-    workerBundle: compiled.workerBundle,
   }
 }

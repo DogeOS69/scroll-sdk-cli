@@ -13,6 +13,7 @@ import {dogeConfigToToml, loadDogeConfigWithSelection} from '../../utils/doge-co
 import {CliExitError, JsonOutputContext} from '../../utils/json-output.js'
 import {normalizeSignerBackend, setupManagedSigner} from '../../utils/managed-signer-setup.js'
 import {resolveEnvValue} from '../../utils/non-interactive.js'
+import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 import {resolveSpecIdentities, specIdentityFlags} from '../../utils/spec-identities.js'
 import SetupL2BootnodeReth from './l2-bootnode-reth.js'
 import SetupL2SequencerReth, {normalizeSignerMode} from './l2-sequencer-reth.js'
@@ -89,7 +90,7 @@ export function planKeystore(config: any, flags: any): IdentityTask[] {
     }
   }
 
-  const identityFlags = ['kms-key-id', 'role-arn', 'service-account', 'signer-private-key', 'nodekey', 'signer-backend', 'signer-mode', 'secret-mode', 'nodekey-secret-mode']
+  const identityFlags = ['kms-key-id', 'signer-private-key', 'nodekey', 'signer-backend', 'signer-mode', 'secret-mode', 'nodekey-secret-mode']
   if (identityFlags.some(name => flags[name] !== undefined) && (tasks.length !== 1 || (tasks[0].indices?.length ?? 1) !== 1)) {
     throw new Error('Identity-specific flags require exactly one service instance; select it with --service and, for a sequencer, --index')
   }
@@ -99,7 +100,7 @@ export function planKeystore(config: any, flags: any): IdentityTask[] {
   if (flags['signer-backend'] && flags['signer-mode']) throw new Error('Use either --signer-backend or --signer-mode')
   for (const name of ['nodekey', 'secret-mode']) if (flags[name] && !['bootnode-reth', 'sequencer-reth'].includes(tasks[0]?.service)) throw new Error(`--${name} is only supported for Reth nodes`)
   for (const name of ['signer-mode', 'nodekey-secret-mode']) if (flags[name] && tasks[0]?.service !== 'sequencer-reth') throw new Error(`--${name} is only supported for sequencer-reth`)
-  if (tasks[0]?.service === 'bootnode-reth' && ['signer-backend', 'kms-key-id', 'signer-private-key', 'role-arn', 'service-account'].some(name => flags[name])) throw new Error('Bootnodes only need a local P2P nodekey, not a transaction signer or KMS key')
+  if (tasks[0]?.service === 'bootnode-reth' && ['signer-backend', 'kms-key-id', 'signer-private-key'].some(name => flags[name])) throw new Error('Bootnodes only need a local P2P nodekey, not a transaction signer or KMS key')
   return tasks
 }
 
@@ -230,7 +231,7 @@ async function interactivePlan(config: any, flags: any, accountsOnly: boolean): 
   // Reject contradictory command-line flags before asking questions.
   planKeystore(config, flags)
   if (accountsOnly) return []
-  if (!flags.service && ['signer-backend', 'signer-mode', 'signer-private-key', 'nodekey', 'secret-mode', 'nodekey-secret-mode', 'kms-key-id', 'role-arn', 'service-account'].some(name => flags[name] !== undefined)) throw new Error('Select --service when supplying identity-specific flags in interactive mode')
+  if (!flags.service && ['signer-backend', 'signer-mode', 'signer-private-key', 'nodekey', 'secret-mode', 'nodekey-secret-mode', 'kms-key-id'].some(name => flags[name] !== undefined)) throw new Error('Select --service when supplying identity-specific flags in interactive mode')
   const services = flags.service ? [flags.service as KeystoreService] : await keystorePrompts.checkbox({
     choices: KEYSTORE_SERVICES.map(service => ({checked: true, name: service, value: service})),
     message: 'Services whose signing identities / P2P keys should be prepared (space to select):',
@@ -284,7 +285,10 @@ export default class SetupGenKeystore extends Command {
     'signer-backend': Flags.string({description: 'Backend for the selected signing identity; otherwise reuse its configured backend.', options: ['local', 'aws-kms']}),
   }
 
+  static override hidden = true
+
   public async run(): Promise<void> {
+    requirePreparationStep(['identities', 'charts', 'charts-published', 'render-final'])
     const {flags} = await this.parse(SetupGenKeystore) as any
     const output = new JsonOutputContext('setup gen-keystore', flags.json)
     try {
@@ -312,7 +316,7 @@ export default class SetupGenKeystore extends Command {
           .map(task => {
             const intentFlags = identityIntent ? specIdentityFlags(identityIntent, task, config) : {}
             if (identityIntent) {
-              const identityFlagNames = ['signer-backend', 'signer-mode', 'signer-private-key', 'nodekey', 'secret-mode', 'nodekey-secret-mode', 'kms-key-id', 'role-arn', 'service-account', 'aws-region', 'eks-cluster', 'network-alias', 'namespace']
+              const identityFlagNames = ['signer-backend', 'signer-mode', 'signer-private-key', 'nodekey', 'secret-mode', 'nodekey-secret-mode', 'kms-key-id', 'aws-region', 'eks-cluster', 'network-alias', 'namespace']
               for (const key of identityFlagNames) {
                 if (this.argv.some(arg => arg === `--${key}` || arg.startsWith(`--${key}=`)) && flags[key] !== intentFlags[key]) throw new Error(`--${key} conflicts with saved/spec identity intent; declare the setting in identities`)
               }
@@ -323,7 +327,7 @@ export default class SetupGenKeystore extends Command {
         : await interactivePlan(config, flags, accountsOnly)
       const tasks = plans.map(plan => plan.task)
       if (flags.plan) {
-        const report = {accounts: flags.accounts, identities: plans.map(({flags: selected, task}) => ({...task, backend: selected['signer-backend'], kmsKeyId: selected['kms-key-id'], roleArn: selected['role-arn']})), identityIntent, resourceChanges: false}
+        const report = {accounts: flags.accounts, identities: plans.map(({flags: selected, task}) => ({...task, backend: selected['signer-backend'], kmsKeyId: selected['kms-key-id']})), identityIntent, resourceChanges: false}
         if (!flags.json) output.info(JSON.stringify(report, null, 2))
         output.success(report)
         return
@@ -363,8 +367,7 @@ export default class SetupGenKeystore extends Command {
             prepared['nodekey-secret-mode'] = flags['secret-mode']; args.push('--nodekey-secret-mode')
           }
 
-          prepared['kms-key-id'] ||= current?.signer?.kmsKeyId
-          prepared['role-arn'] ||= current?.signer?.serviceAccountRoleArn
+          prepared['kms-key-id'] ||= current?.signer?.kmsKeyArn ?? current?.signer?.kmsKeyId
           prepared.nodekey ||= current?.nodekey?.privateKey ? resolveEnvValue(current.nodekey.privateKey) : undefined
           prepared['signer-private-key'] ||= current?.signer?.privateKey ? resolveEnvValue(current.signer.privateKey) : undefined
           reports.push({service: task.service, ...await new SetupL2SequencerReth(args, this.config).prepareIdentity(prepared, output)})
@@ -377,8 +380,7 @@ export default class SetupGenKeystore extends Command {
           inheritServiceIdentity(latest, main, task.service)
           const signerKey = task.service === 'fee-oracle' ? 'l2GasOracleSender' : 'l1CommitSender'
           const prefix = task.service === 'fee-oracle' ? 'L2_GAS_ORACLE_SENDER' : 'L1_COMMIT_SENDER'
-          prepared['kms-key-id'] ||= latest.signers?.[signerKey]?.kmsKeyId
-          prepared['role-arn'] ||= latest.signers?.[signerKey]?.serviceAccountRoleArn
+          prepared['kms-key-id'] ||= latest.signers?.[signerKey]?.kmsKeyArn ?? latest.signers?.[signerKey]?.kmsKeyId
           if (flags['signer-private-key']) {
             latest.accounts ||= {}
             ;(latest.accounts as any)[`${prefix}_PRIVATE_KEY`] = flags['signer-private-key']
@@ -410,7 +412,7 @@ export default class SetupGenKeystore extends Command {
         output.info(`${report.service}${report.index === undefined ? '' : ` [${report.index}]`}: prepared${report.address || signer?.address ? `; address ${report.address || signer?.address}` : ''}${signer?.backend ? `; backend ${signer.backend}` : ''}`)
       }
 
-      output.logSuccess(`Prepared ${reports.length} service identity task(s)${accounts ? ' and deployment accounts' : ''}. Use gen-secrets and prep-charts to generate deployment files.`)
+      output.logSuccess(`Prepared ${reports.length} service identity task(s)${accounts ? ' and deployment accounts' : ''}. Continue with the next stage reported by preparation.`)
       output.success({accounts: accounts ? Object.fromEntries(Object.entries(accounts.accounts).filter(([key]) => key.endsWith('_ADDR'))) : undefined, dogeConfigPath: configPath, identities: reports})
     } catch (error) {
       if (error instanceof CliExitError) throw error
