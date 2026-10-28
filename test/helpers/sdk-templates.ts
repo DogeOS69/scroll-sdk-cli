@@ -22,9 +22,9 @@ export function createSdkFixture(directory: string): string {
     'l1-devnet-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: false, hosts: [{host: ''}], ingressClassName: 'alb'}}},
     'metrics-exporter-production.yaml': {},
     'proof-coordinator-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: false, ingressClassName: 'alb'}}},
-    'withdrawal-processor-production.yaml': {networkPolicy: {enabled: true, allowFrom: {tso: [{podSelector: {matchLabels: {app: 'tso'}}}], proofCoordinator: [{podSelector: {matchLabels: {app: 'pc'}}}]}}},
     'scroll-monitor-production.yaml': {grafana: {enabled: false}},
-    'tso-service-production.yaml': {networkPolicy: {enabled: true, allowFrom: {withdrawalProcessor: [{podSelector: {matchLabels: {app: 'wp'}}}], signers: [{podSelector: {matchLabels: {app: 'signer'}}}], edge: [{ipBlock: {cidr: '10.0.10.0/24'}}]}}, ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: true, ingressClassName: 'alb'}}},
+    'tso-service-production.yaml': {ingress: {main: {annotations: {'alb.ingress.kubernetes.io/certificate-arn': '<TODO>'}, enabled: true, ingressClassName: 'alb'}}, networkPolicy: {allowFrom: {edge: [{ipBlock: {cidr: '10.0.10.0/24'}}], signers: [{podSelector: {matchLabels: {app: 'signer'}}}], withdrawalProcessor: [{podSelector: {matchLabels: {app: 'wp'}}}]}, enabled: true}},
+    'withdrawal-processor-production.yaml': {networkPolicy: {allowFrom: {proofCoordinator: [{podSelector: {matchLabels: {app: 'pc'}}}], tso: [{podSelector: {matchLabels: {app: 'tso'}}}]}, enabled: true}},
   }
   for (const role of ['sequencer', 'bootnode', 'rpc', 'rpc-public']) {
     templates[`l2-reth-${role}-production.yaml`] = {

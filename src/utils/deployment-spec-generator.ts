@@ -1,4 +1,3 @@
-import {validateNetworkPolicyIntent} from './network-policy-preflight.js'
 import {awsWorkloadIdentity} from './aws-workload-identity.js'
 import {validateBootnodePublicP2p} from './bootnode-public-p2p.js'
 import {validateBridgeHistory} from './bridge-history.js'
@@ -6,6 +5,7 @@ import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {validateExistingAlb} from './existing-alb.js'
 import {existingNlbEntries} from './existing-nlb.js'
 import {validateMonitoring} from './monitoring-slack.js'
+import {validateNetworkPolicyIntent} from './network-policy-preflight.js'
 import {specDstackController} from './spec-kubernetes-target.js'
 /**
  * DeploymentSpec Generator
