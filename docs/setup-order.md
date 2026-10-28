@@ -251,6 +251,11 @@ After public bootnode Services have usable LoadBalancer endpoints, run
 cluster's kubeconfig. Then start and verify the external RPC node. Public P2P
 values preparation does not itself deploy the bootnodes or establish peering.
 
+For the newer self-contained `testnet/` / `mainnet/` RPC package layout, use
+`scrollsdk rpc export-network` instead; the old command remains supported for
+the old layout. See [network package export](rpc-export-network.md) for inputs,
+generated files, operator settings and release-validation boundaries.
+
 ## Existing instances
 
 For configuration cleanup on an existing instance, follow
