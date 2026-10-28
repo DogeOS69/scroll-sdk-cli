@@ -69,8 +69,8 @@ decision about which keys and resources to reuse.
 | `application-roles.yaml` | Six application roles and Pod Identity associations (optional IRSA); fixed two-sequencer example | Five signing key ARNs, two bucket names/prefixes, EKS cluster |
 | `pod-identity-agent.yaml` | One cluster-level EKS Pod Identity Agent add-on | Existing cluster and explicitly selected compatible add-on version |
 | `pod-identity-probe.yaml` | One disposable test role and Pod Identity association; KMS signing and prefix-scoped S3 listing only | Existing nonproduction signing key, bucket/prefix, cluster, test namespace/ServiceAccount names |
-| `secrets-reader-policy.yaml` | One deployment-scoped read policy attached to an existing ESO role; preserves trust/other grants | Existing role name, Secret prefix, optional exact additional Secret ARNs and encryption key |
-| `secrets-reader-role.yaml` | One deployment-scoped External Secrets IRSA reader role | Secret prefix/region, OIDC provider, optional exact additional Secret ARNs and encryption key |
+| `secrets-reader-policy.yaml` | One deployment-scoped read policy attached to an existing ESO role; preserves trust/other grants | Existing role name, Secret prefix, optional Secret encryption key |
+| `secrets-reader-role.yaml` | One deployment-scoped External Secrets IRSA reader role | Secret prefix/region, OIDC provider, optional Secret encryption key |
 | `dstack-role.yaml` | One dstack controller role; **zero GPU instances** | EKS cluster, VPC, two or three eligible private worker subnets, optional worker instance profile/role |
 | `https-alb.yaml` | One ALB, one HTTPS listener, one SG, optional client ingress rule; optionally one exact-host private DNS zone and alias | VPC, two or three subnets, ACM certificate |
 | `http-target.yaml` | One HTTP/IP target group and one host/path forwarding rule; **zero ALBs** | ALB listener, VPC, hostname, application port/health settings |
@@ -222,15 +222,14 @@ digits and hyphens), not the slash-separated alias path.
    downloadable. DA's role can also read/write the two proof segmentation sidecar
    namespaces, matching the CLI contract. Coordinator may list/delete its proof
    prefix; WP cannot list/delete it.
-4. Set a stable Secret prefix. Put new proof token Secrets under that prefix too
-   (the CLI's `preparation.proofAws.secretName` can select the name). Existing Secrets
-   outside it can use `AdditionalSecretArns`; see [ESO reader access](#eso-reader-access-and-migration).
+4. Set a stable Secret prefix. Put all deployment Secrets, including the proof
+   token Secret, under that prefix (the CLI's `preparation.proofAws.secretName`
+   can select its name); see [ESO reader access](#eso-reader-access).
    Align SecretStores and remote references. The reader cannot create/upload
    secrets or list all account Secrets. A different operator identity uploads
    contents later. Preserve an existing role with `secrets-reader-policy.yaml`, or
    explicitly bind a new deployment-scoped role from `secrets-reader-role.yaml`.
-   Adding a narrow grant does not remove an existing broad grant. The managed
-   policy has a lifecycle description and stack
+   The managed policy has a lifecycle description and stack
    ownership; apply Environment/ResourceClassification tags through `aws iam tag-policy`
    if the CloudFormation resource does not propagate them. EC2 rules created by
    standalone ingress/egress resources also need `aws ec2 create-tags` when lifecycle
@@ -420,86 +419,30 @@ file (RAM-backed when `/dev/shm` is available) carries the input and is removed
 on exit; token values never enter arguments or output. Metadata discovery does
 not read or validate secret contents.
 
-## ESO reader access and migration
+## ESO reader access
 
-Keep the AWS reader separate from operator upload, rotation and infrastructure
-administration. Both reader templates grant only `GetSecretValue` and
-`DescribeSecret` for the deployment prefix and any explicitly selected Secret
-ARNs. They grant no Secret writes, deletion, tagging or account-wide discovery.
-ESO still needs Kubernetes permissions to create/update the destination Secrets.
-Select extra read APIs only if the installed ESO version and enabled features
-require them; these templates target explicit `remoteRef.key` reads, not
-`dataFrom.find`, batch discovery or `PushSecret`.
+Both reader templates grant only `secretsmanager:GetSecretValue` and
+`secretsmanager:DescribeSecret` under `SecretPrefix` in the selected account and
+`SecretRegion`. Set the CLI Secret upload prefix and explicit Secret names to
+match this deployment path, including `preparation.proofAws.secretName`.
+For example, `SecretPrefix=dogeos/testnet/deployment-a` covers
+`dogeos/testnet/deployment-a/database` and
+`dogeos/testnet/deployment-a/proof-coordinator`.
 
-Use `secrets-reader-policy.yaml` when the existing ESO IAM role and its IRSA trust
-should remain. Use `secrets-reader-role.yaml` for a new deployment-scoped IRSA
-identity; its trust is restricted to the selected issuer, namespace, ServiceAccount
-and audience. Application Pod Identity does not require migrating this ESO identity.
-Neither template creates an ESO installation, ServiceAccount, SecretStore or
-Secret value. If the role and Kubernetes bindings are unchanged, this IAM change
-needs no application chart or production-values change.
+Use `secrets-reader-policy.yaml` to attach this grant to an existing ESO role,
+or `secrets-reader-role.yaml` to create a deployment-scoped IRSA role with trust
+restricted to the selected issuer, namespace, ServiceAccount and audience.
+The policy template preserves the existing role's trust and other grants.
+Install ESO and bind its reader ServiceAccount separately. The templates do not
+create Secret values or Kubernetes resources. Upload and rotation use a separate
+operator identity; the reader has no AWS Secret write, delete or tagging grant.
 
-`SecretPrefix` is required and grants reads below that deployment path. For a
-legacy proof Secret or another explicitly approved exception, set
-`AdditionalSecretArns` to comma-separated **full ARNs**, including the six-character
-Secrets Manager suffix, with no spaces or wildcards. The default is empty. Do not
-broaden the prefix to a shared environment root merely to include one exception.
-See `parameters/secrets-reader-policy.legacy-secret.example.json`. Renaming or
-recreating an exact-ARN Secret requires reviewing this input again. Multiple
-Secrets in one JSON object share the same AWS authorization boundary; selecting
-a JSON property in an ExternalSecret does not isolate IAM access to that property.
-
-`SecretEncryptionKeyArn` is optional. For a customer-managed symmetric encryption
-key, both templates allow only `kms:Decrypt` on that key, through Secrets Manager
-in `SecretRegion`, with the encryption context restricted to the same prefix or
-exact additional ARNs. All selected Secrets using that grant must use that key
-and region; other encryption keys require separately reviewed grants. The key
-policy must also allow access. Do not supply a blockchain signing key here.
-
-### Migrate an existing broad reader policy
-
-This is an attachment migration, not a Secret recreation or password rotation.
-Review the existing role, every SecretStore/ExternalSecret reference, encryption
-keys, inline policies, managed policies and their infrastructure owners first.
-Scope a reader role to one deployment or another explicitly shared trust boundary.
-
-1. Inventory consumers of the old managed policy with
-   `aws iam list-entities-for-policy --policy-arn "$OLD_POLICY_ARN"`. A policy may
-   be shared by several environments. Save its document and the selected role's
-   attachments outside the public checkout for recovery.
-2. Prepare a separate `secrets-reader-policy.yaml` stack for the selected role,
-   including any legacy exact-ARN exceptions. Follow the offline validation and
-   reviewed change-set workflow above. Keep the existing role and trust.
-3. Apply the scoped grant. It is **additive**: IAM permissions remain broad while
-   the old policy is attached. A successful sync at this point does not prove
-   least privilege.
-4. Remove the old broad attachment from **only the selected role** through its
-   existing owner. If CloudFormation manages it, update that stack's attachment;
-   for an unmanaged attachment, explicitly detach the reviewed policy ARN from
-   that role. Remove equivalent broad inline grants through their owners too.
-   Do not edit or delete a shared policy as a shortcut, and do not remove other
-   environments' attachments. These reader templates do not revoke grants owned
-   by another stack or operator.
-5. Verify the effective policy scope and observe a new ESO reconciliation after
-   the cutover: `refreshTime` advances, all affected ExternalSecrets stay Ready,
-   and no access-denied errors appear. A previously recorded Ready condition is
-   not sufficient. Check only status/metadata; do not print secret contents.
-6. Migrate other readers independently. Retire the old managed policy only after
-   confirming it has no remaining consumers and no owning stack needs it.
-
-If synchronization fails, correct the missing exact resource/key grant or restore
-the saved attachment for the selected role through its owner, then recheck fresh
-sync status. Existing Kubernetes Secrets alone do not demonstrate recovery.
-Changes to Secret contents and service passwords remain separate operations.
-
-Protect the Kubernetes side too: restrict changes to SecretStore/ExternalSecret,
-the referenced ServiceAccount, ESO Pod exec access and ServiceAccount token
-creation. Prefer namespaced stores for deployment boundaries. Namespace scoping
-does not compensate for account-wide AWS access.
-
-References: [AWS scoped read policies](https://docs.aws.amazon.com/secretsmanager/latest/userguide/auth-and-access_iam-policies.html),
-[ESO AWS permissions](https://external-secrets.io/latest/provider/aws-secrets-manager/),
-[ESO security practices](https://external-secrets.io/latest/guides/security-best-practices/).
+`SecretEncryptionKeyArn` is optional and defaults to empty. Set it when the
+Secrets use a customer-managed symmetric KMS key. The template grants only
+`kms:Decrypt` on that key, through Secrets Manager in `SecretRegion`, with the
+encryption context restricted to the deployment's Secret prefix. The key policy
+must also allow access. This parameter selects a Secret encryption key, not a
+blockchain signing key.
 
 The optional `roles.externalSecrets` resolves the selected role ARN only.
 Install and bind the operator ServiceAccount separately. The CLI does not
