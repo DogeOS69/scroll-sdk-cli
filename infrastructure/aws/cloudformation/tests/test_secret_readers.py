@@ -1,4 +1,4 @@
-"""Reader grants must not turn a legacy Secret exception into account-wide access."""
+"""ESO readers may read only their deployment's Secrets, with optional decryption."""
 import fnmatch
 import json
 import unittest
@@ -7,8 +7,6 @@ from test_templates import CHECK, filled, load, render, resolved
 
 
 TEMPLATES = ("secrets-reader-policy", "secrets-reader-role")
-LEGACY = "arn:aws:secretsmanager:us-east-2:999000111222:secret:legacy/fixture/proof-AbCdEf"
-SECOND = "arn:aws:secretsmanager:us-east-2:999000111222:secret:legacy/fixture/other-GhIjKl"
 KEY = "arn:aws:kms:us-east-2:999000111222:key/11111111-1111-1111-1111-111111111111"
 
 
@@ -36,65 +34,54 @@ def allows_secret(policy, action, arn):
 
 
 class SecretReaderBoundaries(unittest.TestCase):
-    def test_only_deployment_prefix_and_exact_exceptions_can_be_read(self):
+    def test_only_deployment_prefix_can_be_read_without_write_access(self):
         current = "arn:aws:secretsmanager:us-east-2:999000111222:secret:dogeos/fixture/database-AbCdEf"
         for name in TEMPLATES:
             with self.subTest(template=name):
-                policy = statements(name, AdditionalSecretArns=LEGACY + "," + SECOND)
-                for arn in (current, LEGACY, SECOND):
+                policy = statements(name)
+                for arn in (current, current.replace("database", "proof-coordinator")):
                     for action in ("GetSecretValue", "DescribeSecret"):
                         self.assertTrue(allows_secret(policy, "secretsmanager:" + action, arn))
                 for arn in (current.replace("/fixture/", "/another-deployment/"),
                             current.replace("/fixture/", "/fixture-copy/"),
                             current.replace("us-east-2", "us-west-2"),
                             current.replace("999000111222", "999000111223"),
-                            LEGACY.replace("AbCdEf", "GhIjKl"), LEGACY + "-copy"):
+                            current.replace("dogeos/fixture/", "shared/")):
                     self.assertFalse(allows_secret(policy, "secretsmanager:GetSecretValue", arn))
                 for action in ("PutSecretValue", "CreateSecret", "DeleteSecret", "TagResource",
                                "UntagResource", "UpdateSecret", "PutResourcePolicy", "RotateSecret",
                                "ListSecrets", "BatchGetSecretValue"):
-                    for arn in (current, LEGACY):
-                        self.assertFalse(allows_secret(policy, "secretsmanager:" + action, arn))
+                    self.assertFalse(allows_secret(policy, "secretsmanager:" + action, current))
 
-    def test_optional_legacy_grant_and_decryption_are_absent_by_default(self):
+    def test_decryption_is_absent_by_default(self):
         for name in TEMPLATES:
             with self.subTest(template=name):
                 policy = statements(name)
                 self.assertEqual(len(policy), 1)
-                self.assertFalse(allows_secret(policy, "secretsmanager:GetSecretValue", LEGACY))
                 self.assertNotIn("kms:", json.dumps(policy))
-                self.assertEqual(len(statements(name, AdditionalSecretArns=LEGACY)), 2)
-                # Existing parameter files that omit the new input retain their grant.
-                entries = [x for x in filled(name) if x["ParameterKey"] != "AdditionalSecretArns"]
-                self.assertEqual(CHECK.validate(load(name), entries)["AdditionalSecretArns"], "")
+                self.assertEqual(CHECK.validate(load(name), filled(name))["SecretEncryptionKeyArn"], "")
 
     def test_decryption_is_only_for_selected_key_service_and_secret_contexts(self):
         for name in TEMPLATES:
-            for extra in ("", LEGACY + "," + SECOND):
-                with self.subTest(template=name, additional=bool(extra)):
-                    policy = statements(name, AdditionalSecretArns=extra, SecretEncryptionKeyArn=KEY)
-                    decrypt = [s for s in policy if s["Action"] == "kms:Decrypt"]
-                    self.assertEqual(len(decrypt), 2 if extra else 1)
-                    for grant in decrypt:
-                        self.assertEqual(grant["Resource"], KEY)
-                        self.assertEqual(grant["Condition"]["StringEquals"]["kms:ViaService"],
-                                         "secretsmanager.us-east-2.amazonaws.com")
-                    self.assertEqual(decrypt[0]["Condition"]["StringLike"]["kms:EncryptionContext:SecretARN"],
-                                     "arn:aws:secretsmanager:us-east-2:999000111222:secret:dogeos/fixture/*")
-                    if extra:
-                        self.assertEqual(decrypt[1]["Condition"]["StringEquals"]["kms:EncryptionContext:SecretARN"],
-                                         [LEGACY, SECOND])
-                    self.assertNotIn("kms:Sign", json.dumps(policy))
+            with self.subTest(template=name):
+                policy = statements(name, SecretEncryptionKeyArn=KEY)
+                decrypt = [s for s in policy if s["Action"] == "kms:Decrypt"]
+                self.assertEqual(len(decrypt), 1)
+                grant = decrypt[0]
+                self.assertEqual(grant["Resource"], KEY)
+                self.assertEqual(grant["Condition"]["StringEquals"]["kms:ViaService"],
+                                 "secretsmanager.us-east-2.amazonaws.com")
+                self.assertEqual(grant["Condition"]["StringLike"]["kms:EncryptionContext:SecretARN"],
+                                 "arn:aws:secretsmanager:us-east-2:999000111222:secret:dogeos/fixture/*")
+                self.assertNotIn("kms:Sign", json.dumps(policy))
 
-    def test_rejects_wildcards_partial_arns_and_malformed_lists(self):
-        invalid = ("*", "legacy/fixture/proof", LEGACY.replace("AbCdEf", "*"),
-                   LEGACY.replace("AbCdEf", "??????"), LEGACY.replace("999000111222", "*"),
-                   LEGACY.replace(":secret:", ":parameter:"), LEGACY + ",", "," + LEGACY,
-                   LEGACY + ",," + SECOND, LEGACY + ", " + SECOND)
+    def test_rejects_empty_prefix_wildcards_and_ambiguous_slashes(self):
+        invalid = ("", "*", "dogeos/*", "dogeos/fixture?", "/dogeos/fixture",
+                   "dogeos/fixture/", "dogeos//fixture")
         for name in TEMPLATES:
             for value in invalid:
-                with self.subTest(template=name, value=value), self.assertRaisesRegex(ValueError, "AdditionalSecretArns"):
-                    CHECK.validate(load(name), filled(name, AdditionalSecretArns=value))
+                with self.subTest(template=name, value=value), self.assertRaisesRegex(ValueError, "SecretPrefix"):
+                    CHECK.validate(load(name), filled(name, SecretPrefix=value))
 
     def test_existing_role_template_only_adds_its_own_managed_policy(self):
         template, params, conditions = resolved("secrets-reader-policy")
