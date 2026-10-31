@@ -143,7 +143,7 @@ describe('setup bridge-init protocol seed generation', () => {
         moat_address: '0x0000000000000000000000000000000000000003',
       },
       eth_chain_id: 32_382,
-      key_rotation_min_grace_wf_txs: 100,
+      key_rotation_min_grace_wf_txs: 300,
       l2_chain_id: 412_346,
       min_deposit_sats: 100_000_000,
     })

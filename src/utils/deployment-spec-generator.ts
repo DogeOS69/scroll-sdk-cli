@@ -1779,7 +1779,7 @@ export function generateProtocolSeedToml(rawSpec: DeploymentSpec): string {
   const protocolConfig: toml.JsonMap = {}
   protocolConfig.l2_chain_id = spec.network.l2ChainId
   protocolConfig.eth_chain_id = ethChainId
-  protocolConfig.key_rotation_min_grace_wf_txs = 100
+  protocolConfig.key_rotation_min_grace_wf_txs = 300
   protocolConfig.min_deposit_sats = 100_000_000
   protocolConfig.deposit_queue_transform = depositQueueTransform
 
