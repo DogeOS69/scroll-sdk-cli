@@ -141,6 +141,7 @@ describe('DogeOS bridge history integration', () => {
       values.ingress.main.enabled = false
       values.config.dogecoin_indexer.poll_interval_ms = 15_000
       values.config.ethereum.poll_interval_ms = 9000
+      values.config.l2.start_block = 12
       values.volumeClaimTemplates = [{name: 'data', size: '20Gi'}]
       const file = path.join(directory, HISTORY_VALUES)
       fs.writeFileSync(file, yaml.dump(values))
@@ -153,7 +154,7 @@ describe('DogeOS bridge history integration', () => {
       expect(current.config.dogecoin_indexer).to.deep.equal({poll_interval_ms: 15_000, start_height: 456})
       // The withdrawal processor's sources; operator tuning survives.
       expect(current.config.ethereum).to.deep.equal({expected_batchers: [batcher], poll_interval_ms: 9000, start_block: 4321})
-      expect(current.config.l2).to.deep.equal({message_queue_address: '0x00000000000000000000000000000000000000aa', rpc_url: 'http://l2-rpc:8545', start_block: 0})
+      expect(current.config.l2).to.deep.equal({message_queue_address: '0x00000000000000000000000000000000000000aa', rpc_url: 'http://l2-rpc:8545', start_block: 12})
       expect(current.externalSecrets[`${HISTORY_SERVICE}-secret-env`].data.map((entry: any) => entry.secretKey)).to.include('DOGEOS_BRIDGE_HISTORY_ETHEREUM__RPC_URL')
       expect(current.volumeClaimTemplates[0].size).to.equal('20Gi')
       await command.processProductionYaml(directory)

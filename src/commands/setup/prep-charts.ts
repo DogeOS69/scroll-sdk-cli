@@ -2785,14 +2785,15 @@ export default class SetupPrepCharts extends Command {
         productionYaml.config = {
           ...productionYaml.config, dogecoin_indexer: {...productionYaml.config?.dogecoin_indexer, ...config.dogecoin_indexer},
           ethereum: {...productionYaml.config?.ethereum, ...chain.ethereum},
-          l2: {...productionYaml.config?.l2, ...chain.l2},
+          // start_block stays operator-owned after the first run, as the WP's indexer start is.
+          l2: {start_block: chain.l2.start_block, ...productionYaml.config?.l2, message_queue_address: chain.l2.message_queue_address, rpc_url: chain.l2.rpc_url},
           network: config.network,
         }
         productionYaml.enableServiceLinks = false
         ensureNamedSecretRef(productionYaml, `${HISTORY_SERVICE}-secret-env`, changes)
         if (before !== JSON.stringify(productionYaml)) {
           updated = true
-          changes.push({key: 'history config', newValue: 'deployment network and indexer boundary', oldValue: 'previous configuration'})
+          changes.push({key: 'history config', newValue: 'deployment network, indexer boundary, Ethereum inbox and L2 indexer', oldValue: 'previous configuration'})
         }
       }
       else if (chartName === 'l1-interface') {
