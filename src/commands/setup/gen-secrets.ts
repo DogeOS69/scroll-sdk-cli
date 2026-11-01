@@ -389,6 +389,8 @@ export default class SetupGenSecrets extends Command {
       )
     }
 
+    if (service === 'dogeos-bridge-history' && !this.dogeConfig.bridgeHistory?.enabled) return envFiles
+
     if (service === 'scroll-monitor') {
       const valuesFile = path.join(process.cwd(), 'values/scroll-monitor-production.yaml')
       if (fs.existsSync(valuesFile)) {
