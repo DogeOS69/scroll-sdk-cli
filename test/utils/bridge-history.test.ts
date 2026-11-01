@@ -159,6 +159,12 @@ describe('DogeOS bridge history integration', () => {
       expect(current.volumeClaimTemplates[0].size).to.equal('20Gi')
       await command.processProductionYaml(directory)
       expect(fs.readFileSync(file, 'utf8')).to.equal(first)
+      // Without a configured inbox start, an operator's start_block stays.
+      doge.defaults.ethereumDaEmbeddedIndexerStartBlock = ''
+      current.config.ethereum.start_block = 8_000_000
+      fs.writeFileSync(file, yaml.dump(current))
+      await command.processProductionYaml(directory)
+      expect((yaml.load(fs.readFileSync(file, 'utf8')) as any).config.ethereum.start_block).to.equal(8_000_000)
     } finally {fs.rmSync(directory, {force: true, recursive: true})}
   })
 

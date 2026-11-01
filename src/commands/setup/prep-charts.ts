@@ -2778,7 +2778,9 @@ export default class SetupPrepCharts extends Command {
         // The withdrawal processor's sources; operator tuning of the other keys survives.
         const chain = historyChainConfig({
           expectedBatcher: this.requireSignerAddress('l1CommitSender'),
-          inboxStartBlock: Number(this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock ?? 0),
+          // Unset or empty keeps the values' start_block, as the WP keeps its template's.
+          inboxStartBlock: String(this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock ?? '').trim() === ''
+            ? undefined : Number(this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock),
           l2MessageQueue: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR') || GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT') || L2_RPC_ENDPOINT,
         })
