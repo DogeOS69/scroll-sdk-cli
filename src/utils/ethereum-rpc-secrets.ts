@@ -16,6 +16,7 @@ export const FEE_ORACLE_RPC_DEFAULT = 'https://ethereum-rpc.publicnode.com'
 // PC's existing RPC Secret also owns Dogecoin auth, so rotating cluster RPC
 // credentials does not require baking a new proof-topology bundle.
 export const ETHEREUM_RPC_KEYS: Record<string, Record<string, 'beacon' | 'dogecoinPassword' | 'dogecoinUser' | 'execution' | 'fees'>> = {
+  'dogeos-bridge-history': {DOGEOS_BRIDGE_HISTORY_ETHEREUM__RPC_URL: 'execution'},
   'eth-da-submitter': {DOGEOS_ETH_DA_SUBMITTER_ETHEREUM__RPC_URL: 'execution'},
   'fee-oracle': {DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL: 'fees'},
   'l1-interface': {

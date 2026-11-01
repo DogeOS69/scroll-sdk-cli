@@ -15,15 +15,16 @@ import type {DstackControllerConfig} from '../../types/dstack-controller.js'
 
 import {
   L1_INTERFACE_RPC_ENDPOINT,
+  L2_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
-import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
+import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, GENESIS_PREDEPLOYS} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
-import {HISTORY_SERVICE, frontendHistoryEnv, historyConfig} from '../../utils/bridge-history.js'
+import {HISTORY_SERVICE, frontendHistoryEnv, historyChainConfig, historyConfig} from '../../utils/bridge-history.js'
 import {CAPACITY_MANAGER_STATE_PATHS, prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
@@ -2774,8 +2775,17 @@ export default class SetupPrepCharts extends Command {
       else if (chartName === HISTORY_SERVICE) {
         const before = JSON.stringify(productionYaml)
         const config = historyConfig(this.dogeConfig.network, Number(this.dogeConfig.defaults?.dogecoinIndexerStartHeight))
+        // The withdrawal processor's sources; operator tuning of the other keys survives.
+        const chain = historyChainConfig({
+          expectedBatcher: this.requireSignerAddress('l1CommitSender'),
+          inboxStartBlock: Number(this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock ?? 0),
+          l2MessageQueue: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR') || GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE,
+          l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT') || L2_RPC_ENDPOINT,
+        })
         productionYaml.config = {
           ...productionYaml.config, dogecoin_indexer: {...productionYaml.config?.dogecoin_indexer, ...config.dogecoin_indexer},
+          ethereum: {...productionYaml.config?.ethereum, ...chain.ethereum},
+          l2: {...productionYaml.config?.l2, ...chain.l2},
           network: config.network,
         }
         productionYaml.enableServiceLinks = false

@@ -32,3 +32,16 @@ export function historyConfig(network: string, startHeight: number) {
   if (!Number.isSafeInteger(startHeight) || startHeight < 0) throw new Error('bridgeHistory requires a non-negative dogecoinIndexerStartHeight')
   return {dogecoin_indexer: {start_height: startHeight}, network: network === 'dogecoin' ? 'mainnet' : network}
 }
+
+/**
+ * The L2 indexer and Ethereum DA inbox the service reads, from the withdrawal
+ * processor's sources. The Ethereum RPC URL is a Secret (ETHEREUM_RPC_KEYS);
+ * the batcher is omitted until the eth-da-submitter key exists.
+ */
+export function historyChainConfig(input: {expectedBatcher?: string; inboxStartBlock: number; l2MessageQueue: string; l2RpcUrl: string}) {
+  if (!Number.isSafeInteger(input.inboxStartBlock) || input.inboxStartBlock < 0) throw new Error('bridgeHistory requires a non-negative Ethereum DA inbox start block')
+  return {
+    ethereum: {...(input.expectedBatcher ? {expected_batchers: [input.expectedBatcher]} : {}), start_block: input.inboxStartBlock},
+    l2: {message_queue_address: input.l2MessageQueue, rpc_url: input.l2RpcUrl, start_block: 0},
+  }
+}

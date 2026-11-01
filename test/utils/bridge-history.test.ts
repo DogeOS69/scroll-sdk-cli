@@ -59,10 +59,19 @@ describe('DogeOS bridge history integration', () => {
     const spec = fixture()
     const files = generateValuesFiles(spec)
     const values: any = yaml.load(files[HISTORY_VALUES])
-    expect(values.config).to.deep.equal({dogecoin_indexer: {start_height: 123}, network: 'testnet'})
+    // No eth-da-submitter key yet: the batcher is left to the chart's TODO and prep-charts.
+    expect(values.config).to.deep.equal({
+      dogecoin_indexer: {start_height: 123},
+      ethereum: {start_block: 0},
+      l2: {message_queue_address: '0x5300000000000000000000000000000000000000', rpc_url: 'http://l2-rpc:8545', start_block: 0},
+      network: 'testnet',
+    })
     const secret = values.externalSecrets[`${HISTORY_SERVICE}-secret-env`]
     expect(secret.provider).to.equal('aws')
-    expect(secret.data.map((entry: any) => entry.secretKey)).to.deep.equal(['URL', 'USER', 'PASS'].map(key => `DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__${key}`))
+    expect(secret.data.map((entry: any) => entry.secretKey)).to.deep.equal([
+      ...['URL', 'USER', 'PASS'].map(key => `DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__${key}`),
+      'DOGEOS_BRIDGE_HISTORY_ETHEREUM__RPC_URL',
+    ])
     expect(secret.data.every((entry: any) => entry.remoteRef.key.endsWith(`/${HISTORY_SERVICE}-secret-env`))).to.equal(true)
     const config = toml.parse((yaml.load(files['frontends-config.yaml']) as any).scrollConfig)
     expect(config.REACT_APP_HISTORY_API_URI).to.equal('/api/history/v1')
@@ -71,6 +80,12 @@ describe('DogeOS bridge history integration', () => {
     const merged: any = mergeFrontendConfigDocuments(operator, yaml.load(files['frontends-config.yaml']))
     expect(toml.parse(merged.scrollConfig).REACT_APP_HISTORY_EXPECT_INCLUDED).to.equal('Custom words with spaces')
     expect(toml.parse(generateAllConfigs(spec)['doge-config.toml']).bridgeHistory).to.deep.equal({enabled: true})
+    spec.accounts.l1CommitSender = {address: '0x00000000000000000000000000000000000000da'} as any
+    spec.ethereumDa = {...spec.ethereumDa, inboxWorker: {startBlock: 7_000_000}} as any
+    spec.contracts.overrides = {...spec.contracts.overrides, l2MessageQueue: '0x00000000000000000000000000000000000000aa'}
+    const wired: any = yaml.load(generateValuesFiles(spec)[HISTORY_VALUES])
+    expect(wired.config.ethereum).to.deep.equal({expected_batchers: ['0x00000000000000000000000000000000000000da'], start_block: 7_000_000})
+    expect(wired.config.l2.message_queue_address).to.equal('0x00000000000000000000000000000000000000aa')
     spec.infrastructure = {bootnodeCount: 1, provider: 'local', sequencerCount: 1}
     const local: any = yaml.load(generateValuesFiles(spec)[HISTORY_VALUES])
     expect(local.externalSecrets).to.equal(null)
@@ -83,7 +98,8 @@ describe('DogeOS bridge history integration', () => {
     })
     const files = command.generateEnvContent(HISTORY_SERVICE, {})
     expect(files[`${HISTORY_SERVICE}-secret.env`]).to.equal(
-      'DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__URL="http://dogecoin:18332"\nDOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__USER="fake-user"\nDOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__PASS="fake-password"\n')
+      'DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__URL="http://dogecoin:18332"\nDOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__USER="fake-user"\nDOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__PASS="fake-password"\n'
+      + 'DOGEOS_BRIDGE_HISTORY_ETHEREUM__RPC_URL="https://ethereum-sepolia-rpc.publicnode.com"\n')
     expect(isRetiredServiceFile(`${HISTORY_SERVICE}-secret.env`)).to.equal(false)
     command.dogeConfig.bridgeHistory.enabled = false
     expect(command.generateEnvContent(HISTORY_SERVICE, {})).to.deep.equal({})
@@ -117,19 +133,28 @@ describe('DogeOS bridge history integration', () => {
       const configs = generateAllConfigs(spec)
       const doge: any = toml.parse(configs['doge-config.toml'])
       doge.defaults.dogecoinIndexerStartHeight = 456
+      doge.defaults.ethereumDaEmbeddedIndexerStartBlock = '4321'
+      const batcher = '0x00000000000000000000000000000000000000da'
+      doge.accounts = {...doge.accounts, L1_COMMIT_SENDER_ADDR: batcher}
+      doge.signers = {...doge.signers, l1CommitSender: {backend: 'local'}}
       const values: any = yaml.load(generateValuesFiles(spec)[HISTORY_VALUES])
       values.ingress.main.enabled = false
       values.config.dogecoin_indexer.poll_interval_ms = 15_000
+      values.config.ethereum.poll_interval_ms = 9000
       values.volumeClaimTemplates = [{name: 'data', size: '20Gi'}]
       const file = path.join(directory, HISTORY_VALUES)
       fs.writeFileSync(file, yaml.dump(values))
       const command: any = new PrepCharts([], await Config.load({root}))
-      Object.assign(command, {configData: toml.parse(configs['config.toml']), dogeConfig: doge, flags: {},
+      Object.assign(command, {configData: toml.parse(configs['config.toml']), contractsConfig: {L2_MESSAGE_QUEUE_ADDR: '0x00000000000000000000000000000000000000aa'}, dogeConfig: doge, flags: {},
         jsonCtx: {addWarning() {}, info() {}, logSuccess() {}}, jsonMode: true, log() {}, nonInteractive: true})
       await command.processProductionYaml(directory)
       const first = fs.readFileSync(file, 'utf8')
       const current: any = yaml.load(first)
       expect(current.config.dogecoin_indexer).to.deep.equal({poll_interval_ms: 15_000, start_height: 456})
+      // The withdrawal processor's sources; operator tuning survives.
+      expect(current.config.ethereum).to.deep.equal({expected_batchers: [batcher], poll_interval_ms: 9000, start_block: 4321})
+      expect(current.config.l2).to.deep.equal({message_queue_address: '0x00000000000000000000000000000000000000aa', rpc_url: 'http://l2-rpc:8545', start_block: 0})
+      expect(current.externalSecrets[`${HISTORY_SERVICE}-secret-env`].data.map((entry: any) => entry.secretKey)).to.include('DOGEOS_BRIDGE_HISTORY_ETHEREUM__RPC_URL')
       expect(current.volumeClaimTemplates[0].size).to.equal('20Gi')
       await command.processProductionYaml(directory)
       expect(fs.readFileSync(file, 'utf8')).to.equal(first)
@@ -205,6 +230,8 @@ describe('DogeOS bridge history integration', () => {
     expect(pod.enableServiceLinks).to.equal(false)
     const config = toml.parse(docs.find(doc => doc?.kind === 'ConfigMap').data['config.toml'])
     expect((config.dogecoin_indexer as any).start_height).to.equal(123)
+    expect(config.l2).to.deep.equal({message_queue_address: '0x5300000000000000000000000000000000000000', rpc_url: 'http://l2-rpc:8545', start_block: 0})
+    expect((config.ethereum as any).start_block).to.equal(0)
     expect(pod.containers[0].readinessProbe.httpGet.path).to.equal('/api/history/v1/health')
     spec.infrastructure = {bootnodeCount: 1, provider: 'local', sequencerCount: 1}
     const local = execFileSync('helm', ['template', 'history', chart, '-f', path.join(chart, 'values/production.yaml'), '-f', '-'], {encoding: 'utf8', input: generateValuesFiles(spec)[HISTORY_VALUES]})
