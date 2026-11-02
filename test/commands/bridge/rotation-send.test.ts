@@ -84,16 +84,14 @@ describe('bridge rotation send command', () => {
 
   const run = (...extra: string[]) => RotationSend.run([exportFile, '--dir', directory, '--context', 'test', '--wp-url', url, '--tso-url', url, ...extra], CLI_ROOT)
 
-  for (const network of ['mainnet', 'dogecoin']) {
-    it(`checks online against ${network} WP status without posting`, async () => {
-      status.network = network
-      await RotationOnline.run([exportFile, '--dir', directory, '--context', 'test', '--wp-url', url, '--tso-url', url], CLI_ROOT)
-      expect(JSON.parse(logs[0]).passed).to.equal(true)
-      expect(posts).to.deep.equal([])
-    })
-  }
+  it('checks online against mainnet WP status without posting', async () => {
+    status.network = 'mainnet'
+    await RotationOnline.run([exportFile, '--dir', directory, '--context', 'test', '--wp-url', url, '--tso-url', url], CLI_ROOT)
+    expect(JSON.parse(logs[0]).passed).to.equal(true)
+    expect(posts).to.deep.equal([])
+  })
 
-  for (const network of ['testnet', 'regtest', 'bitcoin']) {
+  for (const network of ['dogecoin', 'testnet', 'regtest', 'bitcoin']) {
     it(`rejects ${network} status in online, send and preview without posting`, async () => {
       status.network = network
       for (const command of [

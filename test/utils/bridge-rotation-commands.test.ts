@@ -179,10 +179,9 @@ describe('bridge rotation export role separation', () => {
 
 describe('bridge rotation deployment identity and predecessor checks', () => {
   const rotation = validateRotationExport(golden())
-  it('accepts canonical mainnet and the legacy dogecoin alias, but rejects mismatches', () => {
+  it('accepts canonical mainnet and rejects every other network name', () => {
     assertDeploymentIdentity(rotation, status(rotation))
-    assertDeploymentIdentity(rotation, status(rotation, {network: 'dogecoin'}))
-    for (const network of ['regtest', 'bitcoin', 'signet', 'unknown', '']) {
+    for (const network of ['dogecoin', 'regtest', 'bitcoin', 'signet', 'unknown', '']) {
       expect(() => assertDeploymentIdentity(rotation, status(rotation, {network}))).to.throw('network')
     }
 
