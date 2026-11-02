@@ -1240,7 +1240,7 @@ Export the CubeSigner policy Wasm and its sha256 from an immutable compiler imag
 ```
 USAGE
   $ scrollsdk setup cubesigner-policy build --compiler-image <value> --expected-core-revision <value> --output <value>
-  [--json]
+    --source-repo <value> [--json]
 
 FLAGS
   --compiler-image=<value>          (required) ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:<digest> (private;
@@ -1248,6 +1248,8 @@ FLAGS
   --expected-core-revision=<value>  (required)
   --json
   --output=<value>                  (required)
+  --source-repo=<value>             (required) Local Core repository containing the expected revision, used to check it
+                                    includes core #1712; no checkout or fetch is performed
 
 DESCRIPTION
   Export the CubeSigner policy Wasm and its sha256 from an immutable compiler image, offline

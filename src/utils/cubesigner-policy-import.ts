@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {type PolicyToolRunner, runPolicyTool} from './cubesigner-policy-build.js'
+import {type PolicyToolRunner, assertPolicyReaderFix, runPolicyTool} from './cubesigner-policy-build.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
@@ -69,6 +69,8 @@ export function importCubesignerPolicy(options: {
   for (const revision of [options.coreRevision, options.buildScriptRevision]) {
     if (run('git', ['-C', repo, 'rev-parse', '--verify', `${revision}^{commit}`]).trim() !== revision) throw new Error('Source revision is not the requested commit')
   }
+
+  assertPolicyReaderFix(repo, options.coreRevision, run)
 
   const script = run('git', ['-C', repo, 'show', `${options.buildScriptRevision}:${SCRIPT}`])
   if (!script.trim()) throw new Error('Build script is empty')

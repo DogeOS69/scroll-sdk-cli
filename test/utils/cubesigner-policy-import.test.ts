@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import {POLICY_READER_FIX_REVISION} from '../../src/utils/cubesigner-policy-build.js'
 import {EXTERNAL_POLICY_INPUT, EXTERNAL_POLICY_OUTPUT, importCubesignerPolicy, verifyExternalPolicy} from '../../src/utils/cubesigner-policy-import.js'
 import {prepareCubesignerPolicy} from '../../src/utils/preparation-cubesigner-policy.js'
 import {digest} from '../../src/utils/preparation-io.js'
@@ -12,11 +13,14 @@ describe('external policy import', () => {
   const context = '{"protocol":"synthetic"}\n'
   let root: string
   let calls: string[][]
+  // A core revision the fake repository reports as not containing core #1712.
+  const readerFixMissing = 'c'.repeat(40)
   const options = () => ({
     buildScriptRevision: 'b'.repeat(40), coreRevision: 'a'.repeat(40), directory: root,
     expectedProtocolContextSha256: digest(context), expectedWasmSha256: digest(wasm),
     run(program: string, args: string[]) {
       expect(program).eq('git'); calls.push(args)
+      if (args.includes('merge-base') && args.at(-1) === readerFixMissing) throw new Error('git policy operation failed (exit 1)')
       return args.includes('show') ? '#!/bin/bash\n# synthetic build script\n' : args.at(-1)!.replace('^{commit}', '') + '\n'
     },
     sourceRepo: root, wasm: '.data/evidence/policy.wasm',
@@ -32,7 +36,8 @@ describe('external policy import', () => {
   it('imports and resumes through the preparation path without building or contacting the provider', async () => {
     const result = importCubesignerPolicy(options())
     expect(result.wasmSha256).eq(digest(wasm))
-    expect(calls).length(3)
+    expect(calls).length(4)
+    expect(calls.find(args => args.includes('merge-base'))).deep.eq(['-C', fs.realpathSync(root), 'merge-base', '--is-ancestor', POLICY_READER_FIX_REVISION, 'a'.repeat(40)])
     const receipt = JSON.parse(fs.readFileSync(result.buildReceipt, 'utf8'))
     expect(receipt).not.have.property('compilerImage')
     expect(receipt.provenance).eq('operator-declared-external-build')
@@ -44,6 +49,11 @@ describe('external policy import', () => {
     const handoff = JSON.parse(fs.readFileSync(path.join(root, '.data/cubesigner-policy-governance-handoff.json'), 'utf8'))
     expect(handoff.status).eq('external-build-imported-governance-unverified')
     expect(fs.statSync(result.buildReceipt).mode % 0o1000).eq(0o600)
+  })
+
+  it('refuses a core revision without core #1712 before writing output', () => {
+    expect(() => importCubesignerPolicy({...options(), coreRevision: readerFixMissing})).to.throw('core #1712')
+    expect(fs.existsSync(path.join(root, EXTERNAL_POLICY_OUTPUT))).false
   })
 
   it('recovers an import interrupted before selecting it', () => {
