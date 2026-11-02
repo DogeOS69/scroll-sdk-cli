@@ -221,11 +221,17 @@ export class NetworkConfigExporter extends RpcExport {
       const l1 = this.generateL1InterfaceEnvFile(valuesDir, scratch, network, null)
       const l1Vars = readGeneratedEnv(l1.generatedPath)
       const runtimeNetwork = l1Vars[`${L1}NETWORK_STR`]
-      // Released beta.8 uses rust-dogecoin's historical "bitcoin" spelling
-      // for Dogecoin mainnet. Preserve the source runtime's accepted spelling.
-      if (runtimeNetwork !== network && !(network === 'mainnet' && runtimeNetwork === 'bitcoin')) {
+      // Core #1627 names Dogecoin mainnet `mainnet`, still reads the `dogecoin` alias,
+      // and rejects rust-dogecoin's `bitcoin` label. The package always carries `mainnet`.
+      if (network === 'mainnet' && runtimeNetwork === 'bitcoin') {
+        throw new Error('L1 Interface NETWORK_STR is "bitcoin", which Core #1627 rejects; set it to mainnet with an L1 Interface image that includes #1627')
+      }
+
+      if ((runtimeNetwork === 'dogecoin' ? 'mainnet' : runtimeNetwork) !== network) {
         throw new Error('L1 Interface NETWORK_STR must match doge-config.network')
       }
+
+      l1Vars[`${L1}NETWORK_STR`] = network
 
       if (network === 'mainnet' && Object.keys(l1Vars).some(key => (
         key.startsWith(`${L1}EVENT_PLANE_`) || key.includes('BOOTSTRAP')
