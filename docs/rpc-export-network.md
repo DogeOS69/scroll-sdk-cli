@@ -23,10 +23,11 @@ values. Only existing self-contained `testnet/` and `mainnet/` packages are
 supported; the command never substitutes testnet for regtest or scaffolds a
 network by copying another network's files.
 
-Released L1 Interface versions such as beta.8 spell Dogecoin mainnet as
-`bitcoin` in `NETWORK_STR`. That runtime spelling is accepted for a `mainnet`
-DogeConfig and preserved in the generated environment; the output directory
-remains `mainnet/`. It is not accepted for a testnet source.
+Dogecoin mainnet has one name, `mainnet` (core #1627). A source `NETWORK_STR`
+of `dogecoin` is read as `mainnet`, and the generated environment always
+carries `mainnet`. The `bitcoin` label used by released L1 Interface versions
+such as beta.8 is rejected: those images cannot read `mainnet`, so export from
+a source running an L1 Interface image that includes #1627.
 
 The inputs are `genesis.yaml`, `protocol_context.yaml`,
 `l1-interface-production.yaml`, and `l2-reth-rpc-production.yaml` under
