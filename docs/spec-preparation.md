@@ -742,9 +742,10 @@ An omitted recipient retains the upstream template's zero placeholder and emits
 a warning: it must be selected before deploying L2 contracts.
 
 `setup gen-l2-artifacts` passes `config.toml` to
-`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.9`. The contracts
+`dogeos69/scroll-stack-contracts:gen-configs-dogeos-v0.3.0-rc.11`. The contracts
 image produces `genesis.yaml`; the CLI checks mandatory predeploy code before
-copying the result to `values/genesis.yaml`. It never synthesizes or patches
+copying the result to `values/genesis.yaml`, and requires the rc.11
+hash-chain `L2MessageQueue` runtime (1,215 bytes) at `0x5300…0000`. It never synthesizes or patches
 contract bytecode or genesis storage. A regression fixture records every field
 and predeploy address from the pinned contracts template, with explicit
 exceptions for optional components. The rc.6 release introduced omission of

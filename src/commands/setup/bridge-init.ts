@@ -11,6 +11,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
+import {PROTOCOL_VERSION} from '../../constants/deployment.js'
 import {assertGenesisSequencerAmount, coreHelperNetwork} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
@@ -150,20 +151,23 @@ export function buildEthereumDaProtocolSeedConfig(
 
   protocolSeedConfig.protocol ??= {}
   delete protocolSeedConfig.protocol.celestia_namespace
-  protocolSeedConfig.protocol.protocol_version = 2
+  protocolSeedConfig.protocol.protocol_version = PROTOCOL_VERSION
   protocolSeedConfig.protocol.dogecoin_chain_id = dogecoinChainId
   protocolSeedConfig.protocol.l2_chain_id = l2ChainId
   protocolSeedConfig.protocol.eth_chain_id = ethChainId
 
   protocolSeedConfig.chain_anchors ??= {}
   delete protocolSeedConfig.chain_anchors.initial_celestia_height
+  // Core dropped initial_tx_blob_index and renamed genesis_state_root to genesis_block_hash
+  // (the block-0 header hash, not the state root), so neither old value carries over.
+  delete protocolSeedConfig.chain_anchors.initial_tx_blob_index
+  delete protocolSeedConfig.chain_anchors.genesis_state_root
   protocolSeedConfig.chain_anchors.initial_ethereum_block_hash ??=
     '0x0000000000000000000000000000000000000000000000000000000000000000'
   protocolSeedConfig.chain_anchors.initial_tx_index ??= 0
-  protocolSeedConfig.chain_anchors.initial_tx_blob_index ??= 0
   protocolSeedConfig.chain_anchors.genesis_batch_hash ??=
     '0x0000000000000000000000000000000000000000000000000000000000000000'
-  protocolSeedConfig.chain_anchors.genesis_state_root ??=
+  protocolSeedConfig.chain_anchors.genesis_block_hash ??=
     '0x0000000000000000000000000000000000000000000000000000000000000000'
   if (inputs.initialSystemSigner) {
     protocolSeedConfig.chain_anchors.initial_system_signer = inputs.initialSystemSigner

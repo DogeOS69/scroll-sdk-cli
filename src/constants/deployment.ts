@@ -6,6 +6,8 @@ export const L2_PAYLOAD_BUILDING_DURATION_MS = 1400
 export const L2_BASE_FEE_OVERHEAD_WEI = '420000000000'
 export const CONTRACTS_DEPLOYMENT_BATCH_SIZE = '10'
 export const L2_TX_FEE_VAULT = '0x5300000000000000000000000000000000000005'
+/** dogeos-core `SUPPORTED_PROTOCOL_VERSION`; core rejects any other protocol_version. */
+export const PROTOCOL_VERSION = 1
 
 /** Canonical genesis predeploys used by the contracts generator and Reth. */
 export const GENESIS_PREDEPLOYS = {
@@ -15,4 +17,13 @@ export const GENESIS_PREDEPLOYS = {
   L2_TX_FEE_VAULT,
   L2_WDOGE: '0x5300000000000000000000000000000000000004',
   L2_WHITELIST: '0x5300000000000000000000000000000000000003',
+} as const
+
+/**
+ * L2MessageQueue runtime from scroll-contracts dogeos-v0.3.0-rc.11 (hash-chain withdrawal queue,
+ * scroll-contracts #87). Older images ship the Merkle-tree queue that current core rejects.
+ */
+export const L2_MESSAGE_QUEUE_RUNTIME = {
+  keccak256: '0xbaf761a1daac2df442f2a373c18f86cbb257d60ee9e62933e5ffa1c9088ab5af',
+  length: 1215,
 } as const

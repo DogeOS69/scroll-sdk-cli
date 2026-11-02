@@ -6,7 +6,7 @@ For resumable orchestration of the full preparation sequence, see
 
 DeploymentSpec generation and `setup prep-charts` share the following inputs.
 The core service image fallback is `v0.3.0-beta.8`; explicit image overrides
-remain authoritative. Contracts use `dogeos-v0.3.0-rc.9`. Reth is independently
+remain authoritative. Contracts use `dogeos-v0.3.0-rc.11`. Reth is independently
 released and defaults to `v0.3.0-beta.2`; it does not inherit the Core tag.
 
 ## Frontend live deposit destination
@@ -59,7 +59,7 @@ The generated Reth values use 30,000,000 gas, a 2000 ms block interval and a
 1400 ms payload build window. Empty blocks are disabled by default
 (`reth.sequencer.allowEmptyBlocks: false`); the sequencer produces blocks when
 there is eligible work. The same genesis gas limit enters `config.toml`
-for rc.9 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
+for rc.11 genesis generation. During prep, an explicit `genesis.GAS_LIMIT` in
 that file also sets the concrete Reth nodes' builder gas limit. If the field is
 absent from an older deployment, prep preserves its values setting. Prep does
 not rewrite the operator's existing block interval/build window or image pin.
@@ -89,7 +89,8 @@ The generator multiplies deposit satoshis by 10^10 when writing
 `contracts.DEPOSIT_FEE`, which uses L2 wei. Zero and integer precision are
 preserved. The deprecated `fees.deposit` field retains its historical direct
 wei meaning; converting to `depositFeeSats` requires dividing by 10^10.
-These are explicit example policies, not a new fallback for omitted fees.
+An omitted deposit fee defaults to 1 DOGE, the contracts template default and
+the protocol minimum deposit. Omitted withdrawal fields still default to 0.
 
 ## Preserved service intent
 

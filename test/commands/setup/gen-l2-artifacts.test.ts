@@ -9,10 +9,15 @@ import {GENESIS_PREDEPLOYS} from '../../../src/constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_TAGS_URL} from '../../../src/constants/docker.js'
 import {validateGenesisPredeploys} from '../../../src/utils/genesis-predeploys.js'
 
+// L2MessageQueue runtime from the scroll-contracts dogeos-v0.3.0-rc.11 gen-configs image.
+const messageQueueCode = fs.readFileSync(new URL('../../fixtures/l2-message-queue-rc11.hex', import.meta.url), 'utf8').trim()
+
 function genesisOutput() {
-  return {scrollConfig: {alloc: Object.fromEntries([
+  const alloc: Record<string, {code: string}> = Object.fromEntries([
     ...Object.values(GENESIS_PREDEPLOYS), '0x0000f90827f1c53a10cb7a02335b175320002935',
-  ].map(address => [address, {code: '0x60006000'}]))}}
+  ].map(address => [address, {code: '0x60006000'}]))
+  alloc[GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE] = {code: messageQueueCode}
+  return {scrollConfig: {alloc}}
 }
 
 describe('gen-l2-artifacts explicit image selection', () => {
@@ -20,7 +25,7 @@ describe('gen-l2-artifacts explicit image selection', () => {
 
   it('uses the default only when no tag was supplied', async () => {
     const fetchStub = sinon.stub(globalThis, 'fetch')
-    expect(await resolveGenesisImageTag()).to.equal('gen-configs-dogeos-v0.3.0-rc.9')
+    expect(await resolveGenesisImageTag()).to.equal('gen-configs-dogeos-v0.3.0-rc.11')
     expect(fetchStub.called).to.equal(false)
   })
 
@@ -160,6 +165,15 @@ describe('gen-l2-artifacts integrated preflight', () => {
       expect(() => validateGenesisPredeploys('genesis.yaml')).to.throw('L2_MESSAGE_QUEUE')
     })
   }
+
+  it('rejects a message queue other than the rc.11 hash-chain runtime', () => {
+    for (const code of ['0x60006000', `${messageQueueCode.slice(0, -2)}00`]) {
+      const output = genesisOutput()
+      output.scrollConfig.alloc[GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE] = {code}
+      fs.writeFileSync('genesis.yaml', JSON.stringify(output))
+      expect(() => validateGenesisPredeploys('genesis.yaml')).to.throw('hash-chain withdrawal queue')
+    }
+  })
 
   it('does not disclose malformed configuration in parser errors', () => {
     fs.writeFileSync('genesis.yaml', 'scrollConfig: [private-input')

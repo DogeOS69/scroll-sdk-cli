@@ -10,6 +10,9 @@ import {promisify} from 'node:util'
 import {GENESIS_PREDEPLOYS} from '../../../src/constants/deployment.js'
 import {generateLocalContractsArtifacts} from '../../../src/utils/local-contracts.js'
 
+// L2MessageQueue runtime from the scroll-contracts dogeos-v0.3.0-rc.11 gen-configs image.
+const messageQueueCode = fs.readFileSync(new URL('../../fixtures/l2-message-queue-rc11.hex', import.meta.url), 'utf8').trim()
+
 const execFileAsync = promisify(execFile)
 const cli = path.resolve('bin/run.js')
 const outputFiles = ['config-contracts.toml', 'genesis.yaml', 'frontend-config.yaml']
@@ -84,7 +87,7 @@ describe('local contracts generation', () => {
     setScript(`echo generator-log
       ${outputFiles.filter(file => file !== 'genesis.yaml').map(file => `echo '# generated' > volume/${file}`).join('\n')}
       cat > volume/genesis.yaml <<'GENESIS'
-${JSON.stringify({scrollConfig: {alloc: Object.fromEntries(['0x0000f90827f1c53a10cb7a02335b175320002935', GENESIS_PREDEPLOYS.L1_GAS_PRICE_ORACLE, GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE, GENESIS_PREDEPLOYS.L2_NATIVE_DOGE_TOKEN].map(address => [address, {code: '0x6000'}]))}})}
+${JSON.stringify({scrollConfig: {alloc: Object.fromEntries(['0x0000f90827f1c53a10cb7a02335b175320002935', GENESIS_PREDEPLOYS.L1_GAS_PRICE_ORACLE, GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE, GENESIS_PREDEPLOYS.L2_NATIVE_DOGE_TOKEN].map(address => [address, {code: address === GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE ? messageQueueCode : '0x6000'}]))}})}
 GENESIS`)
     const preload = path.join(dir, 'no-fetch.mjs')
     fs.writeFileSync(preload, "globalThis.fetch = async () => {throw new Error('Image resolution is forbidden')};")
