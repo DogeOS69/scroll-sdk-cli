@@ -14,6 +14,7 @@ import {
   shouldSkipConfirmation,
   validateAndExit,
 } from '../../src/utils/non-interactive.js';
+import {restoreProcessEnv} from '../helpers/process-env.js';
 
 describe('non-interactive utilities', () => {
   afterEach(() => {
@@ -45,7 +46,7 @@ describe('non-interactive utilities', () => {
     });
 
     afterEach(() => {
-      process.env = originalEnv;
+      restoreProcessEnv(originalEnv);
     });
 
     it('returns undefined for undefined input', () => {

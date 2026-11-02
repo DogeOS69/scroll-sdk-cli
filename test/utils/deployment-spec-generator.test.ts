@@ -29,6 +29,7 @@ import {
 import { deriveTsoUrl } from '../../src/utils/signer-policy-derivation.js';
 import {mergeBootstrapValues} from '../../src/utils/spec-bootstrap.js';
 import { generateValuesFiles } from '../../src/utils/values-generator.js';
+import {restoreProcessEnv} from '../helpers/process-env.js';
 
 const TEST_PRIVATE_KEYS = {
   COMMIT_PK: '0x2222222222222222222222222222222222222222222222222222222222222222',
@@ -186,7 +187,7 @@ describe('deployment-spec-generator', () => {
 
   afterEach(() => {
     sinon.restore();
-    process.env = originalEnv;
+    restoreProcessEnv(originalEnv);
   });
 
   describe('resolveInlineEnvRefs', () => {
@@ -197,7 +198,7 @@ describe('deployment-spec-generator', () => {
     });
 
     afterEach(() => {
-      process.env = originalEnv;
+      restoreProcessEnv(originalEnv);
     });
 
     it('returns string unchanged when no $ENV: references', () => {
