@@ -332,6 +332,17 @@ function getGenesisValues(spec: DeploymentSpec): { baseFeePerGasWei: number; dep
   }
 }
 
+/**
+ * The genesis deployer allocation in Dogecoin satoshis (1 sat = 10^10 wei), rounded up.
+ * The Bridge funding output backs the L2 DOGE minted at genesis, so it must cover this.
+ */
+export function deployerAllocationSats(spec: DeploymentSpec): number | undefined {
+  const wei = spec.genesis?.deployerInitialBalanceWei ?? spec.genesis?.deployerInitialBalance ?? '0'
+  if (typeof wei !== 'string' || !/^\d+$/.test(wei)) return undefined
+  const sats = (BigInt(wei) + 9_999_999_999n) / 10_000_000_000n
+  return sats <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(sats) : undefined
+}
+
 function getDogecoinExternalRpc(spec: DeploymentSpec): NonNullable<DeploymentSpec['dogecoin']['externalRpc']> {
   return spec.dogecoin.externalRpc ?? {
     password: spec.dogecoin.rpc?.password ?? '',
@@ -1097,6 +1108,16 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       code: 'E015_INVALID_ROLLUP_CONFIG',
       message: `Bridge sequencer output must be ${GENESIS_SEQUENCER_AMOUNT_SATS} sat (0.42069 DOGE) for the first WF proof`,
       path: 'bridge.targetAmountsSats.sequencer',
+    })
+  }
+
+  const deployerSats = deployerAllocationSats(spec)
+  const bridgeTargetSats = getBridgeTargetAmountsSats(spec).bridge
+  if (deployerSats !== undefined && !(bridgeTargetSats >= deployerSats)) {
+    errors.push({
+      code: 'E015_INVALID_ROLLUP_CONFIG',
+      message: `Bridge funding target (${bridgeTargetSats} sat) must cover the genesis deployer allocation (${deployerSats} sat); the Bridge output backs the L2 DOGE minted at genesis`,
+      path: 'bridge.targetAmountsSats.bridge',
     })
   }
 

@@ -55,7 +55,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       fees: { depositFeeSats: '0', minWithdrawalAmountWei: '1000000000000000', withdrawalFeeWei: '0' },
       keyCounts: { attestation: 3, recovery: 1 },
       seedString: 'test-seed-string',
-      targetAmountsSats: { bridge: 10_000_000, feeWallet: 5_000_000, sequencer: 42_069_000 },
+      targetAmountsSats: { bridge: 100_000_000, feeWallet: 5_000_000, sequencer: 42_069_000 },
       thresholds: { attestation: 2, recovery: 1 },
       timelock: 86_400,
     },
@@ -395,6 +395,19 @@ describe('deployment-spec-generator', () => {
       const result = validateDeploymentSpec(spec);
       expect(result.valid).to.equal(false);
       expect(result.errors.some(error => error.path === 'bridge.targetAmountsSats.sequencer' && error.message.includes('42069000'))).to.equal(true);
+    });
+    it('requires the Bridge funding target to cover the genesis deployer allocation', () => {
+      const bridgeErrors = (spec: DeploymentSpec) => validateDeploymentSpec(spec).errors.filter(error => error.path === 'bridge.targetAmountsSats.bridge');
+      const spec = createMinimalSpec();
+      spec.genesis.deployerInitialBalanceWei = '1000000000000000000000'; // 1,000 DOGE
+      spec.bridge.targetAmountsSats!.bridge = 1_000_000_000; // 10 DOGE
+      expect(bridgeErrors(spec)).to.have.length(1);
+      expect(bridgeErrors(spec)[0].message).to.include('100000000000 sat');
+      spec.bridge.targetAmountsSats!.bridge = 100_000_000_000;
+      expect(bridgeErrors(spec)).to.have.length(0);
+      // A partial satoshi of deployer DOGE still needs a whole satoshi of backing.
+      spec.genesis.deployerInitialBalanceWei = '1000000000000000000001';
+      expect(bridgeErrors(spec)).to.have.length(1);
     });
     it('passes validation for a complete spec', () => {
       const spec = createMinimalSpec();
