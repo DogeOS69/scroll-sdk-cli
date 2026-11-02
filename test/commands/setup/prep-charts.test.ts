@@ -54,6 +54,7 @@ import {canonicalDogecoinNetwork} from '../../../src/utils/dogecoin-network.js'
 import {validateRotationExport} from '../../../src/utils/rotation-export.js'
 import {mergeRotationSigners} from '../../../src/utils/rotation-operations.js'
 import { ensureWithdrawalProofActivationSwitch } from '../../../src/utils/withdrawal-config.js'
+import {restoreProcessEnv} from '../../helpers/process-env.js'
 
 // The governance portal's mainnet rotation export golden: 3 current signers rotating to 4 targets.
 const ROTATION = validateRotationExport(JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../../fixtures/rotation-export/mainnet-example.json'), 'utf8')))
@@ -1265,7 +1266,7 @@ describe.skip('setup prep-charts legacy generation transaction fixture', () => {
       expect(fs.existsSync(path.join(root, '.data/proof-deployment.json'))).to.equal(false)
     } finally {
       process.chdir(originalCwd)
-      process.env = originalEnvironment
+      restoreProcessEnv(originalEnvironment)
       fs.rmSync(root, {force: true, recursive: true})
     }
   })
