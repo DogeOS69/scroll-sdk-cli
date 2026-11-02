@@ -173,10 +173,10 @@ export function readRotationExport(file: string): RotationExport {
   return validateRotationExport(value)
 }
 
-/** W1 must describe the export's deployment. The WP names Dogecoin mainnet `mainnet`. */
+/** W1 must describe the export's deployment. The WP reports Dogecoin mainnet as `mainnet`; the `dogecoin` alias is config input only. */
 export function assertDeploymentIdentity(rotation: RotationExport, status: RotateKeyStatus): void {
   if (status.protocol_instance_id.toLowerCase() !== rotation.protocol_instance_id) throw new Error('The WP serves another deployment: protocol_instance_id differs from the export')
-  if (status.network !== rotation.network) throw new Error(`The WP network ${status.network} differs from the export network ${rotation.network}`)
+  if (status.network !== rotation.network) throw new Error(`The WP network ${JSON.stringify(status.network)} differs from the export network ${rotation.network}`)
 }
 
 /** The live bridge must still be the export's current bridge: key hash, threshold and attestation key set. */
