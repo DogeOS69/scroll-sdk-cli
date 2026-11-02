@@ -1,17 +1,20 @@
 # DogeOS bridge history deployment
 
 The history service is opt-in. Use an SDK revision containing
-[SDK PR #189](https://github.com/DogeOS69/scroll-sdk/pull/189), for example
-`700dd377819d01a83464f8e8dbd0072b145ffc1d`, and published service and Portal images
-that implement the Activity API. The CLI does not infer compatible releases.
-The image tags below are placeholders and must be replaced before validation.
+[SDK PR #189](https://github.com/DogeOS69/scroll-sdk/pull/189) and
+[SDK PR #198](https://github.com/DogeOS69/scroll-sdk/pull/198) (chart 0.0.2), and
+published service and Portal images that implement the Activity API. The service
+image must include [dogeos-core #1637](https://github.com/DogeOS69/dogeos-core/pull/1637):
+the generated values always carry `[ethereum]` and `[l2]`, which older images
+reject. The CLI does not infer compatible releases. The SDK revision and image
+tags below are placeholders and must be replaced before validation.
 
 ```yaml
 bridgeHistory:
   enabled: true
 
 templates:
-  sdkRevision: 700dd377819d01a83464f8e8dbd0072b145ffc1d
+  sdkRevision: TODO_SDK_REVISION_WITH_PR_198
 
 images:
   services:
@@ -41,14 +44,24 @@ so automatic monitoring does not select an API that was never deployed. An
 explicit API URL in existing operator frontend values is preserved.
 
 The service reuses `dogecoin.network` and `dogecoin.indexerStartHeight`. Keep the
-indexer boundary consistent with L1 Interface. `setup prep-charts` refreshes those
-deployment inputs without replacing values-owned polling intervals, PVC size,
-replica count or resource settings. The SDK owns the StatefulSet, shared genesis
+indexer boundary consistent with L1 Interface. Its Ethereum DA inbox and L2
+indexer use the withdrawal processor's sources: `ethereum.start_block` is the
+inbox worker start block, `ethereum.expected_batchers` the eth-da-submitter
+address (`accounts.l1CommitSender`), and `l2` the in-cluster L2 RPC and the
+L2MessageQueue. Until the eth-da-submitter key exists, generated values omit the
+batcher and the service refuses to start, as the withdrawal processor's inbox
+does. `setup prep-charts` refreshes those deployment inputs (network, indexer
+boundary, `ethereum.start_block` when configured, `ethereum.expected_batchers`,
+`l2.rpc_url` and `l2.message_queue_address`); `l2.start_block` is set only when
+absent. It doesn't replace values-owned polling intervals, PVC size, replica
+count or resource settings. The SDK owns the StatefulSet, shared genesis
 and protocol-context mounts, probe defaults and shutdown grace period.
 
 `setup gen-secrets` writes `secrets/dogeos-bridge-history-secret.env` using the
 existing in-cluster Dogecoin RPC endpoint and `dogecoin.clusterRpc` credentials.
-The fields are `DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__URL`, `__USER`, and `__PASS`.
+The fields are `DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__URL`, `__USER`, and `__PASS`,
+and `DOGEOS_BRIDGE_HISTORY_ETHEREUM__RPC_URL` from the Ethereum DA execution RPC
+(`ethereumDa` submitter RPC), the same Secret source as the other Ethereum readers.
 The generated values reference `dogeos-bridge-history-secret-env`; AWS/GCP remote
 references use the configured secret prefix and region/project. Kubernetes
 Secret mode omits ExternalSecrets. Use the existing upload workflow for the

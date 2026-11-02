@@ -28,7 +28,7 @@ import {
 } from '../config/constants.js'
 import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, CORE_DOCKER_DEFAULT_TAG, GENESIS_PREDEPLOYS, L2_BLOCK_TIME_MS, L2_GENESIS_GAS_LIMIT, L2_PAYLOAD_BUILDING_DURATION_MS, L2_TX_FEE_VAULT} from '../constants/deployment.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../constants/docker.js'
-import {HISTORY_API, HISTORY_SERVICE, HISTORY_VALUES, frontendHistoryEnv, historyConfig, validateBridgeHistory} from './bridge-history.js'
+import {HISTORY_API, HISTORY_SERVICE, HISTORY_VALUES, frontendHistoryEnv, historyChainConfig, historyConfig, validateBridgeHistory} from './bridge-history.js'
 import {contractsDeploymentGasPrice} from './contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from './cubesigner-policy-receipts.js'
 import {
@@ -1469,7 +1469,15 @@ function generateBridgeHistoryValues(spec: DeploymentSpec): string {
       secretKey: `DOGEOS_BRIDGE_HISTORY_DOGECOIN_RPC__${field}`,
     })))
   return yaml.dump({
-    config: historyConfig(spec.dogecoin.network, getDogecoinIndexerStartHeight(spec)),
+    config: {
+      ...historyConfig(spec.dogecoin.network, getDogecoinIndexerStartHeight(spec)),
+      ...historyChainConfig({
+        expectedBatcher: spec.accounts.l1CommitSender?.address,
+        inboxStartBlock: getEthereumDaInboxWorkerStartBlock(spec),
+        l2MessageQueue: spec.contracts.overrides?.l2MessageQueue || GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE,
+        l2RpcUrl: L2_RPC_ENDPOINT,
+      }),
+    },
     enableServiceLinks: false,
     envFrom: [{secretRef: {name: secret}}],
     externalSecrets,

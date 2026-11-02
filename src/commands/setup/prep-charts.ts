@@ -15,15 +15,16 @@ import type {DstackControllerConfig} from '../../types/dstack-controller.js'
 
 import {
   L1_INTERFACE_RPC_ENDPOINT,
+  L2_RPC_ENDPOINT,
   YAML_DUMP_OPTIONS,
 } from '../../config/constants.js'
-import {CONTRACTS_DEPLOYMENT_BATCH_SIZE} from '../../constants/deployment.js'
+import {CONTRACTS_DEPLOYMENT_BATCH_SIZE, GENESIS_PREDEPLOYS} from '../../constants/deployment.js'
 import { DogeConfig as DogeConfigType } from '../../types/doge-config.js'
 import {assertSeparateDaProofBuckets} from '../../utils/artifact-bucket-validation.js'
 import {assertTopologyUsesProofArtifactStore, proofArtifactStoreFromDogeConfig} from '../../utils/artifact-stores.js'
 import {reconcileBlockscoutFrontend} from '../../utils/blockscout-values.js'
 import {applyBootnodePublicP2p, validateBootnodePublicP2p} from '../../utils/bootnode-public-p2p.js'
-import {HISTORY_SERVICE, frontendHistoryEnv, historyConfig} from '../../utils/bridge-history.js'
+import {HISTORY_SERVICE, frontendHistoryEnv, historyChainConfig, historyConfig} from '../../utils/bridge-history.js'
 import {CAPACITY_MANAGER_STATE_PATHS, prepareCapacityManagerIfSelected} from '../../utils/capacity-manager.js'
 import {contractsDeploymentGasPrice} from '../../utils/contracts-deployment-gas.js'
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../utils/cubesigner-policy-receipts.js'
@@ -2774,15 +2775,27 @@ export default class SetupPrepCharts extends Command {
       else if (chartName === HISTORY_SERVICE) {
         const before = JSON.stringify(productionYaml)
         const config = historyConfig(this.dogeConfig.network, Number(this.dogeConfig.defaults?.dogecoinIndexerStartHeight))
+        // The withdrawal processor's sources; operator tuning of the other keys survives.
+        const chain = historyChainConfig({
+          expectedBatcher: this.requireSignerAddress('l1CommitSender'),
+          // Unset or empty keeps the values' start_block, as the WP keeps its template's.
+          inboxStartBlock: String(this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock ?? '').trim() === ''
+            ? undefined : Number(this.dogeConfig.defaults?.ethereumDaEmbeddedIndexerStartBlock),
+          l2MessageQueue: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR') || GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE,
+          l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT') || L2_RPC_ENDPOINT,
+        })
         productionYaml.config = {
           ...productionYaml.config, dogecoin_indexer: {...productionYaml.config?.dogecoin_indexer, ...config.dogecoin_indexer},
+          ethereum: {...productionYaml.config?.ethereum, ...chain.ethereum},
+          // start_block stays operator-owned after the first run, as the WP's indexer start is.
+          l2: {start_block: chain.l2.start_block, ...productionYaml.config?.l2, message_queue_address: chain.l2.message_queue_address, rpc_url: chain.l2.rpc_url},
           network: config.network,
         }
         productionYaml.enableServiceLinks = false
         ensureNamedSecretRef(productionYaml, `${HISTORY_SERVICE}-secret-env`, changes)
         if (before !== JSON.stringify(productionYaml)) {
           updated = true
-          changes.push({key: 'history config', newValue: 'deployment network and indexer boundary', oldValue: 'previous configuration'})
+          changes.push({key: 'history config', newValue: 'deployment network, indexer boundary, Ethereum inbox and L2 indexer', oldValue: 'previous configuration'})
         }
       }
       else if (chartName === 'l1-interface') {
