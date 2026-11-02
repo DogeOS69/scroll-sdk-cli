@@ -206,13 +206,17 @@ describe('rpc export-network', () => {
     expect(run).to.throw('requires ethereumDa.blobArchive.s3')
   })
 
-  it('accepts the released L1 Interface bitcoin label only for Dogecoin mainnet and preserves it', () => {
+  it('rejects the retired bitcoin label and writes mainnet for the dogecoin alias', () => {
     env.DOGEOS_L1_INTERFACE_NETWORK_STR = 'bitcoin'
     writeL1()
     expect(run).to.throw('NETWORK_STR must match')
     doge.network = 'mainnet'
+    expect(run).to.throw('Core #1627 rejects')
+    expect(fs.existsSync(path.join(root, 'mainnet/config/l1-interface.env'))).to.equal(false)
+    env.DOGEOS_L1_INTERFACE_NETWORK_STR = 'dogecoin'
+    writeL1()
     run()
-    expect(read('l1-interface.env', 'mainnet')).to.include("NETWORK_STR='bitcoin'")
+    expect(read('l1-interface.env', 'mainnet')).to.include("NETWORK_STR='mainnet'")
     expect(fs.existsSync(path.join(root, 'bitcoin'))).to.equal(false)
   })
 
