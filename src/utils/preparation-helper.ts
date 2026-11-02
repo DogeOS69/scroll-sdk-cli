@@ -9,7 +9,7 @@ import type {Rpc} from './preparation-funding.js'
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS, coreHelperNetwork} from './bridge-constants.js'
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
-import {checkPrivateKey, fundingInput, inspectFunding, publicKeyAddress, verifyDogecoinNetwork, verifyProductionBridge} from './preparation-funding.js'
+import {bridgeFundingMinimumSats, checkPrivateKey, fundingInput, inspectFunding, publicKeyAddress, verifyDogecoinNetwork, verifyProductionBridge} from './preparation-funding.js'
 import {helperSeed, usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, privateWrite, writeJson} from './preparation-io.js'
 import {productionSequencer} from './preparation-sequencer-kms.js'
@@ -46,7 +46,7 @@ export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
   Object.assign(config, {
     attestation_key_count: active.length, attestation_pubkeys: active.map(signer => signer.publicKey),
     attestation_threshold: topology.threshold,
-    bridge_funding_target_amount: config.bridge_target_amount,
+    bridge_funding_target_amount: bridgeFundingMinimumSats(spec, config.bridge_target_amount),
     bridge_funding_tx_count: 1,
     confirmations_required: spec.bridge.confirmationsRequired,
     enable_deposit_seed_txs: false, network: coreHelperNetwork(spec.dogecoin.network),
@@ -139,7 +139,7 @@ export async function verifyManagedHelperFunding(root: string, spec: DeploymentS
 
   const funding = data.initial_bridge_funding_utxos
   if (!Array.isArray(funding) || funding.length !== 1) throw new Error('Expected one marked Bridge funding output from Core')
-  const bridgeFact = await inspectFunding(funding[0], {address: bridge.p2sh_address, confirmations: spec.bridge.confirmationsRequired, marker: true, minimumSats: setup.bridge_funding_target_amount}, rpc)
+  const bridgeFact = await inspectFunding(funding[0], {address: bridge.p2sh_address, confirmations: spec.bridge.confirmationsRequired, marker: true, minimumSats: bridgeFundingMinimumSats(spec, setup.bridge_funding_target_amount)}, rpc)
   if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
   writeJson(path.join(root, '.data/production-wallet-funding.json'), {feeWalletOutputs: feeFacts, sequencer})
   writeJson(path.join(root, '.data/production-bridge-funding.json'), bridgeFact)

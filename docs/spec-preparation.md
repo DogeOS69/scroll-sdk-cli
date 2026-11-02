@@ -751,6 +751,10 @@ exceptions for optional components. The rc.6 release introduced omission of
 zero-valued storage allocations. The rc.7 upstream template changes its default
 deployer balance to 10 DOGE; the CLI continues to pass the deployment's explicit
 `genesis.deployerInitialBalanceWei` instead of silently changing that intent.
+The Bridge funding output backs the L2 DOGE minted to the deployer, so spec
+validation requires `bridge.targetAmountsSats.bridge` to cover that allocation
+in satoshis (wei / 10^10, rounded up), and Bridge funding checks the confirmed
+output against the larger of the two.
 Review and refresh the fixture when the contracts template changes.
 
 Do not replace genesis in an already prepared deployment without regenerating

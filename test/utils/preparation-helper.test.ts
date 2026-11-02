@@ -145,8 +145,18 @@ describe('managed helper funding', () => {
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).to.deep.equal(partial)
   })
 
-  it('accepts correctly marked funding, validates all child outputs and keeps the Ethereum anchor', async () => {
+  it('asks the helper to fund at least the genesis deployer allocation', () => {
+    spec.genesis = {deployerInitialBalanceWei: '20000000000000000001'} as DeploymentSpec['genesis']
     prepareManagedHelper(root, spec)
+    const config = toml.parse(fs.readFileSync(path.join(root, '.data/setup_defaults.toml'), 'utf8'))
+    expect(config.bridge_target_amount).to.equal(1_000_000_000)
+    expect(config.bridge_funding_target_amount).to.equal(2_000_000_001)
+  })
+
+  // The second case adds a 20 DOGE deployer allocation after the helper was prepared for a 10 DOGE Bridge output.
+  for (const deployerWei of [undefined, '20000000000000000000']) it(deployerWei ? 'rejects Bridge funding below the genesis deployer allocation' : 'accepts correctly marked funding, validates all child outputs and keeps the Ethereum anchor', async () => {
+    prepareManagedHelper(root, spec)
+    if (deployerWei) spec.genesis = {deployerInitialBalanceWei: deployerWei} as DeploymentSpec['genesis']
     const key = JSON.parse(fs.readFileSync(path.join(root, '.data/bridge-sequencer-kms.json'), 'utf8')).publicKey
     const sequencerAddress = new bitcore.PublicKey(key).toAddress(bitcore.Networks.regtest).toString()
     const fee = productionFeeWallet(root, spec)
@@ -173,7 +183,7 @@ describe('managed helper funding', () => {
     writeJson(path.join(root, '.data/bridge.json'), {p2sh_address: address, redeem_script_hex: redeem, script_pubkey_hex: script})
     writeJson(path.join(root, '.data/production-ethereum-anchor.json'), {blockNumber: 42})
     privateWrite(path.join(root, '.data/doge-config.toml'), toml.stringify({defaults: {ethereumDaEmbeddedIndexerStartBlock: '999'}}))
-    await verifyManagedHelperFunding(root, spec, async (method, params) => {
+    const verify = verifyManagedHelperFunding(root, spec, async (method, params) => {
       const tx = params[0] === txid ? setup : funding
       switch (method) {
         case 'getblockchaininfo': {return {chain: 'regtest'}}
@@ -185,6 +195,16 @@ describe('managed helper funding', () => {
         default: {throw new Error(`Unexpected RPC ${method}`)}
       }
     })
+    if (deployerWei) {
+      let failure: unknown
+      try {await verify} catch (error) {failure = error}
+      expect(failure).to.be.instanceOf(AwaitingInput)
+      expect((failure as Error).message).to.include('at least 2000000000 satoshis')
+      expect(fs.existsSync(path.join(root, '.data/production-bridge-funding.json'))).to.equal(false)
+      return
+    }
+
+    await verify
     const facts = JSON.parse(fs.readFileSync(path.join(root, '.data/production-wallet-funding.json'), 'utf8'))
     expect(facts.feeWalletOutputs).to.have.length(10)
     expect(facts.sequencer.vout).to.equal(0)

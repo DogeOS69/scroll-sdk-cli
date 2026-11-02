@@ -10,6 +10,7 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {deployerAllocationSats} from './deployment-spec-generator.js'
 import {resolveEthereumRpc} from './ethereum-rpc-secrets.js'
 import {resolveEnvValue} from './non-interactive.js'
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
@@ -158,6 +159,16 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   })
 }
 
+/**
+ * The Bridge funding output backs the L2 DOGE minted to the genesis deployer. setup_defaults.toml
+ * can predate the spec's deployer allocation, so the output must cover both.
+ */
+export function bridgeFundingMinimumSats(spec: DeploymentSpec, configuredSats: number): number {
+  const deployerSats = deployerAllocationSats(spec)
+  if (deployerSats === undefined) throw new Error('genesis.deployerInitialBalanceWei must be a nonnegative decimal integer string')
+  return Math.max(configuredSats, deployerSats)
+}
+
 /** Revalidate the anchors immediately before accepting the final Bridge inventory. */
 export async function prepareProductionBridgeFunding(root: string, spec: DeploymentSpec, rpc: Rpc): Promise<void> {
   const {data, file} = fundingInput(root, spec)
@@ -170,9 +181,10 @@ export async function prepareProductionBridgeFunding(root: string, spec: Deploym
   if (current.blockHash !== facts.sequencer.blockHash) throw new Error('Sequencer confirmation anchor changed; review the reorganization before continuing')
   await inspectFunding(facts.feeWallet, {address: productionFeeWallet(root, spec).address, confirmations: spec.bridge.confirmationsRequired, minimumSats: setup.fee_wallet_target_amount}, rpc)
   if (await rpc('getblockcount', []) >= spec.bridge.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
+  const bridgeMinimumSats = bridgeFundingMinimumSats(spec, setup.bridge_target_amount)
   let funded: FundingFact
-  try {funded = await inspectFunding(data.bridge, {address: bridge.p2sh_address, confirmations: spec.bridge.confirmationsRequired, marker: true, minimumSats: setup.bridge_target_amount}, rpc)} catch (error) {
-    if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address: bridge.p2sh_address, amountSats: setup.bridge_target_amount, file, inputTemplate: {bridge: {txid: 'REPLACE_WITH_BRIDGE_FUNDING_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}}, markerScript: BRIDGE_FUNDING_MARKER, message: `${error.message}. Record bridge.txid and bridge.vout in the funding input`})
+  try {funded = await inspectFunding(data.bridge, {address: bridge.p2sh_address, confirmations: spec.bridge.confirmationsRequired, marker: true, minimumSats: bridgeMinimumSats}, rpc)} catch (error) {
+    if (error instanceof AwaitingInput) throw new AwaitingInput({...error.details, address: bridge.p2sh_address, amountSats: bridgeMinimumSats, file, inputTemplate: {bridge: {txid: 'REPLACE_WITH_BRIDGE_FUNDING_TXID', vout: 'REPLACE_WITH_OUTPUT_INDEX'}}, markerScript: BRIDGE_FUNDING_MARKER, message: `${error.message}. Record bridge.txid and bridge.vout in the funding input`})
     throw error
   }
 
