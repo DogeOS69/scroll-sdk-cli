@@ -111,7 +111,6 @@ export async function setupManagedSigner(options: ManagedSignerCommandOptions): 
       const provisioner = new KmsSignerProvisioner(jsonCtx, flags['aws-profile'])
       const provisioned = await provisioner.provision(role, identity, {
         archive,
-        createArchiveBucket: flags['create-archive-bucket'],
         kmsKeyId: provisionInput.kmsKeyId,
         serviceAccount: provisionInput.serviceAccount,
       })
@@ -263,9 +262,7 @@ function hasKmsProvisioningInput(options: ManagedSignerCommandOptions): boolean 
         flags['archive-bucket'] ||
         flags['archive-region'] ||
         flags['archive-key-prefix'] ||
-        flags['disable-archive'] ||
-        hasFlag('create-archive-bucket') ||
-        hasFlag('no-create-archive-bucket')
+        flags['disable-archive']
       )
     )
   )

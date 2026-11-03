@@ -2,17 +2,37 @@
 
 import { execFileSync } from 'node:child_process'
 
+/** The only AWS writes the CLI makes: content, never resource configuration. */
+export type AwsContentWrite = 'object' | 'secret-value'
+
 export interface AwsCliOptions {
+  /** Explicitly allow one kind of content write for this call. */
+  contentWrite?: AwsContentWrite
   json?: boolean
   profile?: string
   query?: string
   region?: string
 }
 
-/** Fail closed before spawning AWS during the pre-genesis resource discovery stage. */
-export function assertPreparationAwsReadOnly(args: string[]): void {
-  if (process.env.SCROLLSDK_PREPARATION_STAGE !== 'aws') return
-  if (!/^(describe|get|head|list)-/.test(args[1] ?? '')) throw new Error(`setup aws is read-only; refusing ${args.slice(0, 2).join(' ')}`)
+const READ_ONLY = /^(describe|get|head|list|simulate)-/
+// Local credential and kubeconfig helpers; they change no AWS resource.
+const LOCAL_ONLY = new Set(['configure export-credentials', 'eks update-kubeconfig', 'sts get-session-token'])
+const CONTENT_WRITES: Record<AwsContentWrite, ReadonlySet<string>> = {
+  object: new Set(['s3api put-object']),
+  'secret-value': new Set(['secretsmanager create-secret', 'secretsmanager put-secret-value']),
+}
+
+/**
+ * Fail closed before spawning AWS. Infrastructure tooling (CloudFormation)
+ * owns AWS resources; the CLI only reads them, uploads Secret values and
+ * publishes objects into existing buckets. The pre-genesis `setup aws` stage
+ * allows no writes at all.
+ */
+export function assertAwsReadOnly(args: string[], contentWrite?: AwsContentWrite): void {
+  const command = args.slice(0, 2).join(' ')
+  if (READ_ONLY.test(args[1] ?? '') || LOCAL_ONLY.has(command)) return
+  if (contentWrite && process.env.SCROLLSDK_PREPARATION_STAGE !== 'aws' && CONTENT_WRITES[contentWrite].has(command)) return
+  throw new Error(`scrollsdk does not create or change AWS resources; refusing aws ${command}. Manage AWS resources with the infrastructure templates`)
 }
 
 /** Thin `aws` CLI shell-out, mirroring the KmsSignerProvisioner conventions. */
@@ -24,7 +44,7 @@ export class AwsCliRunner {
   }
 
   run(args: string[], options: AwsCliOptions = {}): any {
-    assertPreparationAwsReadOnly(args)
+    assertAwsReadOnly(args, options.contentWrite)
     const fullArgs = [...args]
     if (options.region) fullArgs.push('--region', options.region)
     if (options.profile || this.profile) fullArgs.push('--profile', options.profile || this.profile as string)

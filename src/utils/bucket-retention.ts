@@ -1,5 +1,4 @@
 import {createHash} from 'node:crypto'
-import {isDeepStrictEqual} from 'node:util'
 
 import type {AwsCliRunner} from './aws-cli.js'
 
@@ -77,25 +76,6 @@ export function readLifecycleConfiguration(aws: Aws, store: Pick<Store, 'bucket'
     if (String(error).includes('NoSuchLifecycleConfiguration')) return {Rules: []}
     throw error
   }
-}
-
-export function putLifecycleConfiguration(aws: Aws, store: Pick<Store, 'bucket' | 'region'>, configuration: Document): void {
-  // Restate the bucket's minimum-size default; omitting it would reset it.
-  const minimum = configuration.TransitionDefaultMinimumObjectSize === undefined ? [] : ['--transition-default-minimum-object-size', String(configuration.TransitionDefaultMinimumObjectSize)]
-  aws.json(['s3api', 'put-bucket-lifecycle-configuration', '--bucket', store.bucket, '--lifecycle-configuration', JSON.stringify({Rules: configuration.Rules}), ...minimum], {region: store.region})
-  const stored = new Set((readLifecycleConfiguration(aws, store).Rules as Document[]).map(rule => rule.ID))
-  const bases = Object.values(RETENTION_LIFECYCLE_RULE_BASES) as string[]
-  const missing = (configuration.Rules as Document[]).find(rule => bases.some(base => String(rule.ID).startsWith(base)) && !stored.has(rule.ID))
-  if (missing) throw new Error(`Bucket lifecycle readback is missing rule ${String(missing.ID)}`)
-}
-
-/** Reconcile without a separate plan; never writes when already correct. */
-export function ensureRetentionLifecycle(aws: Aws, kind: RetainedStoreKind, store: Store): {changed: boolean} {
-  const before = readLifecycleConfiguration(aws, store)
-  const after = buildRetentionLifecycle(before, kind, store.bucket, store.keyPrefix)
-  if (isDeepStrictEqual(before, after)) return {changed: false}
-  putLifecycleConfiguration(aws, store, after)
-  return {changed: true}
 }
 
 /** Validate external retention without imposing a CLI-owned lifecycle rule. */

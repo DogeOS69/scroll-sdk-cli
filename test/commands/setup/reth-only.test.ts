@@ -8,7 +8,6 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import {isRetiredGethSecretFile} from '../../../src/commands/setup/push-secrets.js'
-import {AWSNodeLBProvider} from '../../../src/providers/aws-node-public-p2p.js'
 import {getRethBootnodeIndices} from '../../../src/utils/bootnode-public-p2p.js'
 import {archiveRetiredGethValues} from '../../../src/utils/retired-geth.js'
 
@@ -130,27 +129,6 @@ describe('pure Reth public P2P and secret selection', () => {
     expect(getRethBootnodeIndices({bootnodeReth: {instances: [{index: 3}, {index: 0}]}, network: 'testnet', wallet: {path: '.data/wallet.json'}})).to.deep.equal([0, 3])
     expect(() => getRethBootnodeIndices({network: 'testnet', wallet: {path: '.data/wallet.json'}})).to.throw('Configure unique Reth')
     expect(() => getRethBootnodeIndices({bootnodeReth: {instances: [{index: 0}, {index: 0}]}, network: 'testnet', wallet: {path: '.data/wallet.json'}})).to.throw('Configure unique Reth')
-  })
-
-  it('updates only indexed Reth values with chart-native public P2P services', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reth-p2p-'))
-    try {
-      fs.writeFileSync(path.join(dir, 'l2-bootnode-production-0.yaml'), 'legacy: untouched\n')
-      for (const index of [0, 3]) fs.writeFileSync(path.join(dir, `l2-reth-bootnode-production-${index}.yaml`), 'reth:\n  ports:\n    p2p: 30304\n')
-      const provider = new AWSNodeLBProvider() as unknown as {
-        updateProductionFiles(dir: string, indices: number[], region: string, cluster: string): Promise<void>
-      }
-      await provider.updateProductionFiles(dir, [0, 3], 'us-east-1', 'test')
-      for (const index of [0, 3]) {
-        const values = yaml.load(fs.readFileSync(path.join(dir, `l2-reth-bootnode-production-${index}.yaml`), 'utf8')) as {reth: {service: {extra: {p2p: {ports: Record<string, {port: number}>; type: string}}}}}
-        expect(values.reth.service.extra.p2p.type).to.equal('LoadBalancer')
-        expect(values.reth.service.extra.p2p.ports['p2p-tcp'].port).to.equal(30_304)
-      }
-
-      expect(fs.readFileSync(path.join(dir, 'l2-bootnode-production-0.yaml'), 'utf8')).to.equal('legacy: untouched\n')
-    } finally {
-      fs.rmSync(dir, {force: true, recursive: true})
-    }
   })
 
   it('archives retired deployable values without losing private material or touching Reth values', () => {

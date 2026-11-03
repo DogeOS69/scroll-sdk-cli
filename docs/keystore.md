@@ -120,15 +120,13 @@ scrollsdk setup gen-keystore --service eth-da-submitter \
 
 scrollsdk setup eth-da-submitter \
   --archive-bucket dogeos-da --archive-region us-east-1 \
-  --archive-key-prefix devnet --no-create-archive-bucket -N
+  --archive-key-prefix devnet -N
 ```
 
-Archive setup can create a missing bucket and attach its archive
-GetObject/PutObject IAM policy to the submitter's CLI-owned workload role.
-It does not change KMS keys, signer addresses, or role trust. Bucket creation
-retains the previous default for a configured KMS submitter; for a local signer,
-request it explicitly with `--create-archive-bucket`. Disabling the archive does
-not delete buckets or policies. See [the archive guide](ethereum-da-s3.md) for
+Archive setup checks an existing bucket and its retention. It does not create
+buckets, change IAM policies, KMS keys, signer addresses, or role trust; prepare
+those with the infrastructure templates. Disabling the archive does not delete
+buckets or policies. See [the archive guide](ethereum-da-s3.md) for
 public-read configuration and proof storage integration.
 
 Then run `setup gen-secrets` and `setup prep-charts`; use `setup push-secrets`

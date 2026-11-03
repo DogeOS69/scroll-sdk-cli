@@ -12,12 +12,23 @@ describe('aws-cli runner', () => {
     try {
       fs.writeFileSync(path.join(bin, 'aws'), '#!/bin/sh\nkill -9 $$\n', {mode: 0o755})
       process.env.PATH = `${bin}:${originalPath}`
-      expect(() => new AwsCliRunner().json(['secretsmanager', 'put-secret-value', '--secret-string', 'placeholder-must-not-leak']))
+      expect(() => new AwsCliRunner().json(['secretsmanager', 'put-secret-value', '--secret-string', 'placeholder-must-not-leak'], {contentWrite: 'secret-value'}))
         .to.throw('aws secretsmanager put-secret-value failed')
         .with.property('message').that.does.not.include('placeholder-must-not-leak')
     } finally {
       process.env.PATH = originalPath
       fs.rmSync(bin, {force: true, recursive: true})
+    }
+  })
+
+  it('refuses resource changes before spawning aws', () => {
+    const originalPath = process.env.PATH
+    try {
+      process.env.PATH = ''
+      expect(() => new AwsCliRunner().json(['kms', 'create-key'])).to.throw('does not create or change AWS resources')
+      expect(() => new AwsCliRunner().run(['s3api', 'put-bucket-policy', '--bucket', 'example'])).to.throw('does not create or change AWS resources')
+    } finally {
+      process.env.PATH = originalPath
     }
   })
 })

@@ -30,9 +30,11 @@ records so an interrupted attempt can resume with the same identities.
 
 Only current v3 plans are supported. Old plans and incompatible workflow layouts
 are rejected without migration. Preserve old directories and their original CLI
-for recovery. `setup apply` is retired. `gen-keystore`, `eth-da-submitter`,
-`proof-aws-init` and the legacy signer commands are internal resource steps, not
-an independent deployment workflow.
+for recovery. `setup apply` is retired. `gen-keystore`, `eth-da-submitter` and
+the legacy signer commands are internal preparation steps, not an independent
+deployment workflow. The CLI does not create or change AWS resources: prepare
+them with the infrastructure templates, and initialize the proof token Secret
+value with `setup proof-tokens` before `setup aws`.
 
 Final configuration and secret preparation use the saved plan:
 

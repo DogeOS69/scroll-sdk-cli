@@ -13,12 +13,10 @@ configure bucket/writer access. Prepare the signer separately with
 `scrollsdk setup gen-keystore --service eth-da-submitter`. Archive setup does
 not create signing keys or modify the signer identity.
 
-When the submitter uses an AWS KMS signer,
-`scrollsdk setup eth-da-submitter` can create a missing AWS S3 bucket. Bucket
-creation is enabled by default and can be disabled with
-`--no-create-archive-bucket`. A bucket created by the CLI has all public access
-blocked and SSE-S3 (`AES256`) enabled. The CLI does **not** create an anonymous
-read bucket policy, CloudFront distribution, or other public read transport.
+`scrollsdk setup eth-da-submitter` requires an existing bucket. Create the
+bucket, its encryption, Public Access Block and policies with the infrastructure
+templates; the CLI does **not** create or change AWS resources, including an
+anonymous read bucket policy, CloudFront distribution, or other public read transport.
 Operators must configure and verify the `publicBaseUrl` transport separately.
 
 ## Three buckets
@@ -26,10 +24,10 @@ Operators must configure and verify the `publicBaseUrl` transport separately.
 Configure the DA archive, proof artifacts and bootstrap snapshots independently.
 Each store has its own writer permissions and versioned bucket:
 
-| Bucket | doge-config | Writer | Readers | Managed by |
+| Bucket | doge-config | Writer | Readers | Checked by (resources come from the infrastructure templates) |
 |---|---|---|---|---|
 | DA archive | `[ethereumDa.blobArchive.s3]` | eth-da-submitter (put, no delete) | everyone: our services through the S3 VPC endpoint statement, RPC operators through the public statement (the kill switch) | `artifacts access --store da` |
-| Proof artifacts | `[proofArtifacts.s3]` | proof-coordinator (put, delete for its recovery path), withdrawal-processor (put), eth-da-submitter (sidecar namespace only) | external Workers and attestation signers by key (public, unadvertised); the only artifact origin in signer and CubeSigner allowlists | `setup proof-aws-init` |
+| Proof artifacts | `[proofArtifacts.s3]` | proof-coordinator (put, delete for its recovery path), withdrawal-processor (put), eth-da-submitter (sidecar namespace only) | external Workers and attestation signers by key (public, unadvertised); the only artifact origin in signer and CubeSigner allowlists | `setup aws` |
 | Bootstrap snapshots | `[snapshots.s3]` | deploy role (put) | our init containers through the VPC endpoint; public read off unless requested | `artifacts access --store snapshot` |
 
 The CLI selects a **deployment prefix**, not a directory name for each artifact
@@ -73,18 +71,15 @@ In the proof bucket, never grant anonymous `GetObject` to the entire
 `<keyPrefix>/*`: the segmentation-sidecar namespace is internal. List, write,
 and delete remain authenticated even for externally readable objects.
 
-`setup proof-aws-init` distinguishes bucket-policy ownership from object-key
-layout. Use `--artifact-public-read-mode existing-public-s3` when the proof
-bucket already serves anonymous S3 reads for other deployments. In that mode the
-command does not change the bucket-wide Public Access Block settings or other
-statements; it adds this deployment's prefix-scoped read grant only when the
-policy does not already grant those paths, and manages deployment-scoped proof
-resources and, when selected, the prefix-scoped EKS Gateway endpoint grant. `direct-s3` only when the CLI owns the bucket's public-access posture (it then
-also adds the TLS-only `ScrollSdkDenyInsecureTransport` statement), or
-`existing-gateway` when S3 remains private behind an HTTPS gateway.
+The proof bucket's public-read mode separates bucket-policy ownership from
+object-key layout. Use `existing-public-s3` when the proof bucket already serves
+anonymous S3 reads for other deployments: `setup aws` confirms that this
+deployment's prefix-scoped paths are readable and never changes the bucket-wide
+Public Access Block settings or other statements. Use `existing-gateway` when S3
+remains private behind an HTTPS gateway.
 
-CLI-managed direct-read and VPC-endpoint-read statements are identified per
-bucket and deployment prefix. Repeating setup for one prefix preserves the
+Direct-read and VPC-endpoint-read statements planned by `artifacts access` are
+identified per bucket and deployment prefix. Planning for one prefix preserves the
 other prefixes' statements. Legacy fixed statement IDs are migrated only when
 their resources match the selected deployment. Operator-managed broad VPC
 grants and grants for other deployments are preserved, not silently narrowed;
@@ -158,8 +153,7 @@ scrollsdk setup eth-da-submitter --non-interactive --json \
   --archive-bucket example-eth-da-archive \
   --archive-region us-west-2 \
   --archive-key-prefix deployments/testnet-001 \
-  --archive-public-base-url https://example-eth-da-archive.s3.us-west-2.amazonaws.com \
-  --no-create-archive-bucket
+  --archive-public-base-url https://example-eth-da-archive.s3.us-west-2.amazonaws.com
 ```
 
 `--aws-region` on `gen-keystore` selects the KMS/EKS/IRSA region.
@@ -167,28 +161,23 @@ scrollsdk setup eth-da-submitter --non-interactive --json \
 An S3 Gateway endpoint is regional, so proof AWS setup does not associate an
 EKS-region gateway endpoint when a bucket is cross-region.
 
-To let the CLI create a missing bucket, use
-`--create-archive-bucket` (the default) instead. The CLI performs
-`HeadBucket`, creates only on a not-found result, blocks all public access, and
-enables SSE-S3 and versioning. On the submitter's CLI-owned workload role
-it writes the inline policy `eth-da-submitter-s3-archive`:
-`s3:GetObject` and `s3:PutObject` on the archive prefix and, when
-`[proofArtifacts.s3]` is configured, on the proof store's
+`setup eth-da-submitter` checks the bucket with `HeadBucket` and refuses another
+enabled lifecycle rule that would expire, permanently delete or archive blobs
+under the prefix; see [deployment preflight](deployment-preflight.md). The
+submitter's workload role receives the inline policy `eth-da-submitter-s3-archive`
+from the infrastructure templates: `s3:GetObject` and `s3:PutObject` on the
+archive prefix and, when `[proofArtifacts.s3]` is configured, on the proof store's
 `scroll-chunk-segmentation-sidecars/` and
 `scroll-chunk-segmentation-sidecars-by-height/` namespaces. `artifacts access --store
-da` plans and checks the same policy. Every run also reconciles the DA prefix's
-retention lifecycle rule (abort incomplete multipart uploads only, no blob expiry)
-and refuses another enabled rule that would expire, permanently delete or archive
-blobs under the prefix; see [deployment preflight](deployment-preflight.md). `setup proof-aws-init` grants
-`s3:GetObject` and `s3:PutObject` on the proof prefix when it creates or
-manages a proof service IAM role. The Proof Coordinator role additionally receives prefix-conditioned `s3:ListBucket` and `s3:DeleteObject` on
+da` plans and checks the same policy. The proof workload roles grant
+`s3:GetObject` and `s3:PutObject` on the proof prefix. The Proof Coordinator role additionally receives prefix-conditioned `s3:ListBucket` and `s3:DeleteObject` on
 that prefix so it can retire stale locator objects after an operator-requested
 global proof identity regeneration; the Withdrawal Processor role does not.
 The archive-setup writer policy grants neither ListBucket nor DeleteObject.
 With an empty DA-only prefix, its GetObject/PutObject grant covers the bucket
 root. Existing unrelated IAM policies and legacy provisioning grants are not
 removed; the CLI inventories inline and attached policies and rejects excess
-S3 grants before reconciling or reusing the role. Resource policies and other
+S3 grants when planning or checking the role. Resource policies and other
 AWS controls still require a runtime access check. When an
 existing role ARN is supplied or reused, verify its effective permissions
 independently.
@@ -312,7 +301,7 @@ The resolver requests
 | Field | Required | Used by | Description |
 |---|---|---|---|
 | `enabled` | yes | submitter, l1-interface, withdrawal-processor, Reth | Enables S3 upload and readback when `true`. |
-| `bucket` | yes when enabled | eth-da-submitter | Bucket name. Archive setup can create it; creation defaults on for a configured KMS submitter and can be disabled with `--no-create-archive-bucket`. |
+| `bucket` | yes when enabled | eth-da-submitter | Name of an existing bucket; create it with the infrastructure templates. |
 | `region` | yes when enabled | eth-da-submitter | Bucket region. Must match the real bucket region. |
 | `publicBaseUrl` | yes when enabled | l1-interface, withdrawal-processor, Reth | HTTP base URL used for `GET {base}/{keyPrefix}/{0x-versioned-hash}`. |
 | `keyPrefix` | no | submitter and readers | Shared object-key prefix appended between the base URL/bucket and the versioned hash. |

@@ -143,50 +143,46 @@ inputs, segmentation sidecars, materializer outputs, proofs) is
 blobs to the first and only its segmentation sidecars to the second. See
 [ethereum-da-s3.md](ethereum-da-s3.md#three-buckets).
 
-Configure `[proofArtifacts.s3]` (bucket, region, keyPrefix) first, and then
-run:
+Configure `[proofArtifacts.s3]` (bucket, region, keyPrefix) first. The proof
+AWS resources — bucket policy grants for external readers, the Proof Coordinator
+and Withdrawal Processor workload roles, the optional EKS S3 Gateway endpoint
+statement and the token Secret's metadata — are prepared with the infrastructure
+templates. The CLI never creates or changes them: `setup aws` reads them and
+writes `.data/proof-aws.json`. The DA archive configuration is independent.
+
+Before `setup aws`, initialize the token Secret value:
 
 ```bash
-scrollsdk setup proof-aws-init
+scrollsdk setup proof-tokens --secret-name YOUR_PROOF_SECRET --aws-region YOUR_REGION
 ```
 
-This uses the configured proof bucket/prefix, creates or reconciles the proof
-IAM roles and token secret, configures the selected external read transport,
-and writes `.data/proof-aws.json`. The DA archive configuration is independent.
-Choose the public-read mode according to who owns the bucket-level policy:
+It creates `proof-work-token` and the coordinator-only `prover-worker-master`
+when missing and never prints them. Select the public-read mode according to who
+serves external reads:
 
 - `existing-public-s3` uses the regional S3 endpoint on an existing, possibly
-  shared, bucket. The CLI makes the selected prefix's external-consumer paths
-  (including `deployment-kits/`) anonymously readable: when the policy already
-  grants them it is left unchanged, otherwise the CLI adds only this
-  deployment's own prefix-scoped statement. It never edits other statements or
-  any Public Access Block, and stops before IAM/secret changes when a Public
-  Access Block or Deny statement would prevent the reads. The CLI also manages
-  the prefix's IRSA roles, optional EKS S3 Gateway endpoint statement, and
-  proof token secret.
-- `direct-s3` makes the CLI manage anonymous reads for the required external
-  proof paths. Use it only where the CLI is allowed to manage the bucket-wide
-  Public Access Block posture. It rejects an unmanaged public `GetObject`
-  statement that overlaps the selected prefix before creating a VPC endpoint
-  or changing IAM/secrets.
+  shared, bucket. `setup aws` confirms that the selected prefix's external-consumer
+  paths (including `deployment-kits/`) are anonymously readable and stops when a
+  Public Access Block or Deny statement would prevent the reads. Add the missing
+  prefix-scoped grant through the bucket's infrastructure owner.
 - `existing-gateway` keeps S3 private and records an operator-managed
   credential-free HTTPS gateway.
 
-Every mode keeps proof artifacts forever: the CLI owns an abort-only lifecycle rule
-for the prefix and refuses a rule that would expire, permanently delete or archive
-its objects (see [deployment preflight](deployment-preflight.md)).
+Proof artifacts are kept forever: `setup aws` refuses a lifecycle rule that would
+expire, permanently delete or archive objects under the prefix (see
+[deployment preflight](deployment-preflight.md)).
 
 `existing-public-s3` does not narrow a pre-existing broad policy such as
 `arn:aws:s3:::bucket/*`; it only confirms that the required paths are readable.
 Review broader exposure independently.
-If the bucket is in a different AWS region from EKS, the command keeps the
-EKS/Secrets region separate from the artifact region and skips the regional S3
-Gateway endpoint; cross-region access uses the normal S3 endpoint or an
-operator-managed gateway. It does not prepare proof programs.
+If the bucket is in a different AWS region from EKS, keep the EKS/Secrets region
+separate from the artifact region; an S3 Gateway endpoint is regional, so
+cross-region access uses the normal S3 endpoint or an operator-managed gateway.
+Proof programs are prepared separately.
 
 When `existing-gateway` is selected, the bucket policy and S3 Public Access
-Block settings remain entirely operator-managed: `proof-aws-init` does not
-change either one. This matters when the shared archive bucket already serves
+Block settings remain entirely operator-managed; the CLI does not change
+either one. This matters when the shared archive bucket already serves
 raw DA objects publicly. The operator must verify that the supplied HTTPS
 endpoint permits the required exact-key reads; selecting this mode is not
 evidence that the route is reachable or that the bucket is private.
@@ -514,10 +510,10 @@ select a compatible compiler and runtime release while retaining the field and
 credential separation. Verify compiler schema compatibility before deployment in
 addition to the proof manifest and image-pin checks performed by `setup plan`.
 
-**Upgrading from a shared token.** `setup proof-aws-init` adds a fresh
+**Upgrading from a shared token.** `setup proof-tokens` adds a fresh
 `prover-worker-master` to an existing secret. It does not reuse the old
 `prover-worker-token`, which every existing Worker knows. The old property stays
-in place until you pass `--rotate-tokens`, so a running coordinator keeps
+in place until you pass `--rotate`, so a running coordinator keeps
 syncing until `setup prep-charts` repoints it.
 
 **Rotation**, from a shared token or for a later rotation:
@@ -525,9 +521,9 @@ syncing until `setup prep-charts` repoints it.
 1. Drain the old fleet using the Capacity Manager operational procedure. Stop
    scheduling and confirm all owned runs have stopped before rotating credentials.
    Legacy manual sessions must be retired with their original tooling.
-2. For the first migration, run `scrollsdk setup proof-aws-init` to add a fresh
+2. For the first migration, run `scrollsdk setup proof-tokens` to add a fresh
    master while preserving `proof-work-token`. For full rotation, use
-   `--rotate-tokens`: it replaces both `prover-worker-master` and
+   `--rotate`: it replaces both `prover-worker-master` and
    `proof-work-token`.
 3. Re-render with `setup prep-charts` and apply the updated Secret mappings.
    Wait for all affected ExternalSecrets and Kubernetes Secrets to synchronize.

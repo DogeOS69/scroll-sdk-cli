@@ -275,7 +275,7 @@ describe('spec intent through configuration and values projection', () => {
       const content = generateAllConfigs(proofFixture())['doge-config.toml']
       fs.writeFileSync(configPath, content)
       const result = spawnSync(process.execPath, [path.join(cliRoot, 'bin/run.js'), 'setup', 'eth-da-submitter', '--doge-config', configPath,
-        '--archive-bucket', 'audit-proofs', '--no-create-archive-bucket', '-N', '--json'], {
+        '--archive-bucket', 'audit-proofs', '-N', '--json'], {
         cwd: root, encoding: 'utf8', env: {OCLIF_TEST_ROOT: cliRoot, PATH: process.env.PATH, SCROLLSDK_PREPARATION_STEP: 'archive'},
       })
       expect(result.status).not.to.equal(0)

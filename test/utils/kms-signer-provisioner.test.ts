@@ -21,14 +21,13 @@ describe('KMS resource preparation', () => {
   let calls: string[][]
   let exists: boolean
   let alias: string | undefined
-  let failAlias: boolean
   let tags: any[]
   let lifecycle: any
   let keyState: string
   const metadata = () => ({Arn: keyArn, KeyId: 'fixture', KeySpec: 'ECC_SECG_P256K1', KeyState: keyState, KeyUsage: 'SIGN_VERIFY'})
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'kms-resource-'))
-    calls = []; exists = false; alias = undefined; failAlias = false; tags = []; lifecycle = undefined
+    calls = []; exists = false; alias = undefined; tags = []; lifecycle = undefined
     keyState = 'Enabled'
     provisioner = new KmsSignerProvisioner(new JsonOutputContext('test', true), undefined, root)
     const publicKey = generateKeyPairSync('ec', {namedCurve: 'secp256k1'}).publicKey.export({format: 'der', type: 'spki'}).toString('base64')
@@ -47,79 +46,81 @@ describe('KMS resource preparation', () => {
         case 'list-resource-tags': { return {Tags: tags}
         }
 
-        case 'create-key': {
-          exists = true
-          tags = JSON.parse(args[args.indexOf('--tags') + 1])
-          return {KeyMetadata: metadata()}
-        }
-
-        case 'create-alias': {
-          // The immutable identity must be durable before an alias write.
-          expect(JSON.parse(fs.readFileSync(path.join(root, fs.readdirSync(root)[0]), 'utf8')).keyArn).to.equal(keyArn)
-          if (failAlias) throw new Error('Injected alias failure')
-          alias = 'fixture'
-          return {}
-        }
-
         case 'get-bucket-lifecycle-configuration': {
           if (!lifecycle) throw new Error('NoSuchLifecycleConfiguration')
           return lifecycle
-        }
-
-        case 'put-bucket-lifecycle-configuration': {
-          lifecycle = JSON.parse(args[args.indexOf('--lifecycle-configuration') + 1]); return {}
         }
 
         default: { throw new Error(`Unexpected operation ${args[0]} ${args[1]}`)
         }
       }
     }
+
+    provisioner.aws = (args: string[]) => {
+      calls.push(args)
+      if (args[1] === 'head-bucket') return ''
+      throw new Error(`Unexpected operation ${args[0]} ${args[1]}`)
+    }
   })
+  // A key an earlier CLI version created for this deployment, found through its alias.
+  const ownedKey = () => {
+    exists = true; alias = 'fixture'
+    tags = Object.entries({CatalogEntry: role.aliasSuffix, Cluster: identity.eksCluster, Deployment: identity.networkAlias, ManagedBy: 'scrollsdk'}).map(([TagKey, TagValue]) => ({TagKey, TagValue}))
+  }
+
+  const mutated = (from = 0) => calls.slice(from).some(args => /^(create|update|put|delete|tag)-/.test(args[1]))
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
-  it('reuses one immutable key across alias failure and repeated successful preparation', async () => {
-    failAlias = true
-    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('Injected alias failure')}
-    expect(exists).to.equal(true)
-    failAlias = false
+  it('never creates a missing signing key and points to the infrastructure template', async () => {
+    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('infrastructure signing-key template')}
+    expect(mutated()).to.equal(false)
+    expect(fs.readdirSync(root)).to.deep.equal([])
+  })
+
+  it('reuses an existing deployment-owned key through its alias and pins it in a private record', async () => {
+    ownedKey()
     const first = await provisioner.provision(role, identity)
     const second = await provisioner.provision(role, identity)
     expect(second).to.deep.equal(first)
+    expect(first.owned).to.equal(true)
     expect(first.signerConfig.kmsKeyId).to.equal(keyArn)
     expect(first.signerConfig).not.to.have.property('serviceAccountRoleArn')
-    expect(calls.filter(args => args[1] === 'create-key')).to.have.length(1)
+    expect(mutated()).to.equal(false)
     expect(calls.some(args => args[0] === 'iam')).to.equal(false)
     expect(fs.statSync(path.join(root, fs.readdirSync(root)[0])).mode % 0o1000).to.equal(0o600)
   })
 
   it('rejects a disabled saved key without creating a replacement', async () => {
+    ownedKey()
     await provisioner.provision(role, identity)
     keyState = 'Disabled'
     expect(provisioner.inspectAddress(region, keyArn)).to.match(/^0x[\dA-Fa-f]{40}$/)
     const count = calls.length
     try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('must be enabled')}
-    expect(calls.slice(count).some(args => /^(create|update|put|delete)-/.test(args[1]))).to.equal(false)
+    expect(mutated(count)).to.equal(false)
   })
 
   it('does not replace a saved key that has disappeared', async () => {
+    ownedKey()
     await provisioner.provision(role, identity)
     exists = false; alias = undefined
     try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('NotFoundException')}
-    expect(calls.filter(args => args[1] === 'create-key')).to.have.length(1)
+    expect(mutated()).to.equal(false)
   })
 
-  it('refuses to retarget an alias away from a different key', async () => {
+  it('refuses a saved key whose alias now points to a different key', async () => {
+    ownedKey()
     await provisioner.provision(role, identity)
     alias = 'another-key'
     const count = calls.length
-    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('refusing to retarget')}
-    expect(calls.slice(count).some(args => /^(create|update|put|delete)-/.test(args[1]))).to.equal(false)
+    try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('refusing to use it')}
+    expect(mutated(count)).to.equal(false)
   })
 
   it('only implicitly reuses aliases belonging to this deployment', async () => {
     exists = true; alias = 'fixture'
     try {await provisioner.provision(role, identity); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('did not create')}
-    expect(calls.some(args => /^(create|update|put|delete)-/.test(args[1]))).to.equal(false)
+    expect(mutated()).to.equal(false)
   })
 
   it('resolves an explicitly supplied key to its ARN without changing the key or alias', async () => {
@@ -131,20 +132,20 @@ describe('KMS resource preparation', () => {
     expect(fs.readdirSync(root)).to.deep.equal([])
   })
 
-  it('normalizes archive prefixes and reconciles retention without writing IAM grants', async () => {
+  it('normalizes archive prefixes and checks the existing bucket and retention without writing', async () => {
     const archive = {bucket: 'fixture-bucket', created: false, enabled: true, keyPrefix: ' /instances//one/ '}
-    await provisioner.provisionArchive(archive, {createBucket: false})
-    const before = structuredClone(lifecycle)
-    await provisioner.provisionArchive(archive, {createBucket: false})
+    await provisioner.provisionArchive(archive)
     expect(archive.keyPrefix).to.equal('instances/one')
-    expect(lifecycle).to.deep.equal(before)
-    expect(calls.filter(args => args[1] === 'put-bucket-lifecycle-configuration')).to.have.length(1)
+    expect(calls.map(args => args[1])).to.deep.equal(['head-bucket', 'get-bucket-lifecycle-configuration'])
+    lifecycle = {Rules: [{Expiration: {Days: 30}, Filter: {Prefix: 'instances/'}, ID: 'Expire', Status: 'Enabled'}]}
+    try {await provisioner.provisionArchive(archive); expect.fail('must fail')} catch (error) {expect(String(error)).to.include('must be retained')}
+    expect(mutated()).to.equal(false)
     expect(calls.some(args => args[0] === 'iam')).to.equal(false)
   })
 
   it('rejects unsafe archive prefixes before any AWS operation', async () => {
     for (const keyPrefix of ['instances/*', 'instances/../other', 'instances/%2f', 'instances/a b']) {
-      try {await provisioner.provisionArchive({bucket: 'fixture-bucket', created: false, enabled: true, keyPrefix}, {createBucket: true}); expect.fail('must fail')}
+      try {await provisioner.provisionArchive({bucket: 'fixture-bucket', created: false, enabled: true, keyPrefix}); expect.fail('must fail')}
       catch (error) {expect(String(error)).to.include('S3 archive key prefix')}
     }
 

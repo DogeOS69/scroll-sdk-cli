@@ -1,15 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- KMS key policy JSON and AWS CLI responses. */
-import {MANAGED_BY} from './aws-workload-role.js'
 
-/** A signing key is owned only when the CLI created it for this deployment and catalog entry. */
+/** A signing key is owned only when an earlier CLI version created it for this deployment and catalog entry. */
 export interface KmsKeyOwner {catalogEntry: string; cluster: string; deployment: string}
 type Aws = {json(args: string[], options?: {region?: string}): any}
+// Tag value earlier CLI versions wrote on the signing keys they created.
+const MANAGED_BY = 'scrollsdk'
 const array = (value: any): any[] => value === undefined ? [] : Array.isArray(value) ? value : [value]
-
-/** Tags written atomically by create-key; later runs recognize the key from them. */
-export function kmsOwnershipTags(owner: KmsKeyOwner, extra: Record<string, string> = {}): string {
-  return JSON.stringify(Object.entries({...extra, CatalogEntry: owner.catalogEntry, Cluster: owner.cluster, Deployment: owner.deployment, ManagedBy: MANAGED_BY}).map(([TagKey, TagValue]) => ({TagKey, TagValue})))
-}
 
 export function kmsKeyOwned(aws: Aws, keyArn: string, owner: KmsKeyOwner, region?: string): boolean {
   const tags = Object.fromEntries(array(aws.json(['kms', 'list-resource-tags', '--key-id', keyArn], {region}).Tags).map((tag: any) => [tag.TagKey, tag.TagValue]))
