@@ -148,11 +148,16 @@ type `kubernetes.io/dockerconfigjson` for `ghcr.io`).
 scrollsdk setup cubesigner-policy build \
   --compiler-image "ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:$POLICY_COMPILER_DIGEST" \
   --expected-core-revision "$CORE_REVISION" \
+  --source-repo "$CORE_CHECKOUT" \
   --output .data/cubesigner-policy-build --json
 ```
 
 The compiler image must be pinned by digest, and its
 `org.opencontainers.image.revision` label must equal `--expected-core-revision`.
+That revision must contain core #1712 (`7a47ac70`, the policy reader fix). The
+command checks this with `git merge-base --is-ancestor` in the local Core
+checkout given by `--source-repo`; it never fetches. `setup cubesigner-policy
+import` runs the same check on `--core-revision`.
 The command runs it with no network, a read-only root filesystem and no
 capabilities, checks the Wasm against the image's `.sha256` and the WebAssembly
 component header, and writes `build-receipt.json`

@@ -14,8 +14,20 @@ export const runPolicyTool: PolicyToolRunner = (program, args) => {
 }
 
 export const POLICY_BUILD_RECEIPT_SCHEMA = 'dogeos/cubesigner-policy-build-receipt/v2'
+/** Core #1712: the policy reader rejects overruns itself. A policy from an older core must not be attached. */
+export const POLICY_READER_FIX_REVISION = '7a47ac701a7dd94dd9dfd53fa228ee72792b66a7'
 const WASM = 'cubesigner_verifier_policy.wasm'
 const COMPONENT_MAGIC = Buffer.from([0, 97, 115, 109, 13, 0, 1, 0])
+
+/** Check in a local core repository, without fetching, that the policy revision contains core #1712. */
+export function assertPolicyReaderFix(sourceRepo: string, revision: string, run: PolicyToolRunner): void {
+  const repo = fs.realpathSync(sourceRepo)
+  try {
+    run('git', ['-C', repo, 'merge-base', '--is-ancestor', POLICY_READER_FIX_REVISION, revision])
+  } catch {
+    throw new Error(`Core revision ${revision} does not contain core #1712 (${POLICY_READER_FIX_REVISION}); build the policy from a revision that does, or fetch it into the source repository`)
+  }
+}
 
 /**
  * Export the CubeSigner policy Wasm from the release's compiler image. The policy's release values are
@@ -25,11 +37,12 @@ const COMPONENT_MAGIC = Buffer.from([0, 97, 115, 109, 13, 0, 1, 0])
  * that has `read:packages`.
  */
 export function buildCubesignerPolicy(options: {
-  compilerImage: string; expectedRevision: string; output: string; run?: PolicyToolRunner
+  compilerImage: string; expectedRevision: string; output: string; run?: PolicyToolRunner; sourceRepo: string
 }): {directory: string; receipt: string; receiptSha256: string; wasm: string; wasmSha256: string} {
   const run = options.run ?? runPolicyTool
   parseImmutableProofImage(options.compilerImage, 'policy compiler')
   if (!/^[\da-f]{40}$/.test(options.expectedRevision)) throw new Error('Expected a full core revision')
+  assertPolicyReaderFix(options.sourceRepo, options.expectedRevision, run)
   const target = path.resolve(options.output)
   if (fs.existsSync(target)) throw new Error('Policy output already exists')
   fs.mkdirSync(path.dirname(target), {recursive: true})
