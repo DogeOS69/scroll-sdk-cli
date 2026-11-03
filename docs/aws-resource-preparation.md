@@ -34,7 +34,7 @@ protection: teardown remains an explicit infrastructure operation.
 
 New AWS deployments select `infrastructure.aws.workloadIdentity: pod-identity`.
 Prepare the cluster Agent and workload roles/associations using the external
-[CloudFormation lifecycle templates](../infrastructure/aws/cloudformation/README.md).
+[CloudFormation templates](../infrastructure/aws/cloudformation/README.md).
 `setup aws` reads the selected role and association metadata. Rendering pins the
 ServiceAccount name and removes its IRSA role annotation; it does not write IAM
 policies or create an association. Proof consumers use ambient SDK credentials.
