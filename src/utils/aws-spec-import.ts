@@ -14,8 +14,8 @@ type Change = {conflict: boolean; path: string}
 // same kind, for example `PortalTargetGroupArn` or `Bootnode0SecurityGroupId`.
 const kinds: Record<string, string[]> = {
   alb: ['endpoint', 'prefix'], 'bootnode-nlb': ['index', 'prefix'], 'capacity-access': [],
-  'capacity-alb': ['prefix'], 'capacity-network': [], 'capacity-target': ['prefix'], 'http-target': ['binding', 'prefix'],
-  'public-network': ['endpoint', 'index'], 'secret-metadata': [], 'secrets-reader': [], 'signing-identities': [], 'signing-key': ['identity', 'index'], 'workload-access': [],
+  'capacity-alb': ['prefix'], 'capacity-target': ['prefix'], 'http-target': ['binding', 'prefix'],
+  'secret-metadata': [], 'secrets-reader': [], 'signing-identities': [], 'signing-key': ['identity', 'index'], 'workload-access': [],
 }
 const mapping = (v: any): v is Record<string, any> => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
 const name = (v: unknown): v is string => typeof v === 'string' && /^[\dA-Za-z][\w-]*$/.test(v)
@@ -194,9 +194,6 @@ export function importAwsSpec(options: {manifest: string; profile?: string; read
       case 'alb': { alb(outputPrefix); break
       }
 
-      case 'public-network': { alb('Https'); if (source.index !== undefined) nlb('Bootnode'); break
-      }
-
       case 'bootnode-nlb': { nlb(outputPrefix); break
       }
 
@@ -212,21 +209,17 @@ export function importAwsSpec(options: {manifest: string; profile?: string; read
         break
       }
 
-      case 'capacity-alb':
-      case 'capacity-network': {
+      case 'capacity-alb': {
         if (!mapping(spec.capacityManager)) throw new Error('Configure capacityManager intent before importing')
         const base = ['capacityManager', 'connection']
         set([...base, 'mode'], 'existing-alb')
-        const albPrefix = source.kind === 'capacity-network' ? 'Https' : outputPrefix
-        for (const [field, output, resource] of [
-          ['loadBalancerArn', `${albPrefix}LoadBalancerArn`, 'loadbalancer/app/'], ['listenerArn', `${albPrefix}ListenerArn`, 'listener/app/'],
-          ...(source.kind === 'capacity-network' ? [['targetGroupArn', 'ControllerTargetGroupArn', 'targetgroup/']] : []),
-        ]) put([...base, 'existingAlb', field], output, `elasticloadbalancing:${resource}`)
-        if (outputs[`${albPrefix}PrivateUrl`]) {
-          const url = get(`${albPrefix}PrivateUrl`)
-          if (!/^https:\/\/[\d.A-Za-z-]+$/.test(url)) throw new Error('Invalid HttpsPrivateUrl output')
+        put([...base, 'existingAlb', 'loadBalancerArn'], `${outputPrefix}LoadBalancerArn`, 'elasticloadbalancing:loadbalancer/app/')
+        put([...base, 'existingAlb', 'listenerArn'], `${outputPrefix}ListenerArn`, 'elasticloadbalancing:listener/app/')
+        if (outputs[`${outputPrefix}PrivateUrl`]) {
+          const url = get(`${outputPrefix}PrivateUrl`)
+          if (!/^https:\/\/[\d.A-Za-z-]+$/.test(url)) throw new Error('Invalid PrivateUrl output')
           set([...base, 'serverUrl'], url)
-        } else if (!spec.capacityManager.connection?.serverUrl) throw new Error('Older capacity stack lacks HttpsPrivateUrl; fill capacityManager.connection.serverUrl with its certificate hostname')
+        } else if (!spec.capacityManager.connection?.serverUrl) throw new Error('Capacity ALB stack has no PrivateUrl output; fill capacityManager.connection.serverUrl with its certificate hostname')
         break
       }
 

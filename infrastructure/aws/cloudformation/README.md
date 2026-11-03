@@ -10,51 +10,24 @@ it does not create resources, adopt roles or update policies. Keep CloudFormatio
 as the owner. The output JSON below is a handoff artifact, not a `--resources`
 CLI input; `setup import-aws` imports its references into the operator spec.
 
-## Template organization by lifecycle
+## Template organization
 
-Use `stacks/` for a **new** environment. These are ordinary, self-contained
-CloudFormation templates, generated offline from the small components alongside
-this README. They require no nested-stack S3 publication and no extra deployment
-engine. `assemble-stacks.py` never calls AWS.
+Each template describes one kind of resource. Deploy one stack per instance:
+one per signing identity, one per ALB, one per HTTP target, one per bootnode NLB.
+Stacks are ordinary, self-contained CloudFormation templates; there is no
+generator, nested-stack publication or deploy-all engine.
 
-| Lifecycle template | Ownership and update frequency |
-| --- | --- |
-| `stacks/signing-identities.yaml` | All five durable KMS identities and aliases; each identity defaults to reuse and has its own explicit create/reuse input; keys and aliases are retained on deletion |
-| `stacks/workload-access.yaml` | Application permissions, roles and Pod Identity associations; update when permissions or ServiceAccount bindings change |
-| `stacks/capacity-access.yaml` | Optional dstack permissions and association; no GPU allocation |
-| `stacks/public-network.yaml` | Public HTTPS ALB and one bootnode NLB; existing VPC, subnets, certificate and EIPs are supplied |
-| `stacks/capacity-network.yaml` | Optional internal HTTPS ALB and controller target; listener reference is wired inside the template |
-| `stacks/secret-metadata.yaml` | Retained proof Secret metadata only; secret initialization/rotation is a separate operator action |
-| `stacks/cluster-pod-identity.yaml` | Agent add-on owned once per cluster, shared by deployments |
+Resources that already exist are not referenced through wrapper stacks. Adopt
+them with a reviewed CloudFormation resource import kept in that environment's
+private repository, and give the adopted stacks the same output names as these
+templates so `setup import-aws` can read them (use a source `prefix` when one
+stack holds several resources of the same kind).
 
 Keep application HTTP targets/routes (`http-target.yaml`, `http-route.yaml`),
 backend access rules and shared ESO reader grants under their actual owners.
-Separate stacks for these are useful when the target application or platform has
-an independent lifecycle. Repeated peer allowlist edits belong to the network
-owner's reviewed change set; password rotation belongs to the secret owner and
-the affected service, not to re-creating infrastructure or signing identities.
-
-Regenerate and check the lifecycle templates after editing a component:
-
-```bash
-python infrastructure/aws/cloudformation/assemble-stacks.py
-python infrastructure/aws/cloudformation/assemble-stacks.py --check
-cfn-lint infrastructure/aws/cloudformation/stacks/*.yaml
-```
-
-Parameter names in composed templates carry the component prefix (for example
-`EthDaMode`, `EthDaExistingKeyArn`, `EthDaAliasName`, `HttpsVpcId`). Shared
-`Environment` and `ResourceClassification` are entered once. Use the matching `stacks/parameters/*.example.json` as the input skeleton;
-placeholders must be replaced before validation. Listener and VPC references
-within a network stack are connected automatically. Both the component and assembled templates use the
-same `validate_parameters.py` and change-set workflow below.
-
-**Existing stacks stay with their existing resources.** Do not deploy the
-assembled stacks over resources already owned by component stacks. Prefixes are
-CloudFormation logical IDs; changing them is not a harmless file reorganization.
-Consolidating existing ownership requires a separate reviewed resource import or
-refactor. Keeping the existing layout is supported and avoids replacing keys,
-roles or load balancers just to reduce the stack count.
+Repeated peer allowlist edits belong to the network owner's reviewed change set;
+password rotation belongs to the secret owner and the affected service, not to
+re-creating infrastructure or signing identities.
 
 ## Ownership and scope
 
@@ -65,10 +38,9 @@ decision about which keys and resources to reuse.
 
 | Template | Resources created when explicitly deployed | Existing inputs |
 | --- | --- | --- |
-| `signing-key.yaml` | In `create` mode: one signing KMS key and alias. Default `reuse` mode creates neither. | Existing key ARN in reuse mode |
+| `signing-key.yaml` | One signing KMS key and alias, retained on deletion | Operator-selected alias name |
 | `application-roles.yaml` | Six application roles and Pod Identity associations (optional IRSA); fixed two-sequencer example | Five signing key ARNs, two bucket names/prefixes, EKS cluster |
 | `pod-identity-agent.yaml` | One cluster-level EKS Pod Identity Agent add-on | Existing cluster and explicitly selected compatible add-on version |
-| `pod-identity-probe.yaml` | One disposable test role and Pod Identity association; KMS signing and prefix-scoped S3 listing only | Existing nonproduction signing key, bucket/prefix, cluster, test namespace/ServiceAccount names |
 | `secrets-reader-policy.yaml` | One deployment-scoped read policy attached to an existing ESO role; preserves trust/other grants | Existing role name, Secret prefix, optional Secret encryption key |
 | `secrets-reader-role.yaml` | One deployment-scoped External Secrets IRSA reader role | Secret prefix/region, OIDC provider, optional Secret encryption key |
 | `dstack-role.yaml` | One dstack controller role; **zero GPU instances** | EKS cluster, VPC, two or three eligible private worker subnets, optional worker instance profile/role |
@@ -79,12 +51,9 @@ decision about which keys and resources to reuse.
 | `backend-access.yaml` | Explicit backend SG ingress and optional LB SG egress | Actual node/Pod SG, LB SG, actual Pod port range |
 | `bootnode-nlb.yaml` | One NLB, TCP listener, TCP/IP target group, SG and optional peer rule; **zero EIPs** | VPC, two public subnets, two unused EIP allocations |
 
-Buckets are always supplied by the operator. `render-artifact-policy.py` emits a
-complete policy template from a saved existing policy, preserving all other
-statements and adding the selected prefix's HTTPS read grant. Review and deploy
-that template in the bucket region using the current infrastructure owner. It never changes public-access-block settings
-or retention. Do not give two stacks ownership of the same bucket policy.
-They also do not create EKS, VPCs, NAT gateways, databases, certificates, OIDC
+Buckets are always supplied by the operator; their policies belong to the bucket
+owner, such as the environment's adopted storage stack. Do not give two stacks
+ownership of the same bucket policy. The templates do not create EKS, VPCs, NAT gateways, databases, certificates, OIDC
 providers, Secret values, application Kubernetes objects, or GPU workers. The
 optional Pod Identity Agent add-on runs a DaemonSet on existing cluster nodes.
 The other dependencies are existing
@@ -96,11 +65,8 @@ Fee Oracle, L2 sequencer 0, L2 sequencer 1, and the Dogecoin Bridge sequencer us
 by Withdrawal Processor. P2P nodekeys and CubeSigner keys are not these KMS keys.
 The optional Secrets Manager encryption key is a separate symmetric key.
 
-Reuse existing resource references directly; deploying a wrapper reuse stack is
-optional. Do not recreate existing keys or load balancers to adopt this pack.
-To transfer ownership of existing resources, perform a separate reviewed
-CloudFormation import where supported. Referencing an ARN is not importing it.
-Never have the CLI, Terraform, CloudFormation and a Kubernetes Ingress controller
+Do not recreate existing keys or load balancers to adopt this pack; import them
+as described above. Never have the CLI, Terraform, CloudFormation and a Kubernetes Ingress controller
 manage the same resource properties simultaneously.
 
 The six application roles are intentionally readable, fixed examples. For a
@@ -136,44 +102,13 @@ environment variables and mounted credential files from migrated application
 Pods. `WorkloadIdentity=irsa` plus `OidcIssuer` remains available for deliberate
 legacy use; an omitted CLI spec field preserves the previous IRSA behavior.
 
-## Bounded compatibility rehearsal
-
-The probe template is an optional disposable test, separate from formal workload
-associations. Run the same bounded checks with formal ServiceAccounts to verify a
-migration, without changing chain state or secrets.
-
-1. Confirm the workloads run on supported EKS Linux EC2 nodes. Select an Agent
-   version using `aws eks describe-addon-versions` for the cluster version;
-   the example version is not a universal default. If the Agent already exists
-   or EKS Auto Mode provides it, reuse it instead of creating another owner.
-   Nodes need `eks-auth:AssumeRoleForPodIdentity` and connectivity to EKS Auth.
-2. Review and execute `pod-identity-agent.yaml` once per cluster if needed.
-   It uses `ResolveConflicts: NONE` and does not modify node IAM policies.
-3. Review and execute `pod-identity-probe.yaml` with a disposable namespace and
-   ServiceAccount name, an existing nonproduction KMS signing key, and an existing
-   S3 prefix. It creates no KMS keys or buckets and permits no S3 writes. The role
-   trusts only the specified cluster ARN, namespace and ServiceAccount session tags.
-4. Create that ServiceAccount **without** `eks.amazonaws.com/role-arn`, and run
-   temporary bounded Pods with no static credentials, no host network and
-   `AWS_EC2_METADATA_DISABLED=true`. Do not print credential endpoint responses
-   or projected tokens. Check the caller identity equals the probe role, KMS
-   public-key lookup/signing works on a clearly non-transactional test message,
-   and S3 listing succeeds only under the configured prefix. Verify another key
-   and another prefix are denied, and an unassociated ServiceAccount has no
-   credentials. Test each relevant node, not just one Agent instance.
-5. Test a digest-pinned real service image as well. Use isolated configuration,
-   existing public fixture artifacts and ephemeral storage. Disable writers and
-   point chain RPCs at localhost so credential initialization cannot broadcast a
-   transaction. A successful AWS CLI probe alone does not prove application SDK
-   compatibility. Record the exact boundary reached by the application.
-6. Delete the temporary Pods, ConfigMaps and ServiceAccounts, then the probe
-   stack. Retain the cluster Agent only if it will be used; its separate stack
-   is the explicit owner. Never delete existing keys, buckets or shared IRSA roles
-   when removing this probe.
-
-References: [AWS Agent setup](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-agent-setup.html),
-[trust policy conditions](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-role.html),
-[SDK credential chain](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-minimum-sdk.html).
+Install the EKS Pod Identity Agent once per cluster with `pod-identity-agent.yaml`
+if neither an existing add-on nor EKS Auto Mode provides it. Select its version
+with `aws eks describe-addon-versions` for the cluster version. It uses
+`ResolveConflicts: NONE` and does not modify node IAM policies; nodes need
+`eks-auth:AssumeRoleForPodIdentity` and connectivity to EKS Auth. See
+[AWS Agent setup](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-agent-setup.html)
+and [trust policy conditions](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-role.html).
 
 ## Prepare inputs
 
@@ -181,29 +116,25 @@ Keep actual parameter files, stack outputs and environment records in a private
 operator directory outside this public checkout. The files under `parameters/`
 contain nonfunctional placeholders. They are not deployable environment files.
 
-For a new environment, copy the required `stacks/parameters/*.example.json`
-files into that private directory and edit those copies. Shared templates do not
-need environment-specific edits. For example, a private `signing-identities.json`
-can set `Environment=dogeos-testnet-cluster` and use these aliases:
+For a new environment, copy the required `parameters/*.example.json` files into
+that private directory and edit those copies. Shared templates do not need
+environment-specific edits. For example, five private signing-key parameter
+files can set `Environment=dogeos-testnet-cluster` and these `AliasName` values:
 
-| Parameter | Example value |
+| Identity | Example `AliasName` |
 | --- | --- |
-| `EthDaAliasName` | `alias/testnet/dogeos-testnet-cluster/eth-da-submitter` |
-| `FeeOracleAliasName` | `alias/testnet/dogeos-testnet-cluster/fee-oracle` |
-| `Sequencer0AliasName` | `alias/testnet/dogeos-testnet-cluster/sequencer-0` |
-| `Sequencer1AliasName` | `alias/testnet/dogeos-testnet-cluster/sequencer-1` |
-| `BridgeAliasName` | `alias/testnet/dogeos-testnet-cluster/bridge-sequencer` |
+| ETH DA | `alias/testnet/dogeos-testnet-cluster/eth-da-submitter` |
+| Fee Oracle | `alias/testnet/dogeos-testnet-cluster/fee-oracle` |
+| Sequencer 0 | `alias/testnet/dogeos-testnet-cluster/sequencer-0` |
+| Sequencer 1 | `alias/testnet/dogeos-testnet-cluster/sequencer-1` |
+| Bridge | `alias/testnet/dogeos-testnet-cluster/bridge-sequencer` |
 
 Aliases are operator-selected; `alias/dogeos/` in the skeleton is only an
 example. Include the `alias/` prefix in parameter files (the KMS console omits
 it when displaying names). Names must be unique within the AWS account and
 region; `alias/aws/` is reserved. See the
 [AWS alias naming rules](https://docs.aws.amazon.com/kms/latest/APIReference/API_CreateAlias.html).
-To create all five identities, set all five `*Mode` parameters to `create` and
-all five `*ExistingKeyArn` parameters to the empty string. To reuse an identity,
-set its mode to `reuse` and supply its existing key ARN; its alias parameter is
-ignored. Create mode does not adopt an existing alias automatically. Reapply
-changes to the same environment's stack instead of creating another stack for
+A key stack does not adopt an existing alias automatically. Reapply changes to the same environment's stack instead of creating another stack for
 each deployment. `Environment` is a separate stable identifier (letters,
 digits and hyphens), not the slash-separated alias path.
 
@@ -212,7 +143,7 @@ digits and hyphens), not the slash-separated alias path.
    match the rendered Helm releases. For shared ESO or explicit legacy IRSA,
    read the OIDC issuer, supply it **without `https://`**, and use the existing
    IAM OIDC provider.
-2. Select stable signing key ARNs. Verify `ECC_SECG_P256K1`, `SIGN_VERIFY`, enabled
+2. Record the signing key ARNs from the key stack outputs. Verify `ECC_SECG_P256K1`, `SIGN_VERIFY`, enabled
    status, public keys and expected addresses. These templates use same-account
    role/key access; existing key policies must permit the selected roles or
    account IAM delegation. An IAM role policy alone cannot override a key policy.
@@ -258,8 +189,7 @@ limits and budget remain separate configuration.
 ## Resource layout and routing
 
 Keep durable signing identities separate from replaceable application edges.
-Create a signing-key stack per new identity only when needed; five existing keys
-need no key creation. Keys and aliases use `Retain` on deletion/replacement:
+Create one signing-key stack per identity. Keys and aliases use `Retain` on deletion/replacement:
 retained resources stay in AWS and must remain in the resource inventory. This
 does **not** make changing the key identity safe. Reject unintended key
 replacements during change-set review.
@@ -284,7 +214,7 @@ patterns per rule. Blockscout `/api` and `/api/*` rules must precede overlapping
 frontend `/*` rules. Priorities must be unique on the listener.
 
 Enable every Availability Zone where backend Pods can run. For a three-zone
-cluster, set the optional `SubnetC` (`HttpsSubnetC` in lifecycle stacks) as well
+cluster, set the optional `SubnetC` as well
 as `SubnetA` and `SubnetB`, with one subnet per zone. An IP target in an unenabled
 zone is unused even when its health endpoint works. Adding the third subnet
 updates the existing ALB without replacing it.
@@ -407,16 +337,9 @@ Frozen plans and generated values are not modified.
 Run the stages in order: `setup plan`, `setup aws`, `setup genesis`, then the
 funding and runtime stages. Existing KMS keys use `action: reuse`; archive uses
 `action: configure`; proof AWS uses `action: reuse` and an existing delivery mode.
-Initialize the proof token Secret externally before installing workloads:
-
-```bash
-python3 initialize-proof-secret.py --region "$AWS_REGION" --secret-id YOUR_SECRET_NAME
-```
-
-This creates the two token properties only when no version exists. A retry
-preserves existing versions without reading credentials. A private temporary
-file (RAM-backed when `/dev/shm` is available) carries the input and is removed
-on exit; token values never enter arguments or output. Metadata discovery does
+Initialize the proof token Secret contents before installing workloads, as a
+separate operator action recorded in the environment repository. Token values
+never enter templates, parameters, arguments or logs. Metadata discovery does
 not read or validate secret contents.
 
 ## ESO reader access
@@ -456,36 +379,6 @@ classification to stack tags. Aliases, descriptions and resource tags then make
 the lifecycle explicit. Keys/aliases and Secret metadata still use Retain:
 teardown must inventory and explicitly remove retained resources when approved.
 Disable LB deletion protection in a reviewed stack update before deleting it.
-
-## Existing bucket policy handoff
-
-Save the current bucket policy outside this checkout, then render a proposal:
-
-```bash
-python3 render-artifact-policy.py --existing-policy "$INFRA_DIR/bucket-policy.json" \
-  --bucket YOUR_EXISTING_BUCKET --prefix YOUR_LITERAL_PREFIX --kind proof \
-  --output "$INFRA_DIR/proof-policy.template.json"
-```
-
-Use `--kind archive` for the archive prefix. CloudFormation CREATE rejects an
-already-present bucket policy. If it has an existing IaC owner, update that owner.
-For an operator-managed policy, apply the reviewed template explicitly:
-
-```bash
-python3 apply-artifact-policy.py --region YOUR_BUCKET_REGION \
-  --template "$INFRA_DIR/proof-policy.template.json" \
-  --before "$INFRA_DIR/bucket-policy.json"
-```
-
-The script rejects a changed prior snapshot, preserves all prior statements,
-performs one PutBucketPolicy and compares the readback. Repeating the same
-proposal is a no-op. S3 has no policy compare-and-swap, so serialize other policy
-administration for this interval. No public-access-block setting is changed.
- Fetch the current policy again
-immediately before applying and regenerate if it changed. The resulting stack
-owns the complete policy, not an individual statement; use the existing IaC
-owner when one already exists. Removing this stack retains the policy. For
-cleanup, remove only the grant added by this environment through its owner.
 
 ## Local validation
 
