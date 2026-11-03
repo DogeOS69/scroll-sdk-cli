@@ -51,15 +51,16 @@ describe('CloudFormation references to operator spec', () => {
   const run = (flags = {}): ReturnType<typeof importAwsSpec> => importAwsSpec({manifest, spec: specFile, ...flags})
   const read = (): any => yaml.load(fs.readFileSync(specFile, 'utf8'))
 
-  it('imports composed and component outputs, binds by index, preserves intent and is byte-idempotent', () => {
+  it('imports stack outputs, binds by index, preserves intent and is byte-idempotent', () => {
     add('signing-identities', Object.fromEntries(['EthDa', 'FeeOracle', 'Sequencer0', 'Sequencer1', 'Bridge'].map(k => [`${k}KeyArn`, arn(`key/${k}`)])))
     const roleNames = ['EthDa', 'FeeOracle', 'Sequencer0', 'Sequencer1', 'ProofCoordinator', 'WithdrawalProcessor']
     add('workload-access', Object.fromEntries(roleNames.flatMap(k => [[`${k}RoleArn`, arn(`role/${k}`)], [`${k}RoleAssociationId`, `a-${k}`]])))
-    add('public-network', {BootnodeSecurityGroupId: 'sg-0123456789abcdef0', BootnodeTargetGroupArn: arn('targetgroup/bootnode/123'),
-      HttpsListenerArn: lb.ListenerArn, HttpsLoadBalancerArn: lb.LoadBalancerArn}, {endpoint: 'public', index: 1})
+    add('alb', lb, {endpoint: 'public'})
+    add('bootnode-nlb', {SecurityGroupId: 'sg-0123456789abcdef0', TargetGroupArn: arn('targetgroup/bootnode/123')}, {index: 1})
     add('http-target', {TargetGroupArn: arn('targetgroup/portal/123')}, {binding: 'frontends'})
     add('capacity-access', {ControllerRoleAssociationId: 'a-dstack', RoleArn: arn('role/dstack')})
-    add('capacity-network', {ControllerTargetGroupArn: arn('targetgroup/dstack/123'), HttpsListenerArn: lb.ListenerArn, HttpsLoadBalancerArn: lb.LoadBalancerArn, HttpsPrivateUrl: 'https://dstack.example.invalid'})
+    add('capacity-alb', {...lb, PrivateUrl: 'https://dstack.example.invalid'})
+    add('capacity-target', {TargetGroupArn: arn('targetgroup/dstack/123')})
     add('secret-metadata', {SecretName: 'example/proof-token'})
     add('secrets-reader', {RoleArn: arn('role/eso')})
     const original = save()
@@ -230,8 +231,8 @@ describe('CloudFormation references to operator spec', () => {
     expect(read().infrastructure.aws.alb.endpoints.public.loadBalancerArn).eq(lb.LoadBalancerArn)
   })
 
-  it('keeps an older capacity stack certificate URL and refuses to guess it when absent', () => {
-    add('capacity-network', {ControllerTargetGroupArn: arn('targetgroup/dstack/123'), HttpsListenerArn: lb.ListenerArn, HttpsLoadBalancerArn: lb.LoadBalancerArn})
+  it('keeps the configured capacity certificate URL and refuses to guess it when absent', () => {
+    add('capacity-alb', lb)
     save()
     expect(() => run({write: true})).throws('certificate hostname')
     spec.capacityManager.connection = {serverUrl: 'https://dstack.example.invalid'}

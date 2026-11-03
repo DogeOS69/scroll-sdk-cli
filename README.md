@@ -116,9 +116,6 @@ bin/run.js --help
 - [CubeSigner and proof configuration generation design](docs/cubesigner-proof-configuration-design.md)
   — audited policy/proof provenance gaps, receipt-backed configuration,
   provider-neutral Worker handoff, validation rules, and implementation phases.
-- [Fresh devnet redeployment acceptance](docs/devnet-fresh-redeployment.md) — current operator decision: new independent CubeSigner role/key, new Bridge and fresh L2; preserve all existing policies and Kubernetes resources not deployed by this agent.
-- [L1 Interface beta.4e cold start](docs/l1-interface-beta4e-cold-start.md) — required fresh-instance opt-in, isolated storage and verified Kubernetes rollout.
-- [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — verified 2026-09-09 steps, manual edits, release pins and the remaining runtime blocker.
 - [Monitoring account balances](docs/monitoring-balances.md) — `prep-charts`
   generation for fee-oracle on L2, eth-da-submitter on Ethereum DA, and fee-wallet
   UTXO thresholds, including canonical signer validation and Secret-owned RPCs.
@@ -149,15 +146,9 @@ bin/run.js --help
 
 ### Development environment references
 
-These documents describe a specific devnet/Shadowfork environment or historical
-deployment evidence. Their CubeSigner gamma settings and cluster identifiers
-are not general setup requirements.
+Runbooks, checkpoints and recovery records for a specific environment are kept
+with that environment's private operator repository, not in this CLI repository.
 The command reference below lists commands; it does not define execution order.
-
-- [Fresh devnet redeployment acceptance](docs/devnet-fresh-redeployment.md) — environment-specific replacement decisions and recorded acceptance work.
-- [L1 Interface beta.4e cold start](docs/l1-interface-beta4e-cold-start.md) — version-specific fresh-instance configuration and recorded Kubernetes rollout.
-- [New Bridge / native Reth devnet runbook](docs/devnet-new-bridge-20260909.md) — recorded 2026-09-09 steps, manual edits, release pins and runtime blocker.
-- [DogeOS deployment status and runbook corrections](docs/dogeos-deployment-status.md) — historical devnet progress and corrections; not a completed general deployment manual.
 
 # Usage
 

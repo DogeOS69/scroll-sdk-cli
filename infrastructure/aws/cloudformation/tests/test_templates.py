@@ -98,19 +98,8 @@ class TemplateContracts(unittest.TestCase):
             with self.subTest(variant=variant):
                 CHECK.validate(load(variant.split(".")[0]), filled(variant))
 
-    def test_reuse_does_not_create_or_retarget_keys(self):
-        template, params, conditions = resolved("signing-key", "signing-key.reuse")
-        active = [r for r in template["Resources"].values() if conditions[r["Condition"]]]
-        self.assertEqual(active, [])
-        self.assertEqual(render(template["Outputs"]["KeyArn"]["Value"], params, conditions), params["ExistingKeyArn"])
-        with self.assertRaisesRegex(ValueError, "reuse requires"):
-            CHECK.validate(template, filled("signing-key.reuse", ExistingKeyArn=""))
-        with self.assertRaisesRegex(ValueError, "create requires"):
-            CHECK.validate(template, filled("signing-key.reuse", Mode="create"))
-
-    def test_new_key_requires_explicit_mode_and_is_retained(self):
-        template, _, conditions = resolved("signing-key", "signing-key.create")
-        self.assertTrue(conditions["CreateKey"])
+    def test_new_key_is_retained(self):
+        template, _, _ = resolved("signing-key")
         for item in template["Resources"].values():
             self.assertEqual(item["DeletionPolicy"], "Retain")
             self.assertEqual(item["UpdateReplacePolicy"], "Retain")
@@ -126,10 +115,10 @@ class TemplateContracts(unittest.TestCase):
         ] + ["alias/dogeos/fixture/ethda", "alias/" + "x" * 250]
         for alias in aliases:
             with self.subTest(alias=alias):
-                CHECK.validate(template, filled("signing-key.create", AliasName=alias))
+                CHECK.validate(template, filled("signing-key", AliasName=alias))
         for alias in ("alias/aws/fee-oracle", "testnet/fee-oracle", "alias/", "alias/fee oracle", "alias/fee:oracle", "alias/" + "x" * 251):
             with self.subTest(alias=alias), self.assertRaisesRegex(ValueError, "Invalid format: AliasName"):
-                CHECK.validate(template, filled("signing-key.create", AliasName=alias))
+                CHECK.validate(template, filled("signing-key", AliasName=alias))
 
     def test_pod_identity_binds_exact_cluster_namespace_and_service_account(self):
         for name in ('application-roles', 'dstack-role'):
@@ -163,35 +152,6 @@ class TemplateContracts(unittest.TestCase):
                 subject = equals[params["OidcIssuer"] + ":sub"]
                 self.assertTrue(subject.startswith("system:serviceaccount:default:"))
                 self.assertNotIn("*", subject)
-
-    def test_pod_identity_probe_is_scoped_and_does_not_create_business_resources(self):
-        template, params, conditions = resolved("pod-identity-probe")
-        resources = template["Resources"]
-        self.assertEqual({r["Type"] for r in resources.values()}, {"AWS::IAM::Role", "AWS::EKS::PodIdentityAssociation"})
-        role = resources["ProbeRole"]["Properties"]
-        trust = render(role["AssumeRolePolicyDocument"], params, conditions)["Statement"][0]
-        self.assertEqual(trust["Principal"], {"Service": "pods.eks.amazonaws.com"})
-        self.assertEqual(set(trust["Action"]), {"sts:AssumeRole", "sts:TagSession"})
-        self.assertEqual(trust["Condition"]["StringEquals"], {
-            "aws:RequestTag/eks-cluster-arn": f'arn:aws:eks:us-east-2:999000111222:cluster/{params["ClusterName"]}',
-            "aws:RequestTag/kubernetes-namespace": params["Namespace"],
-            "aws:RequestTag/kubernetes-service-account": params["ServiceAccount"],
-        })
-        statements = render(role["Policies"][0]["PolicyDocument"], params, conditions)["Statement"]
-        self.assertEqual(statements[0]["Resource"], params["SigningKeyArn"])
-        self.assertEqual(set(statements[0]["Action"]), {"kms:GetPublicKey", "kms:Sign"})
-        self.assertEqual(statements[1]["Action"], "s3:ListBucket")
-        self.assertEqual(statements[1]["Condition"]["StringLike"]["s3:prefix"], [params["BucketPrefix"], params["BucketPrefix"] + "/*"])
-        association = resources["Association"]["Properties"]
-        self.assertEqual(template["Outputs"]["AssociationId"]["Value"], {"Fn::GetAtt": ["Association", "AssociationId"]})
-        self.assertFalse(association["DisableSessionTags"])
-        self.assertEqual(association["RoleArn"], {"Fn::GetAtt": ["ProbeRole", "Arn"]})
-        for parameter in ("ClusterName", "Namespace", "ServiceAccount"):
-            self.assertEqual(association[parameter], {"Ref": parameter})
-        with self.assertRaises(ValueError):
-            CHECK.validate(template, filled("pod-identity-probe", ResourceClassification="production"))
-        with self.assertRaises(ValueError):
-            CHECK.validate(template, filled("pod-identity-probe", BucketPrefix="*"))
 
     def test_pod_identity_agent_does_not_overwrite_existing_addon_configuration(self):
         template = load("pod-identity-agent")

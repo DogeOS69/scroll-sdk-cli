@@ -37,13 +37,17 @@ One source identifies one stack's role, replacing several manual ARN copies:
 ```yaml
 version: 1
 sources:
-  - kind: signing-identities
-    stack: example-signing-identities
+  - kind: signing-key
+    stack: example-key-sequencer-0
+    identity: sequencer
+    index: 0
   - kind: workload-access
-    stack: example-workload-access
-  - kind: public-network
-    stack: example-public-network
+    stack: example-application-roles
+  - kind: alb
+    stack: example-public-alb
     endpoint: public
+  - kind: bootnode-nlb
+    stack: example-bootnode-0
     index: 0
   - kind: http-target
     stack: example-portal-target
@@ -62,17 +66,15 @@ region. Each named stack is read once; there is no account-wide discovery.
 
 | Source kind | Selection | Fields imported |
 | --- | --- | --- |
-| `signing-identities` | Fixed two-sequencer template | Five key ARNs, regions, reuse/KMS mode; sequencers matched by `index` |
+| `signing-identities` | Stack with the five `*KeyArn` outputs, such as an adopted stack | Five key ARNs, regions, reuse/KMS mode; sequencers matched by `index` |
 | `signing-key` | `identity`: `ethDaSubmitter`, `feeOracle`, `sequencer` (+ `index`), or `bridge` | One key ARN and reuse/KMS configuration |
-| `workload-access` | Fixed two-sequencer template | Six application role ARNs; Pod Identity mode when all six association outputs exist, otherwise IRSA |
+| `workload-access` | `application-roles.yaml` or a stack with the same outputs | Six application role ARNs; Pod Identity mode when all six association outputs exist, otherwise IRSA |
 | `capacity-access` | dstack role stack | `infrastructure.aws.roles.dstackController` |
 | `secrets-reader` | Dedicated reader role stack | `infrastructure.aws.roles.externalSecrets`; does not bind or modify shared ESO |
 | `alb` | Existing spec `endpoint` | ALB/listener references |
-| `public-network` | Existing spec `endpoint`; optional enabled bootnode `index` | Prefixed ALB outputs and optional NLB target group/security group |
 | `http-target` | Existing spec `binding` | Target group ARN; preserves endpoint and Service reference |
 | `bootnode-nlb` | Explicitly enabled bootnode `index` | Existing mode, target group ARN and security group |
-| `capacity-network` | Existing Capacity Manager intent | Existing ALB connection, listener, target group and `HttpsPrivateUrl` |
-| `capacity-alb`, `capacity-target` | Separate existing controller stacks | Same connection from component outputs; ALB uses `PrivateUrl` |
+| `capacity-alb`, `capacity-target` | Internal dstack ALB and controller target stacks | Existing ALB connection, listener, target group and `PrivateUrl` |
 | `secret-metadata` | Proof token metadata stack | `preparation.proofAws.secretName` only |
 
 `alb`, `http-target`, `bootnode-nlb`, `capacity-alb` and `capacity-target` accept an
@@ -93,9 +95,8 @@ stack with several target groups, or one stack with two bootnode NLBs:
 
 A prefix starts with an uppercase letter and contains only letters and digits.
 
-Older internal ALB stacks lack the URL output. Keep the certificate hostname in
-`capacityManager.connection.serverUrl`, or update the stack from the current
-template before importing. Never use an ALB-generated DNS name as a substitute
+An internal ALB stack without the `PrivateUrl` output (for example an adopted
+one) requires the certificate hostname in `capacityManager.connection.serverUrl`. Never use an ALB-generated DNS name as a substitute
 for the certificate hostname. The importer does not guess namespaces, public
 DNS names, workload permissions, bucket delivery modes or Secret contents.
 

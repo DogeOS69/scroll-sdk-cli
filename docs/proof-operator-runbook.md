@@ -51,8 +51,8 @@ The source deadline is required even for mock and disabled modes. CLI emits
 permanent prover failure or verification failure can trigger internal mock
 fallback; enforce continues to reject mock material.
 
-For the preserve-existing-bridge upgrade and its release-material prerequisite,
-see [Next-devnet upgrade without bridge reinitialization](next-devnet-preserve-bridge.md).
+The preserve-existing-bridge upgrade and its release-material prerequisite are
+recorded in the devnet environment's runbook.
 
 `observe` is a staging posture and Attestation Signer refuses it on Dogecoin
 mainnet. A mainnet deployment must not activate proof-conditioned signing until

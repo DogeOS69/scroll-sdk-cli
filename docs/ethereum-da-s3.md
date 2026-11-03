@@ -155,10 +155,10 @@ scrollsdk setup gen-keystore --service eth-da-submitter \
   --network-alias devnet
 
 scrollsdk setup eth-da-submitter --non-interactive --json \
-  --archive-bucket dogeos-eth-da-archive-devnet \
+  --archive-bucket example-eth-da-archive \
   --archive-region us-west-2 \
   --archive-key-prefix deployments/testnet-001 \
-  --archive-public-base-url https://dogeos-eth-da-archive-devnet.s3.us-west-2.amazonaws.com \
+  --archive-public-base-url https://example-eth-da-archive.s3.us-west-2.amazonaws.com \
   --no-create-archive-bucket
 ```
 

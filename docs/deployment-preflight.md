@@ -112,10 +112,10 @@ from local configuration alone. `transport_only` does not require C2F egress.
 ## 3. Prepare artifact access outside the CLI
 
 The infrastructure owner prepares archive/proof prefixes and signer-kit delivery
-before publication. Use `render-artifact-policy.py` in the CloudFormation pack to
-preserve a current complete bucket policy and add a reviewed HTTPS-read grant.
-Apply it in the bucket's region using the owner's infrastructure workflow. The
-publisher verifies uploaded content but does not edit bucket policies.
+before publication. The bucket policy's HTTPS-read grant is changed through the
+bucket owner's infrastructure workflow, such as the environment's CloudFormation
+storage stack. The publisher verifies uploaded content but does not edit bucket
+policies.
 
 ## 4. Check signer-host Docker routing
 

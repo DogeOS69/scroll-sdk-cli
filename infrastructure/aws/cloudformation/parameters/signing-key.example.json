@@ -4,10 +4,6 @@
     "ParameterValue": "REPLACE_ENV"
   },
   {
-    "ParameterKey": "Mode",
-    "ParameterValue": "create"
-  },
-  {
     "ParameterKey": "AliasName",
     "ParameterValue": "alias/dogeos/REPLACE_ENV/REPLACE_PURPOSE"
   }

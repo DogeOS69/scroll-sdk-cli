@@ -1,21 +1,40 @@
 # Copy to your private environment directory; replace stack names.
 # Stack names are explicit: the importer never searches or creates resources.
+# This layout uses one stack per template in this directory.
 version: 1
 sources:
-  - kind: signing-identities
-    stack: REPLACE-signing-identities
+  # signing-key.yaml, one stack per identity.
+  - kind: signing-key
+    stack: REPLACE-key-eth-da
+    identity: ethDaSubmitter
+  - kind: signing-key
+    stack: REPLACE-key-fee-oracle
+    identity: feeOracle
+  - kind: signing-key
+    stack: REPLACE-key-sequencer-0
+    identity: sequencer
+    index: 0            # Identifies the spec index, not the array position.
+  - kind: signing-key
+    stack: REPLACE-key-sequencer-1
+    identity: sequencer
+    index: 1
+  - kind: signing-key
+    stack: REPLACE-key-bridge
+    identity: bridge
+  # application-roles.yaml
   - kind: workload-access
-    stack: REPLACE-workload-access
-  - kind: public-network
-    stack: REPLACE-public-network
+    stack: REPLACE-application-roles
+  # https-alb.yaml, one stack per ALB.
+  - kind: alb
+    stack: REPLACE-public-alb
     endpoint: public
-    # index: 0  # Only when bootnodePublicP2p explicitly enables this bootnode.
   - kind: alb
     stack: REPLACE-tso-alb
     endpoint: tso
   - kind: alb
     stack: REPLACE-proof-alb
     endpoint: proof
+  # http-target.yaml, one stack per backend service.
   - kind: http-target
     stack: REPLACE-rpc-http-target
     binding: l2-reth-rpc-public
@@ -37,28 +56,35 @@ sources:
   - kind: http-target
     stack: REPLACE-proof-target
     binding: proof-coordinator
+  # proof-secret.yaml
   - kind: secret-metadata
-    stack: REPLACE-secret-metadata
+    stack: REPLACE-proof-secret
 # Optional sources: enable only for services selected in your spec.
-# - kind: bootnode-nlb
-#   stack: REPLACE-bootnode-1
-#   index: 1
-# - kind: capacity-access
-#   stack: REPLACE-capacity-access
-# - kind: capacity-network
-#   stack: REPLACE-capacity-network
-# - kind: secrets-reader
+# - kind: bootnode-nlb             # bootnode-nlb.yaml
+#   stack: REPLACE-bootnode-0
+#   index: 0
+# - kind: capacity-access          # dstack-role.yaml
+#   stack: REPLACE-dstack-role
+# - kind: capacity-alb             # https-alb.yaml, internal dstack edge
+#   stack: REPLACE-dstack-alb
+# - kind: capacity-target          # http-target.yaml for the dstack controller
+#   stack: REPLACE-dstack-target
+# - kind: secrets-reader           # secrets-reader-role.yaml
 #   stack: REPLACE-dedicated-secrets-reader
 # For offline import replace `stack` with `file`, relative to this manifest:
+# - kind: workload-access
+#   file: outputs/application-roles.outputs.json
+#
+# Stacks adopted with a CloudFormation import may group resources differently.
+# A stack with the five *KeyArn outputs uses `signing-identities`; a stack with
+# several resources of one kind uses `prefix` to select one of them:
 # - kind: signing-identities
-#   file: outputs/signing-identities.outputs.json
-# Individual existing key stack:
-# - kind: signing-key
-#   stack: REPLACE-sequencer-0-key
-#   identity: sequencer  # ethDaSubmitter, feeOracle, sequencer or bridge
-#   index: 0            # Required for sequencer; identifies spec index, not array position.
-# Separate pre-existing dstack ALB and target stacks:
-# - kind: capacity-alb
-#   stack: REPLACE-dstack-alb
-# - kind: capacity-target
-#   stack: REPLACE-dstack-target
+#   stack: REPLACE-signing-identities
+# - kind: http-target
+#   stack: REPLACE-public-edge
+#   binding: frontends
+#   prefix: Portal                 # reads PortalTargetGroupArn
+# - kind: bootnode-nlb
+#   stack: REPLACE-p2p-network
+#   index: 1
+#   prefix: Bootnode1              # reads Bootnode1TargetGroupArn and Bootnode1SecurityGroupId
