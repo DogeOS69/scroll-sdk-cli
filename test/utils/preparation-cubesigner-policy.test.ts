@@ -6,7 +6,7 @@ import path from 'node:path'
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 import type {PreparationPlan} from '../../src/utils/preparation-plan.js'
 
-import {POLICY_BUILD_RECEIPT_SCHEMA} from '../../src/utils/cubesigner-policy-build.js'
+import {POLICY_BUILD_RECEIPT_SCHEMA, POLICY_READER_FIX_REVISION} from '../../src/utils/cubesigner-policy-build.js'
 import {POLICY_COMPILER_INPUT, POLICY_OUTPUT, prepareCubesignerPolicy} from '../../src/utils/preparation-cubesigner-policy.js'
 import {AwaitingInput, digest, writeJson} from '../../src/utils/preparation-io.js'
 import {preparationSteps} from '../../src/utils/preparation-plan.js'
@@ -16,6 +16,13 @@ const image = `ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:${'a'.repeat(6
 const revision = 'b'.repeat(40)
 const component = Buffer.from([0, 97, 115, 109, 13, 0, 1, 0, 0, 1, 0])
 const spec = {bridge: {cubesigner: {}}, preparation: {bridge: {mode: 'helper'}, proofMaterials: {mode: 'existing'}}, proofTopology: {enforcement: 'observe'}} as DeploymentSpec
+
+/** A fake git for the local core checkout; `readerFix: false` reports the revision as predating core #1712. */
+const git = (readerFix = true) => (program: string, args: string[]) => {
+  expect([program, ...args.slice(2)]).deep.eq(['git', 'merge-base', '--is-ancestor', POLICY_READER_FIX_REVISION, revision])
+  if (!readerFix) throw new Error('git policy operation failed (exit 1)')
+  return ''
+}
 
 describe('staged CubeSigner policy preparation', () => {
   let root: string
@@ -29,7 +36,8 @@ describe('staged CubeSigner policy preparation', () => {
     writeJson(path.join(dir, 'build-receipt.json'), {compilerImage: image, coreRevision: revision, schema: POLICY_BUILD_RECEIPT_SCHEMA, wasm: {path: 'cubesigner_verifier_policy.wasm', sha256: digest(component), sizeBytes: component.length}})
   }
 
-  const select = () => writeJson(path.join(root, POLICY_COMPILER_INPUT), {compilerImage: image, expectedCoreRevision: revision})
+  const select = () => writeJson(path.join(root, POLICY_COMPILER_INPUT), {compilerImage: image, expectedCoreRevision: revision, sourceRepo: root})
+
   beforeEach(() => {root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-preparation-')); calls = []})
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
@@ -38,7 +46,7 @@ describe('staged CubeSigner policy preparation', () => {
     try {await prepareCubesignerPolicy(root, command)} catch (error_) {error = error_}
     expect(error).instanceOf(AwaitingInput)
     expect((error as AwaitingInput).details.file).eq(path.join(root, POLICY_COMPILER_INPUT))
-    expect(JSON.parse(fs.readFileSync(path.join(root, POLICY_COMPILER_INPUT), 'utf8'))).has.keys('compilerImage', 'expectedCoreRevision')
+    expect(JSON.parse(fs.readFileSync(path.join(root, POLICY_COMPILER_INPUT), 'utf8'))).has.keys('compilerImage', 'expectedCoreRevision', 'sourceRepo')
     expect(calls).empty
   })
 
@@ -46,21 +54,27 @@ describe('staged CubeSigner policy preparation', () => {
     select()
     const runner = new CommandPreparationRunner(async (_root, _step, args) => command(args))
     await runner.run({effect: 'local', id: 'cubesigner-policy-build', retry: 'safe', stage: 'policy-prepare', title: 'test'}, spec, root, {} as PreparationPlan)
-    expect(calls[0]).deep.eq(['cubesigner-policy', 'build', '--compiler-image', image, '--expected-core-revision', revision, '--output', path.join(root, POLICY_OUTPUT)])
-    await prepareCubesignerPolicy(root, command)
+    expect(calls[0]).deep.eq(['cubesigner-policy', 'build', '--compiler-image', image, '--expected-core-revision', revision, '--output', path.join(root, POLICY_OUTPUT), '--source-repo', root])
+    await prepareCubesignerPolicy(root, command, git())
     expect(calls).length(1)
     const handoff = JSON.parse(fs.readFileSync(path.join(root, '.data/cubesigner-policy-governance-handoff.json'), 'utf8'))
     expect(handoff.status).eq('built-not-published-or-attached')
     expect(handoff.wasm.sha256).eq(digest(component))
   })
 
+  it('refuses to reuse an export whose core revision predates core #1712', async () => {
+    select(); await prepareCubesignerPolicy(root, command)
+    try {await prepareCubesignerPolicy(root, command, git(false)); expect.fail('must reject')} catch (error) {expect(String(error)).contains('core #1712')}
+    expect(calls).length(1)
+  })
+
   it('rejects altered artifacts or a changed compiler pin without rebuilding', async () => {
     select(); await prepareCubesignerPolicy(root, command)
-    writeJson(path.join(root, POLICY_COMPILER_INPUT), {compilerImage: image, expectedCoreRevision: 'c'.repeat(40)})
-    try {await prepareCubesignerPolicy(root, command); expect.fail('must reject')} catch (error) {expect(String(error)).contains('does not match')}
+    writeJson(path.join(root, POLICY_COMPILER_INPUT), {compilerImage: image, expectedCoreRevision: 'c'.repeat(40), sourceRepo: root})
+    try {await prepareCubesignerPolicy(root, command, () => ''); expect.fail('must reject')} catch (error) {expect(String(error)).contains('does not match')}
     select()
     fs.appendFileSync(path.join(root, POLICY_OUTPUT, 'cubesigner_verifier_policy.wasm'), 'changed')
-    try {await prepareCubesignerPolicy(root, command); expect.fail('must reject')} catch (error) {expect(String(error)).contains('does not match')}
+    try {await prepareCubesignerPolicy(root, command, git()); expect.fail('must reject')} catch (error) {expect(String(error)).contains('does not match')}
     expect(calls).length(1)
   })
 
@@ -69,6 +83,8 @@ describe('staged CubeSigner policy preparation', () => {
       {compilerImage: `dogeos69/cubesigner-policy-compiler@sha256:${'a'.repeat(64)}`, expectedCoreRevision: revision},
       {compilerImage: 'ghcr.io/dogeos69/cubesigner-policy-compiler:latest', expectedCoreRevision: revision},
       {compilerImage: image, expectedCoreRevision: 'main'},
+      {compilerImage: image, expectedCoreRevision: revision},
+      {compilerImage: image, expectedCoreRevision: revision, sourceRepo: 'missing-core-checkout'},
     ]) {
       writeJson(path.join(root, POLICY_COMPILER_INPUT), selection)
       try {await prepareCubesignerPolicy(root, command); expect.fail('must wait')} catch (error) {expect(error).instanceOf(AwaitingInput)}

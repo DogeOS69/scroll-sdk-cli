@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {POLICY_BUILD_RECEIPT_SCHEMA, buildCubesignerPolicy} from '../../src/utils/cubesigner-policy-build.js'
+import {POLICY_BUILD_RECEIPT_SCHEMA, POLICY_READER_FIX_REVISION, buildCubesignerPolicy} from '../../src/utils/cubesigner-policy-build.js'
 
 describe('CubeSigner policy build', () => {
   const image = `ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:${'1'.repeat(64)}`
@@ -16,9 +16,15 @@ describe('CubeSigner policy build', () => {
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
   /** A fake docker whose image writes `wasm` and `digestLine` into the mounted output directory. */
-  function docker(options: {digestLine?: (wasm: Buffer) => string; labelRevision?: string; wasm?: Buffer} = {}) {
+  function docker(options: {digestLine?: (wasm: Buffer) => string; labelRevision?: string; readerFix?: boolean; wasm?: Buffer} = {}) {
     const calls: string[][] = []
     const run = (program: string, args: string[]) => {
+      if (program === 'git') {
+        expect(args.slice(2)).to.deep.equal(['merge-base', '--is-ancestor', POLICY_READER_FIX_REVISION, revision])
+        if (options.readerFix === false) throw new Error('git policy operation failed (exit 1)')
+        return ''
+      }
+
       expect(program).to.equal('docker')
       calls.push(args)
       if (args[0] === 'image') return `${options.labelRevision ?? revision}\n`
@@ -41,7 +47,7 @@ describe('CubeSigner policy build', () => {
 
   it('exports the Wasm offline with one output argument and records its hash', () => {
     const {calls, run} = docker()
-    const result = buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run})
+    const result = buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run, sourceRepo: root})
     const dockerRun = calls.find(args => args[0] === 'run')!
     expect(dockerRun).to.include.members(['--network', 'none', '--read-only', '--cap-drop', 'ALL'])
     expect(dockerRun.slice(dockerRun.indexOf(image))).to.deep.equal([image, '/output/artifact'])
@@ -55,24 +61,31 @@ describe('CubeSigner policy build', () => {
 
   it('refuses a compiler image from another core revision', () => {
     const {run} = docker({labelRevision: 'b'.repeat(40)})
-    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run})).to.throw('revision mismatch')
+    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run, sourceRepo: root})).to.throw('revision mismatch')
+    expect(fs.readdirSync(root)).to.deep.equal([])
+  })
+
+  it('refuses a core revision without core #1712 before pulling the compiler image', () => {
+    const {calls, run} = docker({readerFix: false})
+    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run, sourceRepo: root})).to.throw('core #1712')
+    expect(calls).to.deep.equal([])
     expect(fs.readdirSync(root)).to.deep.equal([])
   })
 
   it('refuses a Wasm that does not match the image sha256', () => {
     const {run} = docker({digestLine: () => `${'0'.repeat(64)}  cubesigner_verifier_policy.wasm\n`})
-    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run})).to.throw('does not match')
+    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run, sourceRepo: root})).to.throw('does not match')
   })
 
   it('refuses output that is not a WebAssembly component', () => {
     const {run} = docker({wasm: Buffer.from('not wasm')})
-    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run})).to.throw('WebAssembly component')
+    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run, sourceRepo: root})).to.throw('WebAssembly component')
   })
 
   it('requires an immutable image reference and a fresh output directory', () => {
     const {run} = docker()
-    expect(() => buildCubesignerPolicy({compilerImage: 'ghcr.io/dogeos69/cubesigner-policy-compiler:v0.3.0', expectedRevision: revision, output: path.join(root, 'policy'), run})).to.throw('sha256')
+    expect(() => buildCubesignerPolicy({compilerImage: 'ghcr.io/dogeos69/cubesigner-policy-compiler:v0.3.0', expectedRevision: revision, output: path.join(root, 'policy'), run, sourceRepo: root})).to.throw('sha256')
     fs.mkdirSync(path.join(root, 'policy'))
-    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run})).to.throw('already exists')
+    expect(() => buildCubesignerPolicy({compilerImage: image, expectedRevision: revision, output: path.join(root, 'policy'), run, sourceRepo: root})).to.throw('already exists')
   })
 })
