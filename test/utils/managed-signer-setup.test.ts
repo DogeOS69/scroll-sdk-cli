@@ -160,7 +160,7 @@ describe('managed signer setup', () => {
         role: 'L1_COMMIT_SENDER',
         service: 'eth-da-submitter',
         serviceAccountName: 'eth-da-submitter',
-        serviceAccountRoleArn: 'arn:aws:iam::074120976575:role/dogeos-shutest-dogeos-devnet-cluster-eth-da-submitter-kms',
+        serviceAccountRoleArn: 'arn:aws:iam::123456789012:role/dogeos-shutest-dogeos-devnet-cluster-eth-da-submitter-kms',
       }
     )
 
@@ -179,7 +179,7 @@ describe('managed signer setup', () => {
       networkAlias: 'prod',
     }
     const kmsKeyId = 'alias/dogeos/prod/dogeos-testnet-cluster/eth-da-submitter'
-    const roleArn = 'arn:aws:iam::074120976575:role/dogeos-prod-dogeos-testnet-cluster-eth-da-submitter-kms'
+    const roleArn = 'arn:aws:iam::123456789012:role/dogeos-prod-dogeos-testnet-cluster-eth-da-submitter-kms'
     const input = resolveKmsSignerInput(
       signerCommandOptions(),
       role,
@@ -222,7 +222,7 @@ describe('managed signer setup', () => {
         role: 'L1_COMMIT_SENDER',
         service: 'eth-da-submitter',
         serviceAccountName: 'custom-submitter',
-        serviceAccountRoleArn: 'arn:aws:iam::074120976575:role/dogeos-shutest-dogeos-devnet-cluster-eth-da-submitter-kms',
+        serviceAccountRoleArn: 'arn:aws:iam::123456789012:role/dogeos-shutest-dogeos-devnet-cluster-eth-da-submitter-kms',
       }
     )
 
@@ -253,7 +253,7 @@ describe('managed signer setup', () => {
         role: 'L2_GAS_ORACLE_SENDER',
         service: 'fee-oracle',
         serviceAccountName: 'fee-oracle',
-        serviceAccountRoleArn: 'arn:aws:iam::074120976575:role/dogeos-shutest-dogeos-devnet-cluster-fee-oracle-kms',
+        serviceAccountRoleArn: 'arn:aws:iam::123456789012:role/dogeos-shutest-dogeos-devnet-cluster-fee-oracle-kms',
       }
     )
 
