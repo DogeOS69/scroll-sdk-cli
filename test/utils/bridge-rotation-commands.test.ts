@@ -179,10 +179,9 @@ describe('bridge rotation export role separation', () => {
 
 describe('bridge rotation deployment identity and predecessor checks', () => {
   const rotation = validateRotationExport(golden())
-  it('accepts canonical mainnet and the legacy dogecoin alias, but rejects mismatches', () => {
+  it('accepts canonical mainnet and rejects every other network name', () => {
     assertDeploymentIdentity(rotation, status(rotation))
-    assertDeploymentIdentity(rotation, status(rotation, {network: 'dogecoin'}))
-    for (const network of ['regtest', 'bitcoin', 'signet', 'unknown', '']) {
+    for (const network of ['dogecoin', 'Mainnet', 'MAINNET', 'regtest', 'bitcoin', 'signet', 'unknown', '']) {
       expect(() => assertDeploymentIdentity(rotation, status(rotation, {network}))).to.throw('network')
     }
 
@@ -336,6 +335,16 @@ describe('bridge rotation register', () => {
     let error: unknown
     try {await registerRotation({cluster, rotation, run})} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('stale or already applied')
+    expect(calls).to.deep.equal([])
+  })
+
+  it('refuses a WP that reports another network name before touching values', async () => {
+    const rotation = validateRotationExport(golden())
+    const {calls, cluster, run} = setup(rotation, [correctness])
+    cluster.wpStatus = async () => status(rotation, {network: 'dogecoin'})
+    let error: unknown
+    try {await registerRotation({cluster, rotation, run})} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('The WP network "dogecoin" differs')
     expect(calls).to.deep.equal([])
   })
 })

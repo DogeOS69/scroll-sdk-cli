@@ -3,7 +3,6 @@ import fs from 'node:fs'
 
 import {assertCompressedSecp256k1PublicKey} from './attestation-signer-descriptor.js'
 import {bridgeHash, parseBridgeScript} from './bridge-rotation.js'
-import {canonicalDogecoinNetwork} from './dogecoin-network.js'
 
 export const ROTATION_EXPORT_SCHEMA = 'dogeos/rotation-export/v1'
 export const MAX_ROTATION_GRACE = 260_000
@@ -174,10 +173,10 @@ export function readRotationExport(file: string): RotationExport {
   return validateRotationExport(value)
 }
 
-/** W1 must describe the export's deployment; older WP status may use the `dogecoin` alias. */
+/** W1 must describe the export's deployment. The WP reports Dogecoin mainnet as `mainnet`; the `dogecoin` alias is config input only. */
 export function assertDeploymentIdentity(rotation: RotationExport, status: RotateKeyStatus): void {
   if (status.protocol_instance_id.toLowerCase() !== rotation.protocol_instance_id) throw new Error('The WP serves another deployment: protocol_instance_id differs from the export')
-  if (canonicalDogecoinNetwork(status.network) !== rotation.network) throw new Error(`The WP network ${status.network} differs from the export network ${rotation.network}`)
+  if (status.network !== rotation.network) throw new Error(`The WP network ${JSON.stringify(status.network)} differs from the export network ${rotation.network}`)
 }
 
 /** The live bridge must still be the export's current bridge: key hash, threshold and attestation key set. */

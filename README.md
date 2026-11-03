@@ -39,9 +39,9 @@ Generated WP signer entries and proof bridge configuration use `mainnet`,
 `testnet` or `regtest` and require Core with
 [DogeOS69/dogeos-core#1627](https://github.com/DogeOS69/dogeos-core/pull/1627).
 Coordinate the CLI and Core upgrade before regenerating or registering signers.
-Rotation identity checks also accept older WP status responses using `dogecoin`
-as the mainnet alias; this does not make new generated configuration compatible
-with older Core binaries. Retained signer entries are normalized to `mainnet`.
+Rotation identity checks require the WP's rotate-key status to report `mainnet`,
+`testnet` or `regtest` exactly, as Core #1627 does; a WP that still reports
+`dogecoin` is refused. Retained signer entries are normalized to `mainnet`.
 Bridge-genesis helper inputs retain the `dogecoin` alias for pinned older tools;
 Core #1627 still accepts that input alias. `bitcoin` is not a Dogecoin network.
 
