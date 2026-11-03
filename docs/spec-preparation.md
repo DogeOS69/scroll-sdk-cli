@@ -693,9 +693,15 @@ Core release owner:
 ```json
 {
   "compilerImage": "ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:REPLACE_WITH_RELEASE_IMAGE_DIGEST",
-  "expectedCoreRevision": "REPLACE_WITH_RELEASE_CORE_COMMIT"
+  "expectedCoreRevision": "REPLACE_WITH_RELEASE_CORE_COMMIT",
+  "sourceRepo": "REPLACE_WITH_LOCAL_CORE_CHECKOUT_CONTAINING_THAT_COMMIT"
 }
 ```
+
+`sourceRepo` is a local Core checkout, absolute or relative to the deployment
+directory. The stage uses it only to check that the commit contains core #1712
+(the policy reader fix). It checks again before reusing an earlier export, so a
+pre-#1712 policy must be rebuilt in a new output directory.
 
 These are release provenance, not values an operator invents or the proof
 producer's image digest. Authenticate Docker to private GHCR with a token granting

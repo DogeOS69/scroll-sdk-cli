@@ -3,7 +3,7 @@ import path from 'node:path'
 
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
-import {POLICY_BUILD_RECEIPT_SCHEMA} from './cubesigner-policy-build.js'
+import {POLICY_BUILD_RECEIPT_SCHEMA, type PolicyToolRunner, assertPolicyReaderFix, runPolicyTool} from './cubesigner-policy-build.js'
 import {type ExternalPolicySelection, verifyExternalPolicy} from './cubesigner-policy-import.js'
 import {AwaitingInput, localPath, writeJson} from './preparation-io.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
@@ -16,20 +16,31 @@ export function needsPreparationPolicy(spec: DeploymentSpec): boolean {
 }
 
 /** Export only; publication and governed attachment remain separate operator actions. */
-export async function prepareCubesignerPolicy(root: string, command: (args: string[]) => Promise<void>): Promise<void> {
+export async function prepareCubesignerPolicy(root: string, command: (args: string[]) => Promise<void>, run: PolicyToolRunner = runPolicyTool): Promise<void> {
   const input = localPath(root, POLICY_COMPILER_INPUT)
   const inputTemplate = {
     compilerImage: 'ghcr.io/dogeos69/cubesigner-policy-compiler@sha256:REPLACE_WITH_RELEASE_IMAGE_DIGEST',
     expectedCoreRevision: 'REPLACE_WITH_RELEASE_CORE_COMMIT',
+    sourceRepo: 'REPLACE_WITH_LOCAL_CORE_CHECKOUT_CONTAINING_THAT_COMMIT',
   }
   if (!fs.existsSync(input)) writeJson(input, inputTemplate)
-  let selection: {buildReceiptSha256?: unknown; compilerImage?: unknown; expectedCoreRevision?: unknown; method?: unknown}
+  let selection: {buildReceiptSha256?: unknown; compilerImage?: unknown; expectedCoreRevision?: unknown; method?: unknown; sourceRepo?: unknown}
   try {selection = JSON.parse(fs.readFileSync(proofRegularFile(input, 16 * 1024), 'utf8'))} catch {
     throw new AwaitingInput({file: input, inputTemplate, message: 'Policy compiler input must be a JSON object. Use the private compiler image digest and Core commit from the approved Core release; no credentials belong in this file.'})
   }
 
   if (selection?.method === 'external') {
     const verified = verifyExternalPolicy(root, selection as ExternalPolicySelection)
+    if (typeof selection.sourceRepo !== 'string' || !selection.sourceRepo.trim() || !fs.existsSync(path.resolve(root, selection.sourceRepo))) {
+      throw new AwaitingInput({
+        file: input,
+        inputTemplate: {buildReceiptSha256: selection.buildReceiptSha256, expectedCoreRevision: selection.expectedCoreRevision, method: 'external', sourceRepo: inputTemplate.sourceRepo},
+        message: 'External policy reuse requires a local Core checkout to verify core #1712 ancestry. Supply sourceRepo in the policy selection, or rerun setup cubesigner-policy import with the same pinned inputs and --source-repo.',
+      })
+    }
+
+    // Legacy imports also need the reader fix; artifact integrity alone does not establish ancestry.
+    assertPolicyReaderFix(path.resolve(root, selection.sourceRepo), verified.receipt.coreRevision, run)
     writeJson(localPath(root, '.data/cubesigner-policy-governance-handoff.json'), {
       buildReceipt: {path: `${POLICY_OUTPUT}/build-receipt.json`, sha256: proofFileHash(verified.receiptFile)},
       buildScript: verified.receipt.buildScript,
@@ -49,13 +60,18 @@ export async function prepareCubesignerPolicy(root: string, command: (args: stri
   if (!selection || typeof selection !== 'object'
     || selection.method !== undefined
     || typeof selection.compilerImage !== 'string' || !/^ghcr\.io\/dogeos69\/cubesigner-policy-compiler@sha256:[\da-f]{64}$/.test(selection.compilerImage)
-    || typeof selection.expectedCoreRevision !== 'string' || !/^[\da-f]{40}$/.test(selection.expectedCoreRevision)) {
-    throw new AwaitingInput({file: input, inputTemplate, message: 'Supply the policy compiler digest and full Core commit from the approved Core release (not the proof producer). Authenticate Docker to private GHCR with read:packages, then rerun scrollsdk setup policy-prepare.'})
+    || typeof selection.expectedCoreRevision !== 'string' || !/^[\da-f]{40}$/.test(selection.expectedCoreRevision)
+    || typeof selection.sourceRepo !== 'string' || !fs.existsSync(path.resolve(root, selection.sourceRepo))) {
+    throw new AwaitingInput({file: input, inputTemplate, message: 'Supply the policy compiler digest and full Core commit from the approved Core release (not the proof producer), and a local Core checkout containing that commit. Authenticate Docker to private GHCR with read:packages, then rerun scrollsdk setup policy-prepare.'})
   }
 
+  const sourceRepo = path.resolve(root, selection.sourceRepo)
   const output = localPath(root, POLICY_OUTPUT)
-  if (!fs.existsSync(output)) {
-    await command(['cubesigner-policy', 'build', '--compiler-image', selection.compilerImage, '--expected-core-revision', selection.expectedCoreRevision, '--output', output])
+  if (fs.existsSync(output)) {
+    // An export from before this check may predate core #1712; it must be rebuilt, not reused.
+    assertPolicyReaderFix(sourceRepo, selection.expectedCoreRevision, run)
+  } else {
+    await command(['cubesigner-policy', 'build', '--compiler-image', selection.compilerImage, '--expected-core-revision', selection.expectedCoreRevision, '--output', output, '--source-repo', sourceRepo])
   }
 
   // Reconcile a successful export followed by an interrupted workflow checkpoint.
