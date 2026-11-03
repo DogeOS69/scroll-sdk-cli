@@ -128,12 +128,19 @@ scrollsdk setup cubesigner-policy import \
 ```
 
 The command checks the component header, artifact hash, current protocol-context
-hash, both local Git commits, and the script bytes at the selected commit. It
+hash, both local Git commits, core #1712 ancestry of the policy source commit,
+and the script bytes at the selected commit. It
 archives the component/checksum and an external-build receipt in
 `.data/cubesigner-policy/`, and selects `method: external` in
 `.scrollsdk/inputs/cubesigner-policy/compiler.json`. It performs no build,
 fetch, provider mutation, or preparation-state edit. Matching retries are safe;
 conflicting selections/output require inspection and are not overwritten.
+The local selection also retains `sourceRepo` for the ancestry check when
+preparation reuses the artifact; this path is not added to the build receipt.
+For an older selection without `sourceRepo`, preparation requests that input
+before writing a governance handoff. Rerunning the import with the same pinned
+inputs and `--source-repo` verifies the existing artifact and adds the local
+checkout path without rebuilding or replacing the receipt.
 Final proof readiness permits the imported policy source commit to differ from
 the proof image release commit. This requires the pinned external-build import
 to match the governed policy's source commit and Wasm hash, with the current

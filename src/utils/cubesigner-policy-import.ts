@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {type PolicyToolRunner, runPolicyTool} from './cubesigner-policy-build.js'
+import {type PolicyToolRunner, assertPolicyReaderFix, runPolicyTool} from './cubesigner-policy-build.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
@@ -24,7 +24,7 @@ function readPolicyJson(file: string, limit: number) {
 }
 
 export type ExternalPolicySelection = {
-  buildReceiptSha256: string; expectedCoreRevision: string; method: 'external'
+  buildReceiptSha256: string; expectedCoreRevision: string; method: 'external'; sourceRepo?: string
 }
 
 /** Validate a local import, without claiming reproducibility, governance, or live verification. */
@@ -70,6 +70,8 @@ export function importCubesignerPolicy(options: {
     if (run('git', ['-C', repo, 'rev-parse', '--verify', `${revision}^{commit}`]).trim() !== revision) throw new Error('Source revision is not the requested commit')
   }
 
+  assertPolicyReaderFix(repo, options.coreRevision, run)
+
   const script = run('git', ['-C', repo, 'show', `${options.buildScriptRevision}:${SCRIPT}`])
   if (!script.trim()) throw new Error('Build script is empty')
   const receipt = {
@@ -81,12 +83,16 @@ export function importCubesignerPolicy(options: {
     wasm: {path: WASM, sha256: options.expectedWasmSha256, sizeBytes: wasm.length},
   }
   const receiptText = JSON.stringify(receipt, null, 2) + '\n'
-  const selection: ExternalPolicySelection = {buildReceiptSha256: digest(receiptText), expectedCoreRevision: options.coreRevision, method: 'external'}
+  const selection: ExternalPolicySelection = {buildReceiptSha256: digest(receiptText), expectedCoreRevision: options.coreRevision, method: 'external', sourceRepo: repo}
   const input = localPath(root, EXTERNAL_POLICY_INPUT)
+  let saveSelection = !fs.existsSync(input)
   if (fs.existsSync(input)) {
     const existing = readPolicyJson(input, 16 * 1024)
     if (existing.method !== selection.method || existing.expectedCoreRevision !== selection.expectedCoreRevision || existing.buildReceiptSha256 !== selection.buildReceiptSha256
-      || Object.keys(existing).length !== 3) throw new Error('Policy selection already exists with different inputs; inspect it before importing')
+      || (existing.sourceRepo !== undefined && existing.sourceRepo !== repo)
+      || Object.keys(existing).some(key => !['buildReceiptSha256', 'expectedCoreRevision', 'method', 'sourceRepo'].includes(key))) throw new Error('Policy selection already exists with different inputs; inspect it before importing')
+    // Upgrade a matching legacy selection only after the existing artifact is verified below.
+    saveSelection = existing.sourceRepo === undefined
   }
 
   const output = localPath(root, EXTERNAL_POLICY_OUTPUT)
@@ -103,7 +109,7 @@ export function importCubesignerPolicy(options: {
 
   // An interrupted import can resume from matching artifacts. Conflicting output is never overwritten.
   const verified = verifyExternalPolicy(root, selection)
-  if (!fs.existsSync(input)) writeJson(input, selection)
+  if (saveSelection) writeJson(input, selection)
   return {
     buildReceipt: verified.receiptFile,
     buildReceiptSha256: selection.buildReceiptSha256,

@@ -10,13 +10,14 @@ export default class CubesignerPolicyBuild extends Command {
     'expected-core-revision': Flags.string({required: true}),
     json: Flags.boolean({default: false}),
     output: Flags.string({required: true}),
+    'source-repo': Flags.string({description: 'Local Core repository containing the expected revision, used to check it includes core #1712; no checkout or fetch is performed', required: true}),
   }
 
   async run(): Promise<void> {
     const {flags} = await this.parse(CubesignerPolicyBuild)
     const output = new JsonOutputContext('setup cubesigner-policy build', flags.json)
     try {
-      output.success(buildCubesignerPolicy({compilerImage: flags['compiler-image'], expectedRevision: flags['expected-core-revision'], output: flags.output}))
+      output.success(buildCubesignerPolicy({compilerImage: flags['compiler-image'], expectedRevision: flags['expected-core-revision'], output: flags.output, sourceRepo: flags['source-repo']}))
     } catch (error) { output.error('E740_POLICY_BUILD_FAILED', String(error), 'CONFIGURATION', true) }
   }
 }
