@@ -178,7 +178,10 @@ export function importAwsSpec(options: {manifest: string; profile?: string; read
         break
       }
 
-      case 'capacity-access': { put(['infrastructure', 'aws', 'roles', 'dstackController'], 'RoleArn', 'iam:role/'); break
+      case 'capacity-access': {
+        set(['infrastructure', 'aws', 'workloadIdentity'], outputs.ControllerRoleAssociationId ? 'pod-identity' : 'irsa')
+        put(['infrastructure', 'aws', 'roles', 'dstackController'], 'RoleArn', 'iam:role/')
+        break
       }
 
       case 'secrets-reader': { put(['infrastructure', 'aws', 'roles', 'externalSecrets'], 'RoleArn', 'iam:role/'); break

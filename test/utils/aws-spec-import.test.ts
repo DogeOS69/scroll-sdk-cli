@@ -58,7 +58,7 @@ describe('CloudFormation references to operator spec', () => {
     add('public-network', {BootnodeSecurityGroupId: 'sg-0123456789abcdef0', BootnodeTargetGroupArn: arn('targetgroup/bootnode/123'),
       HttpsListenerArn: lb.ListenerArn, HttpsLoadBalancerArn: lb.LoadBalancerArn}, {endpoint: 'public', index: 1})
     add('http-target', {TargetGroupArn: arn('targetgroup/portal/123')}, {binding: 'frontends'})
-    add('capacity-access', {RoleArn: arn('role/dstack')})
+    add('capacity-access', {ControllerRoleAssociationId: 'a-dstack', RoleArn: arn('role/dstack')})
     add('capacity-network', {ControllerTargetGroupArn: arn('targetgroup/dstack/123'), HttpsListenerArn: lb.ListenerArn, HttpsLoadBalancerArn: lb.LoadBalancerArn, HttpsPrivateUrl: 'https://dstack.example.invalid'})
     add('secret-metadata', {SecretName: 'example/proof-token'})
     add('secrets-reader', {RoleArn: arn('role/eso')})
@@ -108,6 +108,32 @@ describe('CloudFormation references to operator spec', () => {
     run({replace: true, write: true})
     expect(read().infrastructure.aws.alb.endpoints.public.loadBalancerArn).eq(lb.LoadBalancerArn)
   })
+
+  for (const mode of ['pod-identity', 'irsa']) {
+    it(`imports ${mode} from a standalone capacity-access stack`, () => {
+      delete spec.infrastructure.aws.workloadIdentity
+      add('capacity-access', {RoleArn: arn('role/dstack'), ...(mode === 'pod-identity' ? {ControllerRoleAssociationId: 'a-dstack'} : {})})
+      save(); run({write: true})
+      expect(read().infrastructure.aws.workloadIdentity).eq(mode)
+      expect(read().infrastructure.aws.roles.dstackController).eq(arn('role/dstack'))
+    })
+
+    for (const capacityFirst of [false, true]) {
+      it(`rejects conflicting ${mode} capacity identity with capacity source ${capacityFirst ? 'first' : 'last'}`, () => {
+        const roleNames = ['EthDa', 'FeeOracle', 'Sequencer0', 'Sequencer1', 'ProofCoordinator', 'WithdrawalProcessor']
+        add('workload-access', Object.fromEntries(roleNames.flatMap(k => [
+          [`${k}RoleArn`, arn(`role/${k}`)],
+          ...(mode === 'irsa' ? [[`${k}RoleAssociationId`, `a-${k}`]] : []),
+        ])))
+        add('capacity-access', {RoleArn: arn('role/dstack'), ...(mode === 'pod-identity' ? {ControllerRoleAssociationId: 'a-dstack'} : {})})
+        if (capacityFirst) sources.reverse()
+        const original = save()
+        expect(() => run({replace: true, write: true})).throws('Conflicting sources for infrastructure.aws.workloadIdentity')
+        expect(fs.readFileSync(specFile, 'utf8')).eq(original)
+        expect(fs.readdirSync(root).some(f => f.endsWith('.bak'))).false
+      })
+    }
+  }
 
   for (const reason of ['missing', 'wrong-account', 'wrong-region', 'wrong-type', 'duplicate-source', 'disabled-bootnode', 'duplicate-index', 'unknown-field']) {
     it(`does not write partial changes for ${reason}`, () => {
