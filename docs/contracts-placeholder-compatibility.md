@@ -2,9 +2,8 @@
 
 **Version boundary:** the instructions below describe the historical 28f6ca
 and ba832bb images. Current devnet uses contracts commit
-`56a4cacda6046c9445af023aefee15a42fda2fdd` and a newly created Bridge; follow
-[the new-instance runbook](devnet-new-bridge-20260909.md) for its exact pins and
-resume boundary. That release removes the legacy L1 commit/finalize account
+`56a4cacda6046c9445af023aefee15a42fda2fdd` and a newly created Bridge; its exact
+pins and resume boundary are recorded in the devnet environment's runbook. That release removes the legacy L1 commit/finalize account
 inputs, zeros the unused L1 gas-oracle and Geth signer fields, fixes the unused
 coordinator JWT, and emits native Reth genesis. Its contracts scripts no longer
 need those legacy keys. Existing CLI compatibility fields may remain locally
@@ -13,8 +12,8 @@ or authorize the public placeholder. The real fee-oracle address is still
 required, and neither KMS service needs an exportable private key.
 
 The historical #1139 startup blocker described below is now resolved in the
-devnet trial using beta.4e and explicit fresh-genesis opt-in; see the
-[verified L1 Interface rollout](l1-interface-beta4e-cold-start.md).
+devnet trial using beta.4e and explicit fresh-genesis opt-in, as recorded in the
+devnet environment's L1 Interface rollout notes.
 
 This is an opt-in compatibility mode for **DogeOS testnet/regtest L2-only
 deployment**, not a general-purpose KMS workaround for Scroll L1 contracts.
@@ -147,7 +146,6 @@ binary startup, using reusable core library logic; a separate mandatory command
 or init container is not the intended deployment solution. Track
 [core issue #1139](https://github.com/DogeOS69/dogeos-core/issues/1139) and use a
 validated corrected service image before continuing Reth and L2 deployment.
-Full end-to-end deployment acceptance remains pending. See the
-[deployment status and corrections](dogeos-deployment-status.md) for the current
-resume boundary; do not treat historical generation examples as commands to rerun
+Full end-to-end deployment acceptance remains pending. The current resume
+boundary is recorded with the environment's deployment status; do not treat historical generation examples as commands to rerun
 against an already initialized Bridge.
