@@ -20,6 +20,7 @@ export function protocolOpeningId(context: unknown): string {
   const source = object(context)
   const protocol = object(source.protocol)
   const genesis = object(source.genesis)
+  if ('genesis_state_root' in genesis) throw new Error('Protocol context uses the retired genesis_state_root field; regenerate it with current dogeos-core (genesis_block_hash)')
   const outpoint = object(genesis.genesis_sequencer_outpoint)
   const numeric = (value: unknown, size: number): Buffer => {
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error('Invalid protocol context integer')
@@ -34,6 +35,6 @@ export function protocolOpeningId(context: unknown): string {
     numeric(protocol.protocol_version, 2), numeric(protocol.dogecoin_chain_id, 4), numeric(protocol.l2_chain_id, 4), numeric(protocol.eth_chain_id, 8),
     bytes(outpoint.txid, 32), numeric(outpoint.vout, 4), bytes(genesis.genesis_bridge_key_hash, 20), numeric(genesis.initial_confirmed_block_number, 4),
     bytes(genesis.initial_confirmed_block_hash, 32).reverse(), bytes(genesis.initial_ethereum_block_hash, 32), numeric(genesis.initial_tx_index, 4),
-    bytes(genesis.genesis_batch_hash, 32), bytes(genesis.genesis_state_root, 32), bytes(genesis.initial_system_signer, 20),
+    bytes(genesis.genesis_batch_hash, 32), bytes(genesis.genesis_block_hash, 32), bytes(genesis.initial_system_signer, 20),
   ])).slice(2)
 }

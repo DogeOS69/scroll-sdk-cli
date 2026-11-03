@@ -34,7 +34,7 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
-import {GENESIS_PREDEPLOYS, L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT} from '../constants/deployment.js'
+import {GENESIS_PREDEPLOYS, L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT, PROTOCOL_VERSION} from '../constants/deployment.js'
 import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS, coreHelperNetwork} from './bridge-constants.js'
 import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deployment-spec-fields.js'
@@ -303,16 +303,20 @@ function getBridgeTargetAmountsSats(spec: DeploymentSpec): { bridge: number; fee
   }
 }
 
+/** The contracts template default; it also matches the 1 DOGE protocol minimum deposit. */
+const DEFAULT_DEPOSIT_FEE_SATS = '100000000'
+
 function getBridgeFees(spec: DeploymentSpec): { depositFeeWei: string; minWithdrawalAmountWei: string; withdrawalFeeWei: string } {
   const {fees} = spec.bridge
   // The legacy deposit field was copied directly into contracts.DEPOSIT_FEE (wei).
-  // Only the explicitly named satoshi field needs conversion to L2's 18 decimals.
-  const deposit = fees.depositFeeSats ?? fees.deposit ?? '0'
+  // Satoshi amounts, including the 1 DOGE default, need conversion to L2's 18 decimals.
+  const legacyWei = fees.depositFeeSats === undefined && fees.deposit !== undefined
+  const deposit = fees.depositFeeSats ?? fees.deposit ?? DEFAULT_DEPOSIT_FEE_SATS
   if (typeof deposit !== 'string' || !/^\d+$/.test(deposit)) {
     throw new Error('bridge.fees deposit must be a nonnegative decimal integer string')
   }
 
-  const depositFeeWei = BigInt(deposit) * (fees.depositFeeSats === undefined ? 1n : 10_000_000_000n)
+  const depositFeeWei = BigInt(deposit) * (legacyWei ? 1n : 10_000_000_000n)
   if (depositFeeWei >= 2n ** 256n) {
     throw new Error('bridge.fees deposit exceeds uint256 after conversion to wei')
   }
@@ -1779,7 +1783,7 @@ export function generateProtocolSeedToml(rawSpec: DeploymentSpec): string {
   const ethChainId = getEthereumDaChainId(spec)
 
   const protocol: toml.JsonMap = {}
-  protocol.protocol_version = 2
+  protocol.protocol_version = PROTOCOL_VERSION
   protocol.dogecoin_chain_id = resolveDogecoinChainId(spec.dogecoin.network)
   protocol.l2_chain_id = spec.network.l2ChainId
   protocol.eth_chain_id = ethChainId
@@ -1787,9 +1791,8 @@ export function generateProtocolSeedToml(rawSpec: DeploymentSpec): string {
   const chainAnchors: toml.JsonMap = {}
   chainAnchors.initial_ethereum_block_hash = ZERO_BYTES32
   chainAnchors.initial_tx_index = 0
-  chainAnchors.initial_tx_blob_index = 0
   chainAnchors.genesis_batch_hash = ZERO_BYTES32
-  chainAnchors.genesis_state_root = ZERO_BYTES32
+  chainAnchors.genesis_block_hash = ZERO_BYTES32
 
   const depositQueueTransform: toml.JsonMap = {}
   depositQueueTransform.l1_scroll_messenger_address = PLACEHOLDER_L1_SCROLL_MESSENGER_ADDRESS

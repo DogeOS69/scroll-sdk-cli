@@ -371,13 +371,13 @@ describe('real-proof program bundle publication', () => {
   function deploymentKitFixture(enforcement: 'enforce' | 'observe' = 'enforce') {
     const context = JSON.stringify({
       genesis: {
-        genesis_batch_hash: hash('a1', 32), genesis_bridge_key_hash: hash('33', 20),
-        genesis_sequencer_outpoint: {txid: hash('22', 32), vout: 0}, genesis_state_root: hash('a2', 32),
+        genesis_batch_hash: hash('a1', 32), genesis_block_hash: hash('a2', 32),
+        genesis_bridge_key_hash: hash('33', 20), genesis_sequencer_outpoint: {txid: hash('22', 32), vout: 0},
         initial_confirmed_block_hash: hash('44', 32), initial_confirmed_block_number: 100,
         initial_ethereum_block_hash: hash('55', 32), initial_system_signer: hash('a3', 20), initial_tx_index: 200,
       },
       // Dogecoin testnet, matching the fixture's doge-config network.
-      protocol: {dogecoin_chain_id: 111_111, eth_chain_id: 31_337, l2_chain_id: 534_352, protocol_version: 2},
+      protocol: {dogecoin_chain_id: 111_111, eth_chain_id: 31_337, l2_chain_id: 534_352, protocol_version: 1},
     })
     const receiptPath = path.join(root, '.data/proof-materials-v1.json')
     const materials = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))

@@ -17,12 +17,12 @@ import {protocolOpeningId} from '../../src/utils/protocol-opening-id.js'
 const hex = (n: string, size = 32) => `0x${n.repeat(size)}`
 const context = {
   genesis: {
-    genesis_batch_hash: hex('a1'), genesis_bridge_key_hash: hex('33', 20),
-    genesis_sequencer_outpoint: {txid: hex('22'), vout: 0}, genesis_state_root: hex('a2'),
+    genesis_batch_hash: hex('a1'), genesis_block_hash: hex('a2'),
+    genesis_bridge_key_hash: hex('33', 20), genesis_sequencer_outpoint: {txid: hex('22'), vout: 0},
     initial_confirmed_block_hash: hex('44'), initial_confirmed_block_number: 100,
     initial_ethereum_block_hash: hex('55'), initial_system_signer: hex('a3', 20), initial_tx_index: 200,
   },
-  protocol: {dogecoin_chain_id: 111_111, eth_chain_id: 31_337, l2_chain_id: 534_352, protocol_version: 2},
+  protocol: {dogecoin_chain_id: 111_111, eth_chain_id: 31_337, l2_chain_id: 534_352, protocol_version: 1},
 }
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 
@@ -65,7 +65,7 @@ describe('frontend dynamic deposit configuration', () => {
   it('uses protocol identity and the bound protocol genesis hash, not the EVM state root', () => {
     const identity = readFrontendDepositIdentity(root, {l2ChainId: 534_352, required: true})!
     expect(identity).to.deep.equal({genesisStateHash: genesisHash, protocolId: `0x${protocolOpeningId(context)}`})
-    expect(identity.genesisStateHash).not.eq(context.genesis.genesis_state_root)
+    expect(identity.genesisStateHash).not.eq(context.genesis.genesis_block_hash)
     const values: any = {scrollConfig: 'REACT_APP_DOGE_BRIDGE_ADDRESS = "old-address"\nREACT_APP_MOAT_ADDRESS = "keep"\n'}
     reconcileFrontendConfig(values, frontendDepositEnv(identity))
     const parsed = toml.parse(values.scrollConfig)

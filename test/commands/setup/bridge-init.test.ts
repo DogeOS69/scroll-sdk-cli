@@ -127,13 +127,17 @@ describe('setup bridge-init protocol seed generation', () => {
       dogecoin_chain_id: 111_111,
       eth_chain_id: 32_382,
       l2_chain_id: 412_346,
-      protocol_version: 2,
+      protocol_version: 1,
     })
     expect(result.chain_anchors.initial_ethereum_block_hash).to.equal(
       '0x0000000000000000000000000000000000000000000000000000000000000000'
     )
     expect(result.chain_anchors.initial_tx_index).to.equal(0)
-    expect(result.chain_anchors.initial_tx_blob_index).to.equal(0)
+    expect(result.chain_anchors.genesis_block_hash).to.equal(
+      '0x0000000000000000000000000000000000000000000000000000000000000000'
+    )
+    expect(result.chain_anchors).not.to.have.property('initial_tx_blob_index')
+    expect(result.chain_anchors).not.to.have.property('genesis_state_root')
     expect(result.chain_anchors.initial_system_signer).to.equal('0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3')
     expect(result.protocol_config_seed.protocol_config).to.deep.equal({
       deposit_queue_transform: {
@@ -163,7 +167,7 @@ describe('setup bridge-init protocol seed generation', () => {
           },
           protocol: {
             celestia_namespace: '0x1234',
-            protocol_version: 1,
+            protocol_version: 2,
           },
           protocol_config_seed: {
             protocol_config: {
@@ -176,7 +180,7 @@ describe('setup bridge-init protocol seed generation', () => {
       helpers
     )
 
-    expect(result.protocol.protocol_version).to.equal(2)
+    expect(result.protocol.protocol_version).to.equal(1)
     expect(result.protocol).not.to.have.property('celestia_namespace')
     expect(result.chain_anchors).not.to.have.property('initial_celestia_height')
     expect(result.protocol_config_seed.protocol_config).not.to.have.property('celestia_namespace')
@@ -190,7 +194,7 @@ describe('setup bridge-init protocol seed generation', () => {
         existingProtocolSeedConfig: {
           chain_anchors: {
             genesis_batch_hash: `0x${'11'.repeat(32)}`,
-            genesis_state_root: `0x${'22'.repeat(32)}`,
+            genesis_block_hash: `0x${'22'.repeat(32)}`,
           },
         },
         network: 'testnet',
@@ -199,7 +203,30 @@ describe('setup bridge-init protocol seed generation', () => {
     )
 
     expect(result.chain_anchors.genesis_batch_hash).to.equal(`0x${'11'.repeat(32)}`)
-    expect(result.chain_anchors.genesis_state_root).to.equal(`0x${'22'.repeat(32)}`)
+    expect(result.chain_anchors.genesis_block_hash).to.equal(`0x${'22'.repeat(32)}`)
+  })
+
+  it('drops seed anchors that core removed or renamed', () => {
+    const result = buildEthereumDaProtocolSeedConfig(
+      {
+        configToml,
+        contractsConfig,
+        existingProtocolSeedConfig: {
+          chain_anchors: {
+            genesis_state_root: `0x${'22'.repeat(32)}`,
+            initial_tx_blob_index: 0,
+          },
+        },
+        network: 'testnet',
+      },
+      helpers
+    )
+
+    expect(result.chain_anchors).not.to.have.property('genesis_state_root')
+    expect(result.chain_anchors).not.to.have.property('initial_tx_blob_index')
+    expect(result.chain_anchors.genesis_block_hash).to.equal(
+      '0x0000000000000000000000000000000000000000000000000000000000000000'
+    )
   })
 
   it('overwrites initial_system_signer from doge-config input', () => {

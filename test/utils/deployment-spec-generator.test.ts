@@ -928,6 +928,13 @@ describe('deployment-spec-generator', () => {
       expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal('10000000000');
     });
 
+    it('defaults an omitted deposit fee to 1 DOGE', () => {
+      const spec = createMinimalSpec();
+      delete spec.bridge.fees.depositFeeSats;
+      delete spec.bridge.fees.deposit;
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal('1000000000000000000');
+    });
+
     it('rejects malformed or overflowing deposit amounts before writing configuration', () => {
       for (const value of ['-1', '1.5', '1e8', '', (2n ** 256n).toString()]) {
         const spec = createMinimalSpec();
@@ -1672,13 +1679,12 @@ describe('deployment-spec-generator', () => {
         dogecoin_chain_id: 111_111,
         eth_chain_id: 11_155_111,
         l2_chain_id: 412_346,
-        protocol_version: 2,
+        protocol_version: 1,
       });
       expect(parsed.chain_anchors).to.deep.equal({
         genesis_batch_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
-        genesis_state_root: '0x0000000000000000000000000000000000000000000000000000000000000000',
+        genesis_block_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
         initial_ethereum_block_hash: '0x0000000000000000000000000000000000000000000000000000000000000000',
-        initial_tx_blob_index: 0,
         initial_tx_index: 0,
       });
       expect(parsed.protocol_config_seed.protocol_config).to.deep.equal({
@@ -2372,7 +2378,7 @@ metadata:
       const configs = {
         'config.toml': '[general]\nkey = "value"\n',
         'doge-config.toml': '[wallet]\npath = ".data/doge-wallet-testnet.json"\n',
-        'protocol_seed.toml': '[protocol]\nprotocol_version = 2\n',
+        'protocol_seed.toml': '[protocol]\nprotocol_version = 1\n',
         'setup_defaults.toml': 'seed_string = "test"\n',
       };
 

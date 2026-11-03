@@ -1,7 +1,8 @@
+import {keccak256} from 'ethers'
 import * as yaml from 'js-yaml'
 import * as fs from 'node:fs'
 
-import {GENESIS_PREDEPLOYS} from '../constants/deployment.js'
+import {GENESIS_PREDEPLOYS, L2_MESSAGE_QUEUE_RUNTIME} from '../constants/deployment.js'
 
 // These addresses are hard-coded in Reth and its execution witnesses.
 const requiredPredeploys = {
@@ -32,5 +33,10 @@ export function validateGenesisPredeploys(file: string): void {
     if (typeof code !== 'string' || !/^0x(?:[\da-f]{2})+$/i.test(code) || /^0x0+$/i.test(code)) {
       throw new Error(`Generated genesis is missing executable ${name} at ${address}. Use the canonical contracts predeploy overrides and regenerate before preparing or funding the Bridge.`)
     }
+  }
+
+  const queueCode = alloc[GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE.slice(2)].code as string
+  if ((queueCode.length - 2) / 2 !== L2_MESSAGE_QUEUE_RUNTIME.length || keccak256(queueCode.toLowerCase()) !== L2_MESSAGE_QUEUE_RUNTIME.keccak256) {
+    throw new Error(`Generated genesis has an unexpected L2_MESSAGE_QUEUE runtime at ${GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE}; current core needs the hash-chain withdrawal queue from scroll-contracts dogeos-v0.3.0-rc.11. Regenerate with that contracts image or source.`)
   }
 }
