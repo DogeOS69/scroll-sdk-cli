@@ -3,7 +3,10 @@ import { createPublicKey } from 'node:crypto'
 
 import type { KmsSignerProvisionRole } from './kms-signer-provisioner.js'
 
+import {assertAwsReadOnly} from './aws-cli.js'
+
 function awsCli(args: string[], profile?: string): string {
+  assertAwsReadOnly(args)
   const fullArgs = [...args]
   if (profile) fullArgs.push('--profile', profile)
   try {
@@ -21,13 +24,6 @@ function awsCli(args: string[], profile?: string): string {
 export function fetchKmsCompressedPublicKey(keyId: string, region: string, profile?: string): string {
   const spkiBase64 = awsCli(['kms', 'get-public-key', '--key-id', keyId, '--region', region, '--query', 'PublicKey', '--output', 'text'], profile)
   return deriveCompressedSecp256k1PublicKeyFromSpkiDer(spkiBase64)
-}
-
-export function createKmsSigningKey(description: string, region: string, profile?: string): string {
-  const output = awsCli(['kms', 'create-key', '--key-spec', 'ECC_SECG_P256K1', '--key-usage', 'SIGN_VERIFY', '--description', description, '--region', region, '--output', 'json'], profile)
-  const arn = JSON.parse(output)?.KeyMetadata?.Arn
-  if (typeof arn !== 'string' || arn === '') throw new Error('aws kms create-key returned no KeyMetadata.Arn')
-  return arn
 }
 
 function base64UrlToBuffer(value: string): Buffer {

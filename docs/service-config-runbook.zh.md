@@ -62,11 +62,13 @@ producer、CUDA Worker、coordinator、topology compiler、publisher。
 `mode`、`generation`、`enforcement` 分别控制拓扑、证明生成及校验策略，
 不能再用旧版单个 mock/production 参数代替。
 
-1. 配置共享 artifact store 与 `setup proof-aws-init` 的读取方式。已有共享桶
-   使用 `existing-public-s3` 或 `existing-gateway`。`existing-public-s3` 会确认本部署前缀
-   下外部读取路径（含 `deployment-kits/`）可匿名读取，缺失时只添加本部署自己的授权语句，
-   不改其他语句和 Public Access Block。DA/snapshot 桶的权限通过 `artifacts access`
-   先查看计划，再显式使用 `--apply`。
+1. 共享 artifact store 的桶、策略和工作负载角色由基础设施模板准备，CLI 不创建也不修改
+   AWS 资源，`setup aws` 只读取并校验。已有共享桶使用 `existing-public-s3` 或
+   `existing-gateway`。`existing-public-s3` 会确认本部署前缀下外部读取路径（含
+   `deployment-kits/`）可匿名读取，缺失的授权由桶的基础设施负责方添加。在 `setup aws`
+   之前用 `setup proof-tokens` 初始化 proof 令牌（Secret 本身由基础设施模板
+   `proof-secret.yaml` 创建）。DA/snapshot 桶的权限用
+   `artifacts access` 生成计划并检查，变更通过基础设施模板应用。
 2. 按 [saved-spec proof 工作流](proof-config-transactions.md)，在 spec 中固定
    release、proof mode 和运行意图，执行 `setup proof-materials --dir .`。
    不再接收独立 proof request JSON，也不支持旧 prepared transaction。

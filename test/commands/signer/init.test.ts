@@ -139,8 +139,8 @@ describe('signer init KMS onboarding', () => {
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'signer-init-kms-'))
-    // A fake `aws` CLI: create-key returns an ARN, get-public-key the SPKI of
-    // a fixed secp256k1 key, and every call is logged.
+    // A fake `aws` CLI: get-public-key returns the SPKI of a fixed secp256k1
+    // key, and every call is logged.
     const {publicKey: spki} = generateKeyPairSync('ec', {namedCurve: 'secp256k1'})
     const der = spki.export({format: 'der', type: 'spki'}).toString('base64')
     publicKey = deriveCompressedSecp256k1PublicKeyFromSpkiDer(der)
@@ -150,7 +150,6 @@ describe('signer init KMS onboarding', () => {
       '#!/bin/sh',
       `echo "$@" >> "${root}/aws.log"`,
       'case "$2" in',
-      '  create-key) echo \'{"KeyMetadata":{"Arn":"arn:aws:kms:us-east-1:123456789012:key/created"}}\' ;;',
       `  get-public-key) echo "${der}" ;;`,
       '  *) exit 1 ;;',
       'esac',
@@ -169,8 +168,14 @@ describe('signer init KMS onboarding', () => {
     return fs.existsSync(path.join(root, 'aws.log')) ? fs.readFileSync(path.join(root, 'aws.log'), 'utf8').trim().split('\n') : []
   }
 
+  it('requires an existing key and has no key-creation option', async () => {
+    const base = ['signer', 'init', '--id', 'partner-k', '--network', 'testnet', '--out', path.join(root, 'partner-k'), '--backend', 'aws-kms', '--kms-region', 'us-east-1']
+    expect((await runCommand(base)).error?.message).to.include('pass --kms-key-id of your existing')
+    expect((await runCommand([...base, '--create-key'])).error?.message).to.include('Nonexistent flag: --create-key')
+    expect(awsCalls()).to.deep.equal([])
+  })
+
   for (const [label, keyFlags] of [
-    ['a key created by the first pass', ['--create-key']],
     ['an existing key', ['--kms-key-id', 'arn:aws:kms:us-east-1:123456789012:key/existing']],
   ] as const) {
     it(`wraps the identity for ${label} without reprovisioning`, async () => {
@@ -183,14 +188,12 @@ describe('signer init KMS onboarding', () => {
       const identityFile = path.join(root, 'identity.json')
       fs.writeFileSync(identityFile, JSON.stringify({network: 'testnet', publicKey, schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA, transportPubkey: TRANSPORT_PUBKEY}))
 
-      // Repeating the generated command with --create-key is refused outright.
-      expect((await runCommand([...base, '--create-key', '--identity', identityFile])).error?.message).to.match(/--create-key cannot be combined with --identity/)
       const callsBefore = awsCalls().length
       // The second pass reuses the recorded backend even with only --identity.
       expect((await runCommand(['signer', 'init', '--id', 'partner-k', '--network', 'testnet', '--out', out, '--identity', identityFile])).error).to.equal(undefined)
       const newCalls = awsCalls().slice(callsBefore)
       expect(newCalls).to.have.length(1)
-      expect(newCalls[0]).to.match(/^kms get-public-key --key-id arn:aws:kms:us-east-1:123456789012:key\/(created|existing) --region us-east-1/)
+      expect(newCalls[0]).to.match(/^kms get-public-key --key-id arn:aws:kms:us-east-1:123456789012:key\/existing --region us-east-1/)
       expect(fs.readFileSync(envFile, 'utf8')).to.equal(env)
       expect(JSON.parse(fs.readFileSync(path.join(out, 'descriptor.json'), 'utf8'))).to.deep.equal({id: 'partner-k', network: 'testnet', publicKey, schema: ATTESTATION_SIGNER_DESCRIPTOR_SCHEMA, transportPubkey: TRANSPORT_PUBKEY})
     })

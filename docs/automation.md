@@ -185,21 +185,13 @@ and artifacts. Relevant examples:
   transaction only after every output succeeds;
 - `export-deployment-kit` writes a new kit from current deployment facts and
   refuses an existing output directory;
-- `proof-aws-init` is designed to reuse matching cloud resources. It records an
-  existing `[proofArtifacts.s3]` bucket/region/keyPrefix as the proof
-  artifact store; the DA archive is a separate bucket.
-  EKS/Secrets Manager may be in a different region from that bucket; in that
-  case it deliberately skips the regional S3 Gateway endpoint. It records an
-  explicit operator-managed public HTTPS endpoint for external Workers and
-  partner Signers, and can auto-discover or create the EKS cluster's S3 Gateway
-  VPC endpoint and route-table associations. Both routes remain explicitly
-  unverified. For a shared bucket with an existing public S3 policy, select
-  `existing-public-s3`: the CLI preserves bucket-wide Public Access Block and
-  other statements, adds this deployment's prefix-scoped read grant only when
-  the policy does not already grant it, and still reconciles the
-  deployment-scoped endpoint, IRSA, and secret resources. `direct-s3` is reserved for buckets
-  whose public-read posture the CLI owns. It writes stable, non-secret resource facts to
-  `.data/proof-aws.json` and never reads or modifies generated values;
+- `setup proof-tokens` writes the proof token values into the existing Secret
+  (from the infrastructure `proof-secret.yaml` template) only when they are
+  missing and otherwise reuses them, unless `--rotate` is passed. It never
+  creates the Secret or prints tokens.
+  The proof bucket, its policy, workload roles and any S3 Gateway endpoint come
+  from the infrastructure templates; `setup aws` only reads them and writes
+  stable, non-secret resource facts to `.data/proof-aws.json`;
 - `prep-charts` projects `.data/proof-aws.json` into final values. With
   unchanged configuration, templates, and release inputs, a rerun is
   byte-idempotent and reports no changed files. Active legacy doge-config

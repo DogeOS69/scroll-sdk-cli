@@ -8,9 +8,9 @@ import path from 'node:path'
 import type { JsonOutputContext } from './json-output.js'
 import type { ManagedSignerConfig, ManagedSignerRole } from './signer-roles.js'
 
-import {assertPreparationAwsReadOnly} from './aws-cli.js'
-import {ensureRetentionLifecycle} from './bucket-retention.js'
-import {type KmsKeyOwner, kmsKeyOwned, kmsOwnershipTags} from './kms-key-ownership.js'
+import {assertAwsReadOnly} from './aws-cli.js'
+import {checkExistingRetention} from './bucket-retention.js'
+import {type KmsKeyOwner, kmsKeyOwned} from './kms-key-ownership.js'
 import {writeJson} from './preparation-io.js'
 import {normalizeS3ArchiveKeyPrefix} from './s3-archive.js'
 
@@ -44,7 +44,6 @@ export interface KmsProvisionIdentity {
 
 export interface KmsProvisionInput {
   archive?: BlobArchivePlan
-  createArchiveBucket?: boolean
   kmsKeyId?: string
   serviceAccount?: string
 }
@@ -139,11 +138,9 @@ export class KmsSignerProvisioner {
     const serviceAccount = input.serviceAccount || role.defaultServiceAccount
     const owner: KmsKeyOwner = {catalogEntry: role.aliasSuffix, cluster: identity.eksCluster, deployment: identity.networkAlias}
 
-    if (input.archive?.enabled && input.archive.bucket && input.createArchiveBucket !== false) {
-      input.archive.created = this.ensureS3Bucket(input.archive.region || identity.awsRegion, input.archive.bucket, role.service)
-    }
+    if (input.archive?.enabled && input.archive.bucket) this.requireS3Bucket(input.archive.region || identity.awsRegion, input.archive.bucket, role.service)
 
-    const keyInfo = this.ensureKmsKey(identity.awsRegion, aliasName, input.kmsKeyId, role, owner)
+    const keyInfo = this.resolveKmsKey(identity.awsRegion, aliasName, input.kmsKeyId, role, owner)
     const publicKeyBase64 = this.fetchKmsPublicKey(identity.awsRegion, keyInfo.kmsKeyIdForConfig)
     const expectedAddress = deriveEthereumAddressFromSpkiDer(publicKeyBase64)
     return {
@@ -170,18 +167,18 @@ export class KmsSignerProvisioner {
     }
   }
 
-  /** Bucket and retention only; the writer grant is part of the submitter role written by aws-roles. */
-  async provisionArchive(archive: BlobArchivePlan, options: {createBucket: boolean}): Promise<void> {
+  /** Verify the existing archive bucket and its retention; infrastructure tooling owns both. */
+  async provisionArchive(archive: BlobArchivePlan): Promise<void> {
     if (!archive.enabled || !archive.bucket) return
     archive.keyPrefix = normalizeS3ArchiveKeyPrefix(archive.keyPrefix)
-    if (options.createBucket) archive.created = this.ensureS3Bucket(archive.region || 'us-east-1', archive.bucket, 'eth-da-submitter')
-    // DA blobs are kept forever: own this prefix's lifecycle rule and refuse expiring ones.
-    const lifecycle = ensureRetentionLifecycle({json: (args, options) => this.awsJson(args, options)}, 'da', {bucket: archive.bucket, keyPrefix: archive.keyPrefix, region: archive.region || 'us-east-1'})
-    if (lifecycle.changed) this.jsonCtx.info(`Set the DA archive retention lifecycle rule for s3://${archive.bucket}/${archive.keyPrefix}; no blob expires.`)
+    const region = archive.region || 'us-east-1'
+    this.requireS3Bucket(region, archive.bucket, 'eth-da-submitter')
+    // DA blobs are kept forever: refuse any lifecycle rule that could expire them.
+    checkExistingRetention({json: (args, options) => this.awsJson(args, options)}, 'da', {bucket: archive.bucket, keyPrefix: archive.keyPrefix, region})
   }
 
   private aws(args: string[], options: AwsCommandOptions = {}): any {
-    assertPreparationAwsReadOnly(args)
+    assertAwsReadOnly(args)
     const fullArgs = [...args]
     if (options.region) fullArgs.push('--region', options.region)
     if (options.profile || this.profile) fullArgs.push('--profile', options.profile || this.profile as string)
@@ -215,7 +212,39 @@ export class KmsSignerProvisioner {
     return result.KeyMetadata
   }
 
-  private ensureKmsKey(awsRegion: string, aliasName: string, providedKeyId: string | undefined, role: KmsSignerProvisionRole, owner: KmsKeyOwner): {
+  private fetchKmsPublicKey(awsRegion: string, keyId: string): string {
+    return this.awsText(
+      ['kms', 'get-public-key', '--key-id', keyId],
+      { query: 'PublicKey', region: awsRegion }
+    )
+  }
+
+  private findKmsAlias(awsRegion: string, aliasName: string): any | undefined {
+    const aliases = this.awsJson(['kms', 'list-aliases'], { region: awsRegion }).Aliases || []
+    return aliases.find((alias: any) => alias.AliasName === aliasName)
+  }
+
+  private requireS3Bucket(region: string, bucket: string, service: string): void {
+    try {
+      this.aws(['s3api', 'head-bucket', '--bucket', bucket], { region })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const notFound = message.includes('404') || /not found/i.test(message)
+      this.jsonCtx.error(
+        'E705_S3_BUCKET_INACCESSIBLE',
+        notFound
+          ? `S3 bucket ${bucket} does not exist; create it with the infrastructure templates before configuring ${service}`
+          : `S3 bucket ${bucket} exists but is not accessible (it may be owned by another AWS account): ${message}`,
+        'CONFIGURATION',
+        true,
+        { bucket, region }
+      )
+    }
+
+    this.jsonCtx.info(`${service}: using existing S3 archive bucket: ${bucket}`)
+  }
+
+  private resolveKmsKey(awsRegion: string, aliasName: string, providedKeyId: string | undefined, role: KmsSignerProvisionRole, owner: KmsKeyOwner): {
     keyArn: string
     keyId: string
     kmsKeyIdForConfig: string
@@ -234,6 +263,8 @@ export class KmsSignerProvisioner {
       }
     }
 
+    // Keys created by earlier CLI versions stay usable through their saved
+    // record or alias. New keys come from infrastructure tooling.
     const recordFile = path.join(this.keyRecords, `${createHash('sha256').update(JSON.stringify({aliasName, awsRegion, owner})).digest('hex')}.json`)
     const saved = fs.existsSync(recordFile) ? JSON.parse(fs.readFileSync(recordFile, 'utf8')) : undefined
     const existingAlias = this.findKmsAlias(awsRegion, aliasName)
@@ -248,76 +279,11 @@ export class KmsSignerProvisioner {
       this.validateKmsKey(metadata, aliasName)
     }
 
-    if (metadata && !kmsKeyOwned(ownership, metadata.Arn, owner, awsRegion)) throw new Error(`${aliasName} points to a KMS key this deployment did not create; select it explicitly to use it read-only`)
-    if (!metadata) {
-      metadata = this.awsJson(['kms', 'create-key', '--key-spec', 'ECC_SECG_P256K1', '--key-usage', 'SIGN_VERIFY', '--description', role.description,
-        '--tags', kmsOwnershipTags(owner, {'dogeos:purpose': role.purposeTag, 'dogeos:service': role.service})], {region: awsRegion}).KeyMetadata
-    }
-
-    // Persist before alias creation: an interrupted alias operation must never
-    // create a second signing key. Normal configuration also pins this ARN.
-    writeJson(recordFile, {aliasName, keyArn: metadata.Arn, origin: 'created', region: awsRegion, schema: 'dogeos/kms-signer-key/v1'})
-    if (existingAlias?.TargetKeyId && existingAlias.TargetKeyId !== metadata.KeyId) throw new Error('KMS alias points to another signing key; refusing to retarget it')
-    if (!existingAlias?.TargetKeyId) this.awsJson(['kms', 'create-alias', '--alias-name', aliasName, '--target-key-id', metadata.KeyId], {region: awsRegion})
+    if (!metadata) throw new Error(`No ${role.service} KMS signing key found for ${aliasName}; create it with the infrastructure signing-key template, then pass its ID with --kms-key-id`)
+    if (!kmsKeyOwned(ownership, metadata.Arn, owner, awsRegion)) throw new Error(`${aliasName} points to a KMS key this deployment did not create; select it explicitly to use it read-only`)
+    if (existingAlias?.TargetKeyId && existingAlias.TargetKeyId !== metadata.KeyId) throw new Error('KMS alias points to another signing key; refusing to use it')
+    if (!saved) writeJson(recordFile, {aliasName, keyArn: metadata.Arn, origin: 'created', region: awsRegion, schema: 'dogeos/kms-signer-key/v1'})
     return {keyArn: metadata.Arn, keyId: metadata.KeyId, kmsKeyIdForConfig: metadata.Arn, owned: true}
-  }
-
-  private ensureS3Bucket(region: string, bucket: string, service: string): boolean {
-    try {
-      this.aws(['s3api', 'head-bucket', '--bucket', bucket], { region })
-      this.jsonCtx.info(`${service}: reusing existing S3 archive bucket: ${bucket}`)
-      return false
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const notFound = message.includes('404') || /not found/i.test(message)
-      if (!notFound) {
-        this.jsonCtx.error(
-          'E705_S3_BUCKET_INACCESSIBLE',
-          `S3 bucket ${bucket} exists but is not accessible (it may be owned by another AWS account): ${message}`,
-          'CONFIGURATION',
-          true,
-          { bucket, region }
-        )
-      }
-    }
-
-    const createArgs = ['s3api', 'create-bucket', '--bucket', bucket]
-    if (region !== 'us-east-1') {
-      createArgs.push('--create-bucket-configuration', `LocationConstraint=${region}`)
-    }
-
-    this.aws(createArgs, { region })
-    this.aws([
-      's3api',
-      'put-public-access-block',
-      '--bucket',
-      bucket,
-      '--public-access-block-configuration',
-      'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true',
-    ], { region })
-    this.aws([
-      's3api',
-      'put-bucket-encryption',
-      '--bucket',
-      bucket,
-      '--server-side-encryption-configuration',
-      JSON.stringify({ Rules: [{ ApplyServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }] }),
-    ], { region })
-    this.aws(['s3api', 'put-bucket-versioning', '--bucket', bucket, '--versioning-configuration', 'Status=Enabled'], { region })
-    this.jsonCtx.info(`${service}: created S3 archive bucket: ${bucket} (region=${region}, public access blocked, SSE-S3, versioned)`)
-    return true
-  }
-
-  private fetchKmsPublicKey(awsRegion: string, keyId: string): string {
-    return this.awsText(
-      ['kms', 'get-public-key', '--key-id', keyId],
-      { query: 'PublicKey', region: awsRegion }
-    )
-  }
-
-  private findKmsAlias(awsRegion: string, aliasName: string): any | undefined {
-    const aliases = this.awsJson(['kms', 'list-aliases'], { region: awsRegion }).Aliases || []
-    return aliases.find((alias: any) => alias.AliasName === aliasName)
   }
 
   private validateIdentity(identity: KmsProvisionIdentity): void {

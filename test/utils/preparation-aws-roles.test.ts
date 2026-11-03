@@ -7,11 +7,20 @@ import path from 'node:path'
 
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
-import {irsaTrustPolicy} from '../../src/utils/aws-workload-role.js'
 import {AWS_ROLES_RECORD, prepareAwsRoles} from '../../src/utils/preparation-aws-roles.js'
 import {preparationSteps} from '../../src/utils/preparation-plan.js'
 import {sequencerKmsIntentHash} from '../../src/utils/preparation-sequencer-kms.js'
 import {buildProofAwsConfig, readProofAwsConfig, writeProofAwsConfig} from '../../src/utils/proof-aws-config.js'
+
+const irsaTrustPolicy = (context: {account: string; issuerHostPath: string}, namespace: string, serviceAccount: string): any => ({Statement: [{
+  Action: 'sts:AssumeRoleWithWebIdentity',
+  Condition: {StringEquals: {
+    [`${context.issuerHostPath}:aud`]: 'sts.amazonaws.com',
+    [`${context.issuerHostPath}:sub`]: `system:serviceaccount:${namespace}:${serviceAccount}`,
+  }},
+  Effect: 'Allow',
+  Principal: {Federated: `arn:aws:iam::${context.account}:oidc-provider/${context.issuerHostPath}`},
+}], Version: '2012-10-17'})
 
 const account = '000000000000'
 const region = 'us-east-1'

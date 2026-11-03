@@ -9,10 +9,9 @@ import {resolveBlobArchive} from '../../utils/managed-signer-setup.js'
 import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 
 export default class SetupEthDaSubmitter extends Command {
-  static override description = 'Prepare the eth-da-submitter S3 archive for the AWS stage'
+  static override description = 'Configure the eth-da-submitter S3 archive for the AWS stage; the bucket must already exist'
   static override examples = [
     '<%= config.bin %> <%= command.id %> --archive-bucket dogeos-da --archive-region us-east-1 --archive-key-prefix devnet -N',
-    '<%= config.bin %> <%= command.id %> --no-create-archive-bucket -N',
     '<%= config.bin %> <%= command.id %> --disable-archive -N',
   ]
 
@@ -21,9 +20,8 @@ export default class SetupEthDaSubmitter extends Command {
     'archive-key-prefix': Flags.string({description: 'Deployment prefix for raw DA blobs; proof sidecars use proofArtifacts.s3. Core owns the relative object paths.'}),
     'archive-public-base-url': Flags.string({description: 'Public HTTPS base URL used by blob consumers.'}),
     'archive-region': Flags.string({description: 'Region owning the archive bucket.'}),
-    'aws-profile': Flags.string({description: 'AWS profile for archive resource operations.'}),
+    'aws-profile': Flags.string({description: 'AWS profile for read-only archive checks.'}),
     'aws-region': Flags.string({description: 'Fallback archive region; existing archive region takes precedence.'}),
-    'create-archive-bucket': Flags.boolean({allowNo: true, description: 'Create/reuse the bucket. Defaults to enabled for a configured AWS KMS submitter, disabled for a local signer.'}),
     'disable-archive': Flags.boolean({default: false, description: 'Disable archive configuration without deleting buckets or IAM policies.'}),
     'doge-config': Flags.string({description: 'Dogecoin configuration file.'}),
     json: Flags.boolean({default: false}),
@@ -40,10 +38,9 @@ export default class SetupEthDaSubmitter extends Command {
       const {config, configPath} = await loadDogeConfigWithSelection(flags['doge-config'])
       const signer = config.signers?.l1CommitSender
       const archive = await resolveBlobArchive({dogeConfig: config, dogeConfigPath: configPath, flags, hasFlag: name => this.argv.some(arg => arg === `--${name}` || arg.startsWith(`--${name}=`)), jsonCtx: output, jsonMode: flags.json, nonInteractive: flags['non-interactive'], signerKey: 'l1CommitSender'}, flags['aws-region'] || signer?.kmsRegion)
-      const createBucket = flags['create-archive-bucket'] ?? signer?.backend === 'aws_kms'
       if (archive.enabled) {
         assertSeparateDaProofBuckets(config)
-        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive, {createBucket})
+        await new KmsSignerProvisioner(output, flags['aws-profile']).provisionArchive(archive)
         if (signer?.backend !== 'aws_kms') output.addWarning('The submitter has no CLI-owned AWS workload role; archive writer access must be provided separately.')
       }
 

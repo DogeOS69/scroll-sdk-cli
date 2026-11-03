@@ -4,10 +4,7 @@ import chalk from 'chalk'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {
-  createKmsSigningKey,
-  fetchKmsCompressedPublicKey,
-} from '../../utils/attestation-kms.js'
+import {fetchKmsCompressedPublicKey} from '../../utils/attestation-kms.js'
 import {
   ATTESTATION_SIGNER_NETWORKS,
   assertCompressedSecp256k1PublicKey,
@@ -131,7 +128,6 @@ export class SignerInitCommand extends Command {
     '$ scrollsdk signer init --id partner-a-signer-0 --network testnet',
     '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --identity signer-partner-a-signer-0/identity.json',
     '$ scrollsdk signer init --id partner-a-signer-0 --network mainnet --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567',
-    '$ scrollsdk signer init --id partner-a-signer-0 --network testnet --backend aws-kms --create-key --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567',
   ]
 
   static flags = {
@@ -140,7 +136,6 @@ export class SignerInitCommand extends Command {
     'allowed-signing-policy-version': Flags.string({ default: '1', description: 'Signer binary policy version approved by the operator (written to attestation-signer.env)' }),
     'aws-profile': Flags.string({ description: 'AWS CLI profile for KMS calls (aws-kms backend)' }),
     backend: Flags.string({ default: 'local', description: 'Key backend', options: ['local', 'aws-kms'] }),
-    'create-key': Flags.boolean({ default: false, description: 'aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account instead of passing --kms-key-id' }),
     force: Flags.boolean({ default: false, description: 'Overwrite an existing env file; generates a NEW signing key for the local backend. Do not use to preserve a local identity. Partner-owned TOML is always retained.' }),
     id: Flags.string({ description: 'Stable signer identifier (DNS-label shaped, agreed with the bridge operator)', required: true }),
     identity: Flags.string({ description: 'File holding the one-line JSON from `attestation_signer --print-identity`; its network and public key must match this signer. Writes descriptor.json (identity + id)' }),
@@ -161,10 +156,6 @@ export class SignerInitCommand extends Command {
       const descriptorFile = path.join(outDir, 'descriptor.json')
       fs.mkdirSync(outDir, { recursive: true })
       const existingEnv = fs.existsSync(secretFile) ? fs.readFileSync(secretFile, 'utf8') : ''
-      if (flags.identity && flags['create-key']) {
-        throw new Error('--create-key cannot be combined with --identity: the identity was printed from an existing key')
-      }
-
       // Second pass of onboarding: the signer already exists, so wrapping its
       // identity is read-only. Reuse the recorded backend; never reprovision
       // or rewrite the key env.
@@ -182,16 +173,12 @@ export class SignerInitCommand extends Command {
       let kmsKeyId: string | undefined
       if (flags.backend === 'aws-kms') {
         if (!flags['kms-region']) throw new Error('--kms-region is required with --backend aws-kms')
-        if (flags['create-key'] && flags['kms-key-id']) throw new Error('--create-key and --kms-key-id are mutually exclusive')
         if (fs.existsSync(secretFile) && !flags.force) {
           throw new Error(`${secretFile} already exists; pass --force to regenerate it (the KMS key itself is never touched)`)
         }
 
-        kmsKeyId = flags['create-key']
-          ? createKmsSigningKey(`dogeos attestation signer ${flags.id}`, flags['kms-region'], flags['aws-profile'])
-          : flags['kms-key-id']
-        if (!kmsKeyId) throw new Error('pass --kms-key-id (or --create-key to create one) with --backend aws-kms')
-        if (flags['create-key']) json.logSuccess(`Created KMS signing key ${kmsKeyId}`)
+        kmsKeyId = flags['kms-key-id']
+        if (!kmsKeyId) throw new Error('pass --kms-key-id of your existing ECC_SECG_P256K1 SIGN_VERIFY key with --backend aws-kms')
 
         publicKey = assertCompressedSecp256k1PublicKey(
           fetchKmsCompressedPublicKey(kmsKeyId, flags['kms-region'], flags['aws-profile']),
@@ -208,9 +195,7 @@ export class SignerInitCommand extends Command {
           '# AWS_SECRET_ACCESS_KEY=',
         )
       } else {
-        for (const flag of ['kms-key-id', 'create-key'] as const) {
-          if (flags[flag]) throw new Error(`--${flag} requires --backend aws-kms`)
-        }
+        if (flags['kms-key-id']) throw new Error('--kms-key-id requires --backend aws-kms')
 
         let wif: string
         const existing = readEnvValue(existingEnv, 'ATTESTATION_SIGNER_WIF')

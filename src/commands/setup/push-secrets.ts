@@ -280,13 +280,13 @@ class AWSSecretService implements SecretService {
       }
 
       try {
-        new AwsCliRunner().json(['secretsmanager', 'put-secret-value', '--secret-id', fullSecretName, '--secret-string', jsonContent], {region: this.region})
+        new AwsCliRunner().json(['secretsmanager', 'put-secret-value', '--secret-id', fullSecretName, '--secret-string', jsonContent], {contentWrite: 'secret-value', region: this.region})
         this.log(chalk.green(`Successfully updated secret: ${fullSecretName}`))
         return true
       } catch (error) {throw awsFailure('Updating', fullSecretName, error)}
     } else {
       try {
-        new AwsCliRunner().json(['secretsmanager', 'create-secret', '--name', fullSecretName, '--secret-string', jsonContent], {region: this.region})
+        new AwsCliRunner().json(['secretsmanager', 'create-secret', '--name', fullSecretName, '--secret-string', jsonContent], {contentWrite: 'secret-value', region: this.region})
         this.log(chalk.green(`Successfully created secret: ${fullSecretName}`))
         return true
       } catch (error) {throw awsFailure('Creating', fullSecretName, error)}

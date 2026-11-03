@@ -221,6 +221,7 @@ USAGE
 * [`scrollsdk setup policy-prepare`](#scrollsdk-setup-policy-prepare)
 * [`scrollsdk setup proof-materials`](#scrollsdk-setup-proof-materials)
 * [`scrollsdk setup proof-publish`](#scrollsdk-setup-proof-publish)
+* [`scrollsdk setup proof-tokens`](#scrollsdk-setup-proof-tokens)
 * [`scrollsdk setup protocol-context`](#scrollsdk-setup-protocol-context)
 * [`scrollsdk setup render`](#scrollsdk-setup-render)
 * [`scrollsdk setup signer-kit`](#scrollsdk-setup-signer-kit)
@@ -239,18 +240,17 @@ USAGE
 
 ## `scrollsdk artifacts access`
 
-Plan, explicitly apply, or check the DA archive or bootstrap snapshot bucket: versioning, the keep-forever retention lifecycle rule, TLS-only, a read statement for the cluster's S3 VPC endpoint, an optional public read statement (the DA kill switch), and the writer role's IAM grant. Statements with other Sids are preserved. The proof artifact bucket is managed by setup aws.
+Plan or check the DA archive or bootstrap snapshot bucket against the expected versioning, keep-forever retention lifecycle rule, TLS-only and cluster VPC endpoint read statements, optional public read statement and writer IAM grant. Read-only: apply differences with the infrastructure templates.
 
 ```
 USAGE
-  $ scrollsdk artifacts access --store da|snapshot [--allow-bucket-public-policy] [--apply | --check] [--aws-profile
-    <value>] [--deployment-dir <value>] [--doge-config <value>] [--json] [--proof-aws-config <value>] [--public-read]
+  $ scrollsdk artifacts access --store da|snapshot [--allow-bucket-public-policy] [--aws-profile <value>] [--check]
+    [--deployment-dir <value>] [--doge-config <value>] [--json] [--proof-aws-config <value>] [--public-read]
     [--vpc-endpoint-id <value>] [--writer-role-arn <value>]
 
 FLAGS
   --allow-bucket-public-policy  Explicitly allow bucket public policies for --public-read; retain blocked ACLs and
                                 account-level protections
-  --apply                       Apply the displayed changes and verify AWS readback
   --aws-profile=<value>         AWS CLI profile
   --check                       Fail if the bucket policy, versioning or retention lifecycle differ from the requested
                                 state or writer IAM simulation denies access; no writes
@@ -258,29 +258,27 @@ FLAGS
   --doge-config=<value>         [default: .data/doge-config.toml] doge-config holding ethereumDa.blobArchive.s3,
                                 proofArtifacts.s3 and snapshots.s3
   --json
-  --proof-aws-config=<value>    [default: .data/proof-aws.json] proof-aws-init output; its S3 Gateway VPC endpoint is
-                                reused when --vpc-endpoint-id is omitted
-  --[no-]public-read            Add (--public-read) or remove (--no-public-read) the anonymous GetObject statement;
-                                omitted leaves it unchanged. Removing it on the DA archive is the kill switch: our
+  --proof-aws-config=<value>    [default: .data/proof-aws.json] setup aws output; its S3 Gateway VPC endpoint is reused
+                                when --vpc-endpoint-id is omitted
+  --[no-]public-read            Expect (--public-read) or expect no (--no-public-read) anonymous GetObject statement;
+                                omitted keeps the current state. Removing it on the DA archive is the kill switch: our
                                 services keep reading through the VPC endpoint
-  --store=<option>              (required) Bucket to manage
+  --store=<option>              (required) Bucket to plan or check
                                 <options: da|snapshot>
   --vpc-endpoint-id=<value>     S3 Gateway VPC endpoint the cluster reads through (same region as the bucket)
-  --writer-role-arn=<value>     The only writer: the eth-da-submitter IRSA role (da) or the deploy role (snapshot); its
-                                trust and other policies are preserved
+  --writer-role-arn=<value>     The only writer: the eth-da-submitter IRSA role (da) or the deploy role (snapshot)
 
 DESCRIPTION
-  Plan, explicitly apply, or check the DA archive or bootstrap snapshot bucket: versioning, the keep-forever retention
-  lifecycle rule, TLS-only, a read statement for the cluster's S3 VPC endpoint, an optional public read statement (the
-  DA kill switch), and the writer role's IAM grant. Statements with other Sids are preserved. The proof artifact bucket
-  is managed by setup aws.
+  Plan or check the DA archive or bootstrap snapshot bucket against the expected versioning, keep-forever retention
+  lifecycle rule, TLS-only and cluster VPC endpoint read statements, optional public read statement and writer IAM
+  grant. Read-only: apply differences with the infrastructure templates.
 
 EXAMPLES
-  $ scrollsdk artifacts access --store da --public-read --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter --apply
+  $ scrollsdk artifacts access --store da --public-read --writer-role-arn arn:aws:iam::123456789012:role/eth-da-submitter
 
-  $ scrollsdk artifacts access --store da --no-public-read --apply
+  $ scrollsdk artifacts access --store da --no-public-read --check
 
-  $ scrollsdk artifacts access --store snapshot --writer-role-arn arn:aws:iam::123456789012:role/deploy --apply
+  $ scrollsdk artifacts access --store snapshot --writer-role-arn arn:aws:iam::123456789012:role/deploy --check
 ```
 
 _See code: [src/commands/artifacts/access.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/artifacts/access.ts)_
@@ -1746,6 +1744,36 @@ DESCRIPTION
 
 _See code: [src/commands/setup/proof-publish.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-publish.ts)_
 
+## `scrollsdk setup proof-tokens`
+
+Initialize, complete or rotate the proof-work token and coordinator-only prover-worker master in an existing proof token Secret (created by the infrastructure proof-secret.yaml template). Writes only the Secret value; never prints tokens.
+
+```
+USAGE
+  $ scrollsdk setup proof-tokens --aws-region <value> --secret-name <value> [--aws-profile <value>] [--json] [--rotate]
+
+FLAGS
+  --aws-profile=<value>  AWS CLI profile
+  --aws-region=<value>   (required) Region of the proof token Secret
+  --json
+  --rotate               Replace both tokens in an existing Secret (drain Workers first; restart the coordinator, WP and
+                         capacity manager, then re-mint every Worker credential)
+  --secret-name=<value>  (required) Secrets Manager secret holding proof-work-token and prover-worker-master; match
+                         preparation.proofAws.secretName
+
+DESCRIPTION
+  Initialize, complete or rotate the proof-work token and coordinator-only prover-worker master in an existing proof
+  token Secret (created by the infrastructure proof-secret.yaml template). Writes only the Secret value; never prints
+  tokens.
+
+EXAMPLES
+  $ scrollsdk setup proof-tokens --secret-name scroll/example/proof-coordinator-secrets --aws-region us-west-2
+
+  $ scrollsdk setup proof-tokens --secret-name scroll/example/proof-coordinator-secrets --aws-region us-west-2 --rotate
+```
+
+_See code: [src/commands/setup/proof-tokens.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/setup/proof-tokens.ts)_
+
 ## `scrollsdk setup protocol-context`
 
 Generate canonical protocol context from completed Bridge funding; stop before policy builds and proof preparation
@@ -1873,9 +1901,8 @@ Signer-operator tool: create key material, secret deployment env, and a partner-
 ```
 USAGE
   $ scrollsdk signer init --id <value> [--allowed-git-commit <value>] [--allowed-release-version <value>]
-    [--allowed-signing-policy-version <value>] [--aws-profile <value>] [--backend local|aws-kms] [--create-key]
-    [--force] [--identity <value>] [--json] [--kms-key-id <value>] [--kms-region <value>] [--network
-    mainnet|regtest|testnet] [--out <value>]
+    [--allowed-signing-policy-version <value>] [--aws-profile <value>] [--backend local|aws-kms] [--force] [--identity
+    <value>] [--json] [--kms-key-id <value>] [--kms-region <value>] [--network mainnet|regtest|testnet] [--out <value>]
 
 FLAGS
   --allowed-git-commit=<value>              Production release-policy pin: full 40-character git commit embedded in the
@@ -1887,8 +1914,6 @@ FLAGS
   --aws-profile=<value>                     AWS CLI profile for KMS calls (aws-kms backend)
   --backend=<option>                        [default: local] Key backend
                                             <options: local|aws-kms>
-  --create-key                              aws-kms backend: create the ECC_SECG_P256K1 signing key in your AWS account
-                                            instead of passing --kms-key-id
   --force                                   Overwrite an existing env file; generates a NEW signing key for the local
                                             backend. Do not use to preserve a local identity. Partner-owned TOML is
                                             always retained.
@@ -1917,8 +1942,6 @@ EXAMPLES
   $ scrollsdk signer init --id partner-a-signer-0 --network testnet --identity signer-partner-a-signer-0/identity.json
 
   $ scrollsdk signer init --id partner-a-signer-0 --network mainnet --backend aws-kms --kms-key-id arn:aws:kms:... --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
-
-  $ scrollsdk signer init --id partner-a-signer-0 --network testnet --backend aws-kms --create-key --kms-region us-east-1 --allowed-release-version 0.1.0 --allowed-git-commit 0123456789abcdef0123456789abcdef01234567
 ```
 
 _See code: [src/commands/signer/init.ts](https://github.com/dogeos69/scroll-sdk-cli/blob/v0.1.3/src/commands/signer/init.ts)_

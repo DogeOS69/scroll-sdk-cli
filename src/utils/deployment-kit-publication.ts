@@ -96,7 +96,7 @@ export async function publishDeploymentKit(kit: DeploymentKitRecord, store: Arti
     // Check every existing object before the first write.
     const missing = [...files.keys()].filter(name => !matches(name))
     for (const name of missing) {
-      try {json(['s3api', 'put-object', '--bucket', bucket, '--key', keyPrefix + name, '--body', path.join(temp, name), '--if-none-match', '*', '--content-type', name.endsWith('.tar.gz') ? 'application/gzip' : 'application/octet-stream'])} catch {
+      try {aws.json(['s3api', 'put-object', '--bucket', bucket, '--key', keyPrefix + name, '--body', path.join(temp, name), '--if-none-match', '*', '--content-type', name.endsWith('.tar.gz') ? 'application/gzip' : 'application/octet-stream'], {contentWrite: 'object', region: store.region})} catch {
         // A concurrent identical publisher is safe; an ambiguous failure is not success.
         if (!matches(name)) throw new Error('Kit upload failed (provider details omitted)')
       }

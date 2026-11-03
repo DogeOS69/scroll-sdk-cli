@@ -249,7 +249,7 @@ describe('unified keystore preparation', () => {
     expect(read().accounts.L1_COMMIT_SENDER_ADDR).to.equal(address)
     expect(read().ethereumDa.blobArchive.s3.keyPrefix).to.equal('instance')
     expect(cloud.called).to.equal(false)
-    expect(archive.firstCall.args[1]).to.deep.equal({createBucket: true})
+    expect(archive.firstCall.args).to.have.length(1)
   })
 
   it('reuses DeploymentSpec service inputs without rewriting unselected service identities', async () => {
@@ -308,29 +308,30 @@ describe('unified keystore preparation', () => {
     expect(planKeystore({}, {})).to.deep.equal([])
   })
 
-  it('archive resource preparation only calls S3; role grants are prepared separately', async () => {
+  it('archive preparation only reads S3; buckets, lifecycle and role grants come from infrastructure', async () => {
     archive.restore()
     const provisioner: any = new KmsSignerProvisioner(new JsonOutputContext('test', true))
-    sinon.stub(provisioner, 'ensureS3Bucket').returns(false)
-    let lifecycle: {Rules: unknown[]} | undefined
+    sinon.stub(provisioner, 'aws').callsFake((args: any) => {
+      if (args[1] === 'head-bucket') return ''
+      throw new Error('Unexpected AWS call')
+    })
+    const bucket: {lifecycle?: {Rules: unknown[]}} = {}
     const aws = sinon.stub(provisioner, 'awsJson').callsFake((args: any) => {
       if (args[1] === 'list-role-policies') return {PolicyNames: []}
       if (args[1] === 'list-attached-role-policies') return {AttachedPolicies: []}
-      if (args[1] === 'put-role-policy') return {}
       if (args[1] === 'get-bucket-lifecycle-configuration') {
-        if (!lifecycle) throw new Error('NoSuchLifecycleConfiguration')
-        return lifecycle
-      }
-
-      if (args[1] === 'put-bucket-lifecycle-configuration') {
-        lifecycle = {Rules: JSON.parse(args[args.indexOf('--lifecycle-configuration') + 1]).Rules}
-        return {}
+        if (!bucket.lifecycle) throw new Error('NoSuchLifecycleConfiguration')
+        return bucket.lifecycle
       }
 
       throw new Error('Unexpected AWS mutation or API')
     })
-    await provisioner.provisionArchive({bucket: 'archive', created: false, enabled: true, keyPrefix: 'mainnet/batches', region: 'us-east-1'}, {createBucket: true})
-    expect(aws.getCalls().map(call => call.args[0][1])).to.deep.equal(['get-bucket-lifecycle-configuration', 'put-bucket-lifecycle-configuration', 'get-bucket-lifecycle-configuration'])
-
+    const archiveStore = {bucket: 'archive', created: false, enabled: true, keyPrefix: 'mainnet/batches', region: 'us-east-1'}
+    await provisioner.provisionArchive(archiveStore)
+    expect(aws.getCalls().map(call => call.args[0][1])).to.deep.equal(['get-bucket-lifecycle-configuration'])
+    bucket.lifecycle = {Rules: [{Expiration: {Days: 30}, Filter: {}, ID: 'Expire', Status: 'Enabled'}]}
+    let error: unknown
+    try {await provisioner.provisionArchive(archiveStore)} catch (error_) {error = error_}
+    expect(String(error)).to.include('must be retained')
   })
 })

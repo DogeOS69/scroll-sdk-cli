@@ -2,14 +2,14 @@ import {expect} from 'chai'
 
 import {
   ARCHIVE_POLICY_SIDS,
-  applyArtifactAccess,
+  type ArtifactAccessPlan,
   archivePolicySids,
   buildArchiveBucketPolicy,
   buildArchiveWriterPolicy,
   checkArtifactAccess,
   planArtifactAccess,
 } from '../../src/utils/artifact-access.js'
-import {ensureRetentionLifecycle, retentionLifecycleRule} from '../../src/utils/bucket-retention.js'
+import {checkExistingRetention, retentionLifecycleRule} from '../../src/utils/bucket-retention.js'
 
 const da = {bucket: 'dogeos-da-archive', forcePathStyle: false, keyPrefix: 'mainnet/batches', region: 'us-east-1'}
 const proof = {bucket: 'dogeos-proof-artifacts', forcePathStyle: false, keyPrefix: 'mainnet/proofs', region: 'us-east-1'}
@@ -41,12 +41,6 @@ function fixture() {
         return structuredClone(lifecycle)
       }
 
-      if (args[1] === 'put-bucket-lifecycle-configuration') {
-        writes.push(args)
-        lifecycle = {Rules: JSON.parse(args[args.indexOf('--lifecycle-configuration') + 1]).Rules}
-        return {}
-      }
-
       if (args[1] === 'get-role') return {Role: {Arn: roleArn}}
       if (args[1] === 'describe-vpc-endpoints') {
         const endpoint = endpoints[args[args.indexOf('--vpc-endpoint-ids') + 1]]
@@ -64,32 +58,7 @@ function fixture() {
     run(args: string[]): string {
       if (args[1] === 'head-bucket') return ''
       writes.push(args)
-      switch (args[1]) {
-      case 'put-public-access-block': {
-      bucketBlock = JSON.parse(args[args.indexOf('--public-access-block-configuration') + 1])
-      break;
-      }
-
-      case 'put-bucket-policy': {
-      bucket = JSON.parse(args[args.indexOf('--policy') + 1])
-      break;
-      }
-
-      case 'put-bucket-versioning': {
-      versioning = 'Enabled'
-      break;
-      }
-
-      case 'put-role-policy': {
-      inline = JSON.parse(args[args.indexOf('--policy-document') + 1])
-      break;
-      }
-
-      default: { throw new Error(`Unexpected AWS mutation: ${args[1]}`)
-      }
-      }
-
-      return ''
+      throw new Error(`Unexpected AWS mutation: ${args[1]}`)
     },
     text(args: string[]): string {
       if (args[0] === 'sts') return '123456789012'
@@ -97,7 +66,16 @@ function fixture() {
       throw new Error(`Unexpected AWS text read: ${args[1]}`)
     },
   }
-  return {aws, get block() {return block}, set block(value: boolean) {block = value}, get bucket() {return bucket}, get bucketBlock() {return bucketBlock}, set bucketBlock(value: Record<string, boolean> | undefined) {bucketBlock = value}, get deny() {return deny}, set deny(value: boolean) {deny = value}, get inline() {return inline}, set inline(value: unknown) {inline = value}, get lifecycle() {return lifecycle}, set lifecycle(value: Record<string, unknown> | undefined) {lifecycle = value}, writes}
+  return {aws, get block() {return block}, set block(value: boolean) {block = value}, get bucket() {return bucket}, set bucket(value: Record<string, unknown>) {bucket = value}, get bucketBlock() {return bucketBlock}, set bucketBlock(value: Record<string, boolean> | undefined) {bucketBlock = value}, get deny() {return deny}, set deny(value: boolean) {deny = value}, get inline() {return inline}, set inline(value: unknown) {inline = value}, get lifecycle() {return lifecycle}, set lifecycle(value: Record<string, unknown> | undefined) {lifecycle = value}, get versioning() {return versioning}, set versioning(value: string | undefined) {versioning = value}, writes}
+}
+
+/** Stands in for the infrastructure owner applying a reviewed plan; the CLI never writes. */
+function applyPlanned(f: ReturnType<typeof fixture>, plan: ArtifactAccessPlan): void {
+  if (plan.publicAccessBlock) f.bucketBlock = structuredClone(plan.publicAccessBlock.after) as Record<string, boolean>
+  if (plan.versioning.changed) f.versioning = 'Enabled'
+  if (plan.lifecycle.changed) f.lifecycle = structuredClone(plan.lifecycle.after)
+  if (plan.bucketPolicy.changed) f.bucket = structuredClone(plan.bucketPolicy.after)
+  if (plan.writerPolicy?.changed) f.inline = structuredClone(plan.writerPolicy.after)
 }
 
 function sids(policy: Record<string, unknown>): string[] {
@@ -110,10 +88,10 @@ describe('DA archive and snapshot bucket access', () => {
       const a = {...da, keyPrefix: 'deployments/one'}
       const b = {...da, keyPrefix: 'deployments/two'}
       const f = fixture()
-      applyArtifactAccess(f.aws, planArtifactAccess(f.aws, kind, a, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
+      applyPlanned(f, planArtifactAccess(f.aws, kind, a, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
       const first = structuredClone(f.bucket.Statement as Array<Record<string, unknown>>)
-      applyArtifactAccess(f.aws, planArtifactAccess(f.aws, kind, b, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
-      applyArtifactAccess(f.aws, planArtifactAccess(f.aws, kind, b, {publicRead: false}))
+      applyPlanned(f, planArtifactAccess(f.aws, kind, b, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
+      applyPlanned(f, planArtifactAccess(f.aws, kind, b, {publicRead: false}))
       for (const statement of first) expect(f.bucket.Statement).to.deep.include(statement)
       expect(sids(f.bucket)).to.include(archivePolicySids(kind, a.bucket, a.keyPrefix).publicRead)
       expect(sids(f.bucket)).not.to.include(archivePolicySids(kind, b.bucket, b.keyPrefix).publicRead)
@@ -137,7 +115,7 @@ describe('DA archive and snapshot bucket access', () => {
   it('checks IAM permission for the height-ordered discovery copy as well as the primary sidecar', () => {
     const f = fixture()
     const options = {publicRead: true, sidecarStore: proof, writerRoleArn: roleArn}
-    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))
+    applyPlanned(f, planArtifactAccess(f.aws, 'da', da, options))
     const {json} = f.aws
     f.aws.json = (args: string[]) => {
       const result = json(args)
@@ -151,14 +129,13 @@ describe('DA archive and snapshot bucket access', () => {
     expect(() => checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))).to.throw('scroll-chunk-segmentation-sidecars-by-height/')
   })
 
-  it('plans without writes, then enables versioning, VPC-endpoint and public reads and the writer grant idempotently', () => {
+  it('plans versioning, VPC-endpoint and public reads and the writer grant without writes, then checks the applied state', () => {
     const f = fixture()
     const options = {publicRead: true, sidecarStore: proof, vpcEndpointId: 'vpce-0abc', writerRoleArn: roleArn}
     const plan = planArtifactAccess(f.aws, 'da', da, options)
     expect(f.writes).to.deep.equal([])
     expect(plan.versioning.changed).to.equal(true)
-    applyArtifactAccess(f.aws, plan)
-    expect(f.writes.map(args => args[1])).to.deep.equal(['put-bucket-versioning', 'put-bucket-lifecycle-configuration', 'put-bucket-policy', 'put-role-policy'])
+    applyPlanned(f, plan)
     expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', archivePolicySids('da', da.bucket, da.keyPrefix).publicRead, archivePolicySids('da', da.bucket, da.keyPrefix).vpceRead])
     expect(JSON.stringify(f.inline)).not.to.include('DeleteObject')
     expect(JSON.stringify(f.inline)).not.to.include('ListBucket')
@@ -169,21 +146,13 @@ describe('DA archive and snapshot bucket access', () => {
 
   it('kill switch removes only the public statement and keeps VPC-endpoint reads', () => {
     const f = fixture()
-    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
-    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: false}))
+    applyPlanned(f, planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'}))
+    applyPlanned(f, planArtifactAccess(f.aws, 'da', da, {publicRead: false}))
     expect(sids(f.bucket)).to.deep.equal(['PartnerRead', 'ScrollSdkDenyInsecureTransport', archivePolicySids('da', da.bucket, da.keyPrefix).vpceRead])
     // Omitting both flags leaves the owned statements as they are.
     expect(planArtifactAccess(f.aws, 'da', da, {}).bucketPolicy.changed).to.equal(false)
-    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))
+    applyPlanned(f, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))
     expect(sids(f.bucket)).to.include(archivePolicySids('da', da.bucket, da.keyPrefix).publicRead)
-  })
-
-  it('fails on policy drift before any mutation', () => {
-    const f = fixture()
-    const plan = planArtifactAccess(f.aws, 'da', da, {publicRead: true, sidecarStore: proof, writerRoleArn: roleArn})
-    ;(f.bucket.Statement as unknown[]).push({Effect: 'Deny', Sid: 'ConcurrentEdit'})
-    expect(() => applyArtifactAccess(f.aws, plan)).to.throw('changed after planning')
-    expect(f.writes).to.have.length(0)
   })
 
   it('does not disable account/bucket public access protection', () => {
@@ -195,14 +164,14 @@ describe('DA archive and snapshot bucket access', () => {
     expect(f.writes).to.have.length(0)
   })
 
-  it('plans explicit bucket policy permission without writes and preserves blocked ACLs on apply', () => {
+  it('plans explicit bucket policy permission without writes and preserves blocked ACLs', () => {
     const f = fixture()
     f.bucketBlock = {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
     const options = {allowBucketPublicPolicy: true, publicRead: true}
     const plan = planArtifactAccess(f.aws, 'da', da, options)
     expect(f.writes).to.have.length(0)
     expect(() => checkArtifactAccess(f.aws, plan)).to.throw('Public Access Block differs')
-    applyArtifactAccess(f.aws, plan)
+    applyPlanned(f, plan)
     expect(f.bucketBlock).to.deep.equal({BlockPublicAcls: true, BlockPublicPolicy: false, IgnorePublicAcls: true, RestrictPublicBuckets: false})
     expect(planArtifactAccess(f.aws, 'da', da, options).publicAccessBlock).to.equal(undefined)
     checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))
@@ -219,25 +188,16 @@ describe('DA archive and snapshot bucket access', () => {
     expect(f.writes).to.have.length(0)
   })
 
-  it('rejects public block drift before any writes and requires explicit public-read intent', () => {
+  it('requires explicit public-read intent to allow bucket public policies', () => {
     const f = fixture()
     expect(() => planArtifactAccess(f.aws, 'da', da, {allowBucketPublicPolicy: true})).to.throw('requires explicit public read')
-    f.bucketBlock = {BlockPublicPolicy: true, RestrictPublicBuckets: true}
-    const plan = planArtifactAccess(f.aws, 'da', da, {allowBucketPublicPolicy: true, publicRead: true})
-    f.bucketBlock = {BlockPublicPolicy: false, RestrictPublicBuckets: true}
-    expect(() => applyArtifactAccess(f.aws, plan)).to.throw('Public Access Block changed')
     expect(f.writes).to.have.length(0)
   })
 
-  it('rejects negated grants and rechecks account protection immediately before applying', () => {
+  it('rejects negated grants when bucket public policies are allowed', () => {
     const f = fixture()
     f.bucketBlock = {BlockPublicPolicy: true, RestrictPublicBuckets: true}
     const options = {allowBucketPublicPolicy: true, publicRead: true}
-    const plan = planArtifactAccess(f.aws, 'da', da, options)
-    f.block = true
-    expect(() => applyArtifactAccess(f.aws, plan)).to.throw('account Public Access Block')
-    expect(f.writes).to.have.length(0)
-    f.block = false
     ;(f.bucket.Statement as unknown[]).push({Action: 's3:GetObject', Effect: 'Allow', NotPrincipal: {AWS: roleArn}, Resource: '*', Sid: 'NegatedGrant'})
     expect(() => planArtifactAccess(f.aws, 'da', da, options)).to.throw('negated allow statements')
     expect(f.writes).to.have.length(0)
@@ -252,7 +212,7 @@ describe('DA archive and snapshot bucket access', () => {
   it('fails IAM checks on an explicit denial', () => {
     const f = fixture()
     const options = {publicRead: true, sidecarStore: proof, vpcEndpointId: 'vpce-0abc', writerRoleArn: roleArn}
-    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))
+    applyPlanned(f, planArtifactAccess(f.aws, 'da', da, options))
     const writes = f.writes.length
     f.deny = true
     expect(() => checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))).to.throw('did not allow')
@@ -262,7 +222,7 @@ describe('DA archive and snapshot bucket access', () => {
   it('check fails when the managed writer policy is broader or stale, before simulating', () => {
     const f = fixture()
     const options = {publicRead: true, sidecarStore: proof, vpcEndpointId: 'vpce-0abc', writerRoleArn: roleArn}
-    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))
+    applyPlanned(f, planArtifactAccess(f.aws, 'da', da, options))
     // The old setup eth-da-submitter grant: Get/Put on the whole bucket.
     f.inline = {Statement: [{Action: ['s3:GetObject', 's3:PutObject'], Effect: 'Allow', Resource: 'arn:aws:s3:::dogeos-da-archive/*'}], Version: '2012-10-17'}
     expect(() => checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, options))).to.throw('differs from the managed policy')
@@ -302,7 +262,7 @@ describe('DA archive and snapshot bucket access', () => {
     // 1. Public read on, endpoint omitted: an owned-Sid anonymous write with no
     //    endpoint condition must not be carried forward.
     const f1 = fixture()
-    applyArtifactAccess(f1.aws, planArtifactAccess(f1.aws, 'da', da, {publicRead: true}))
+    applyPlanned(f1, planArtifactAccess(f1.aws, 'da', da, {publicRead: true}))
     ;(f1.bucket.Statement as unknown[]).push({Action: 's3:PutObject', Effect: 'Allow', Principal: '*', Resource: resource, Sid: vpceSid})
     const writes = f1.writes.length
     expect(() => planArtifactAccess(f1.aws, 'da', da, {publicRead: true})).to.throw(`${vpceSid} is not the canonical CLI statement`)
@@ -318,20 +278,20 @@ describe('DA archive and snapshot bucket access', () => {
     expect(f1.writes).to.have.length(writes)
     expect(f2.writes).to.have.length(0)
     // Passing the option explicitly reconciles the statement to canonical.
-    applyArtifactAccess(f2.aws, planArtifactAccess(f2.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0abc'}))
+    applyPlanned(f2, planArtifactAccess(f2.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0abc'}))
     checkArtifactAccess(f2.aws, planArtifactAccess(f2.aws, 'da', da, {publicRead: false}))
   })
 
   it('refuses to turn public read off without a usable same-region VPC endpoint read path', () => {
     const f = fixture()
-    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))
+    applyPlanned(f, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))
     const writes = f.writes.length
     expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: false})).to.throw('would lose read access')
     expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0bbb'})).to.throw('not an available us-east-1 S3 Gateway endpoint')
     expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0ccc'})).to.throw('not an available')
     expect(f.writes).to.have.length(writes)
     // A recorded, usable endpoint statement is enough on later runs and checks.
-    applyArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0abc'}))
+    applyPlanned(f, planArtifactAccess(f.aws, 'da', da, {publicRead: false, vpcEndpointId: 'vpce-0abc'}))
     checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: false}))
   })
 
@@ -363,10 +323,8 @@ describe('DA archive and snapshot bucket access', () => {
     f.lifecycle = {Rules: [sibling, disabled], TransitionDefaultMinimumObjectSize: 'varies_by_storage_class'}
     const plan = planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'})
     expect(plan.lifecycle.changed).to.equal(true)
-    applyArtifactAccess(f.aws, plan)
-    expect(f.lifecycle?.Rules).to.deep.equal([sibling, disabled, retentionLifecycleRule('da', da.bucket, da.keyPrefix)])
-    const put = f.writes.find(args => args[1] === 'put-bucket-lifecycle-configuration')!
-    expect(put.slice(-2)).to.deep.equal(['--transition-default-minimum-object-size', 'varies_by_storage_class'])
+    expect(plan.lifecycle.after).to.deep.equal({Rules: [sibling, disabled, retentionLifecycleRule('da', da.bucket, da.keyPrefix)], TransitionDefaultMinimumObjectSize: 'varies_by_storage_class'})
+    applyPlanned(f, plan)
     expect(retentionLifecycleRule('da', da.bucket, da.keyPrefix)).to.deep.include({AbortIncompleteMultipartUpload: {DaysAfterInitiation: 7}, Filter: {Prefix: 'mainnet/batches/'}})
     checkArtifactAccess(f.aws, planArtifactAccess(f.aws, 'da', da, {publicRead: true}))
     const snapshot = planArtifactAccess(fixture().aws, 'snapshot', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'}).lifecycle
@@ -382,15 +340,16 @@ describe('DA archive and snapshot bucket access', () => {
     const f = fixture()
     f.lifecycle = {Rules: [rule]}
     expect(() => planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'})).to.throw(`lifecycle rule ${rule.ID}`)
-    expect(() => ensureRetentionLifecycle(f.aws, 'da', da)).to.throw('DA blobs are kept forever')
+    expect(() => checkExistingRetention(f.aws, 'da', da)).to.throw('must be retained')
     expect(f.writes).to.deep.equal([])
   })
 
-  it('accepts directly readable transitions and leaves a correct lifecycle unwritten', () => {
+  it('accepts directly readable transitions and plans no lifecycle change when it is already correct', () => {
     const f = fixture()
     const tiering = {Filter: {Prefix: ''}, ID: 'Tiering', Status: 'Enabled', Transitions: [{Days: 30, StorageClass: 'INTELLIGENT_TIERING'}]}
     f.lifecycle = {Rules: [tiering, retentionLifecycleRule('da', da.bucket, da.keyPrefix)]}
-    expect(ensureRetentionLifecycle(f.aws, 'da', da)).to.deep.equal({changed: false})
+    expect(() => checkExistingRetention(f.aws, 'da', da)).not.to.throw()
+    expect(planArtifactAccess(f.aws, 'da', da, {publicRead: true, vpcEndpointId: 'vpce-0abc'}).lifecycle.changed).to.equal(false)
     expect(f.writes).to.deep.equal([])
   })
 
