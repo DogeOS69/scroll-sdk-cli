@@ -31,6 +31,16 @@ export async function prepareCubesignerPolicy(root: string, command: (args: stri
 
   if (selection?.method === 'external') {
     const verified = verifyExternalPolicy(root, selection as ExternalPolicySelection)
+    if (typeof selection.sourceRepo !== 'string' || !selection.sourceRepo.trim() || !fs.existsSync(path.resolve(root, selection.sourceRepo))) {
+      throw new AwaitingInput({
+        file: input,
+        inputTemplate: {buildReceiptSha256: selection.buildReceiptSha256, expectedCoreRevision: selection.expectedCoreRevision, method: 'external', sourceRepo: inputTemplate.sourceRepo},
+        message: 'External policy reuse requires a local Core checkout to verify core #1712 ancestry. Supply sourceRepo in the policy selection, or rerun setup cubesigner-policy import with the same pinned inputs and --source-repo.',
+      })
+    }
+
+    // Legacy imports also need the reader fix; artifact integrity alone does not establish ancestry.
+    assertPolicyReaderFix(path.resolve(root, selection.sourceRepo), verified.receipt.coreRevision, run)
     writeJson(localPath(root, '.data/cubesigner-policy-governance-handoff.json'), {
       buildReceipt: {path: `${POLICY_OUTPUT}/build-receipt.json`, sha256: proofFileHash(verified.receiptFile)},
       buildScript: verified.receipt.buildScript,
