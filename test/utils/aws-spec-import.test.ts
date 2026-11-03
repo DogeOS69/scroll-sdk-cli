@@ -98,6 +98,39 @@ describe('CloudFormation references to operator spec', () => {
     expect(read().identities.sequencers[0].signer.kms.keyId).eq(arn('key/s1'))
   })
 
+  it('selects prefixed outputs from stacks holding several target groups or NLBs', () => {
+    spec.bootnodePublicP2p.push({enabled: true, index: 0, mode: 'existing'})
+    spec.infrastructure.aws.alb.bindings.portal2 = {endpoint: 'public', serviceRef: {name: 'portal2', port: 80}}
+    const edge = {...lb, Portal2TargetGroupArn: arn('targetgroup/portal2/2'), PortalTargetGroupArn: arn('targetgroup/portal/1')}
+    add('alb', edge, {endpoint: 'public'})
+    add('http-target', edge, {binding: 'frontends', prefix: 'Portal'})
+    add('http-target', edge, {binding: 'portal2', prefix: 'Portal2'})
+    const p2p = {Bootnode0SecurityGroupId: 'sg-00000000', Bootnode0TargetGroupArn: arn('targetgroup/b0/1'),
+      Bootnode1SecurityGroupId: 'sg-11111111', Bootnode1TargetGroupArn: arn('targetgroup/b1/1')}
+    add('bootnode-nlb', p2p, {index: 0, prefix: 'Bootnode0'})
+    add('bootnode-nlb', p2p, {index: 1, prefix: 'Bootnode1'})
+    save(); run({write: true})
+    const result = read()
+    expect(result.infrastructure.aws.alb.bindings.frontends.targetGroupArn).eq(arn('targetgroup/portal/1'))
+    expect(result.infrastructure.aws.alb.bindings.portal2.targetGroupArn).eq(arn('targetgroup/portal2/2'))
+    expect(result.infrastructure.aws.alb.endpoints.public.listenerArn).eq(lb.ListenerArn)
+    expect(result.bootnodePublicP2p.find((b: any) => b.index === 0).existingNlb).deep.eq({securityGroupIds: ['sg-00000000'], targetGroupArn: arn('targetgroup/b0/1')})
+    expect(result.bootnodePublicP2p.find((b: any) => b.index === 1).existingNlb).deep.eq({securityGroupIds: ['sg-11111111'], targetGroupArn: arn('targetgroup/b1/1')})
+  })
+
+  for (const [label, kind, fields, error] of [
+    ['lowercase', 'http-target', {binding: 'frontends', prefix: 'portal'}, /Invalid source prefix/],
+    ['symbol', 'http-target', {binding: 'frontends', prefix: 'Portal-1'}, /Invalid source prefix/],
+    ['unsupported kind', 'signing-identities', {prefix: 'Eth'}, /Invalid source kind/],
+  ] as const) {
+    it(`rejects an invalid output prefix: ${label}`, () => {
+      add(kind, {PortalTargetGroupArn: arn('targetgroup/portal/1')}, fields)
+      const original = save()
+      expect(() => run({write: true})).throw(error)
+      expect(fs.readFileSync(specFile, 'utf8')).eq(original)
+    })
+  }
+
   it('previews concrete conflicts, refuses writes by default and requires explicit replacement', () => {
     spec.infrastructure.aws.alb.endpoints.public.loadBalancerArn = arn('loadbalancer/app/old/123')
     add('alb', lb, {endpoint: 'public'})
