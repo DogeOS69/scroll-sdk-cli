@@ -1921,6 +1921,9 @@ describe('deployment-spec-generator', () => {
         expect(node.reth.l1Url).to.equal('http://l1-interface:8545');
         expect(node.reth.trustedPeers).to.equal('');
         expect(node.reth.extraArgs).not.to.include('--network.legacy-geth-header-transform');
+        const pendingBlock = node.reth.extraArgs.indexOf('--rpc.pending-block');
+        expect(pendingBlock).to.be.greaterThan(-1);
+        expect(node.reth.extraArgs[pendingBlock + 1]).to.equal('none');
         if (role === 'sequencer') {
           expect(node.reth.extraArgs).not.to.include('--consensus.exit-on-signer-rotation');
         } else {

@@ -467,7 +467,14 @@ function generateL2RethValues(spec: DeploymentSpec, role: 'bootnode' | 'rpc' | '
       data: {accessMode: 'ReadWriteOnce', mountPath: '/data', retain: true, size: '1000Gi'},
       engineLegacyStateRoot: true,
       engineSyncAtStartup: 'true',
-      extraArgs: [...(sequencer ? [] : ['--consensus.exit-on-signer-rotation']), ...(role === 'rpc' && !publicRpc ? ['--rpc.eth-proof-window', '100000'] : [])],
+      // `none` stops RPC requests from building a pending block from the pool on
+      // the blocking pool (DogeOS69/reth #17). `pending` nonces still come from
+      // the pool, and `pending` state reads fall back to latest.
+      extraArgs: [
+        ...(sequencer ? [] : ['--consensus.exit-on-signer-rotation']),
+        '--rpc.pending-block', 'none',
+        ...(role === 'rpc' && !publicRpc ? ['--rpc.eth-proof-window', '100000'] : []),
+      ],
       genesis: {chainPath: '/app/genesis/genesis.json', configMapName: 'genesis-config', mountPath: '/app/genesis/genesis.json', subPath: 'genesis.json'},
       http: {addr: '0.0.0.0', api: role === 'rpc' && !publicRpc ? 'eth,net,web3,rpc,debug' : 'eth,net,web3,rpc', corsDomain: '*', enabled: true},
       ipcPath: '/tmp/reth.ipc',
