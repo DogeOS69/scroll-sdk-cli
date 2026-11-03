@@ -133,7 +133,7 @@ export function newDstackCredentials(): DstackCredentials {
 export function configureDstackCredentialRefs(config: DstackControllerConfig, state: DstackCredentials): DstackControllerConfig {
   validateDstackControllerConfig(config)
   const next = structuredClone(config)
-  if (state.providers.includes('aws') && (config.defaultCredentialsEnabled !== true || !/^arn:aws(?:-[a-z]+)?:iam::\d{12}:role\/[\w+,./=@-]+$/.test(config.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn'] ?? ''))) throw new Error('AWS dstack requires defaultCredentialsEnabled and an existing controller IRSA serviceAccount role annotation')
+  if (state.providers.includes('aws') && (config.defaultCredentialsEnabled !== true || !(config.awsWorkloadIdentity === 'pod-identity' ? config.serviceAccount?.name : /^arn:aws(?:-[a-z]+)?:iam::\d{12}:role\/[\w+,./=@-]+$/.test(config.serviceAccount?.annotations?.['eks.amazonaws.com/role-arn'] ?? '')))) throw new Error('AWS dstack requires defaultCredentialsEnabled and a named Pod Identity ServiceAccount or existing controller IRSA serviceAccount role annotation')
   next.enabled = true
   if (state.providers.includes('gcp')) {
     next.credentialSecrets ??= []

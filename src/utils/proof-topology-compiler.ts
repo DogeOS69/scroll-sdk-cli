@@ -299,6 +299,8 @@ export function renderProofTopologySource(
   deploymentDir = '.',
   container = false,
 ): string {
+  if (topology.generation === 'real' && topology.active?.workerLaunch !== 'external') throw new Error('Real proof workers must be external and managed by Capacity Manager')
+  if ('workerDeploymentBackend' in (topology.deployment ?? {})) throw new Error('Standalone worker deployment backends have been removed; use Capacity Manager')
   if (!Number.isSafeInteger(topology.observeRealProofDeadlineMs) || topology.observeRealProofDeadlineMs! <= 0) {
     throw new Error('observeRealProofDeadlineMs must be an explicit positive safe integer (no default)')
   }

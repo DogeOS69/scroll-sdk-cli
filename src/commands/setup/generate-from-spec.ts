@@ -17,6 +17,7 @@ import {
 import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {ALB_SERVICES, preserveSharedAlbPaths, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
 import {validateExistingNlbSdk} from '../../utils/existing-nlb.js'
+import {validateFinalValues} from '../../utils/final-values-validation.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import {GenerationTransaction} from '../../utils/generation-transaction.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
@@ -109,6 +110,9 @@ export default class GenerateFromSpec extends Command {
       description: 'Also generate values/*.yaml Helm files',
     }),
   }
+
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(GenerateFromSpec)
@@ -264,8 +268,8 @@ export default class GenerateFromSpec extends Command {
       const monitor = 'scroll-monitor-production.yaml'
       const monitorTemplate = mergeBootstrapValues(templateFiles[`values/${monitor}`], '{}', existingValues(monitor))
       valuesFiles = generateValuesFiles(spec, monitorTemplate, {bootstrap: flags.bootstrap})
-      if (flags.bootstrap && spec.signing?.cubesigner?.mode === 'production_verifier_key_policy'
-        && !spec.signing.cubesigner.policyReceipts && !spec.signing.cubesigner.productionPolicy) {
+      if (flags.bootstrap && spec.bridge?.cubesigner?.mode === 'production_verifier_key_policy'
+        && !spec.bridge.cubesigner.policyReceipts && !spec.bridge.cubesigner.productionPolicy) {
         jsonCtx.addWarning('CubeSigner production policy receipts are pending. Bootstrap can prepare genesis; import the governed policy receipts before final configuration generation or deployment.')
       }
 
@@ -353,6 +357,7 @@ export default class GenerateFromSpec extends Command {
       applyHelmValues(allValues, spec)
       preserveSharedAlbPaths(allValues, spec, existingValues)
       projectExistingAlb(allValues, spec)
+      validateFinalValues(allValues, spec, {deferIngressValidation: flags.bootstrap})
       Object.assign(valuesFiles, allValues)
     }
 

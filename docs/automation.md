@@ -108,11 +108,11 @@ Failures return:
 
 ```json
 {
-  "command": "setup proof-worker",
+  "command": "capacity-manager",
   "duration_ms": 123,
   "error": {
     "category": "CONFIGURATION",
-    "code": "E713_PROOF_WORKER_CONFIG_FAILED",
+    "code": "E818_CAPACITY_MANAGER_DIAGNOSTICS",
     "context": {},
     "message": "actionable failure description",
     "recoverable": true
@@ -195,8 +195,9 @@ and artifacts. Relevant examples:
   VPC endpoint and route-table associations. Both routes remain explicitly
   unverified. For a shared bucket with an existing public S3 policy, select
   `existing-public-s3`: the CLI preserves bucket-wide Public Access Block and
-  public-policy ownership while still reconciling the deployment-scoped
-  endpoint, IRSA, and secret resources. `direct-s3` is reserved for buckets
+  other statements, adds this deployment's prefix-scoped read grant only when
+  the policy does not already grant it, and still reconciles the
+  deployment-scoped endpoint, IRSA, and secret resources. `direct-s3` is reserved for buckets
   whose public-read posture the CLI owns. It writes stable, non-secret resource facts to
   `.data/proof-aws.json` and never reads or modifies generated values;
 - `prep-charts` projects `.data/proof-aws.json` into final values. With

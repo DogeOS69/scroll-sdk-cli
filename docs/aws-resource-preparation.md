@@ -1,53 +1,42 @@
-# AWS resource preparation coverage
+# AWS infrastructure and application configuration
 
-Source audit: 2026-10-21. This inventories the CLI preparation paths and matching
-SDK service prerequisites, not any deployed account. No live AWS readiness is
-implied. Use a private deployment spec and keep real resource identifiers and
-credentials out of source examples.
+AWS infrastructure is prepared before genesis using the external
+[CloudFormation template pack](../infrastructure/aws/cloudformation/README.md),
+or an existing infrastructure owner's tooling. The application CLI discovers
+resource information and writes production values. It does not create resources,
+modify permissions, simulate policies or audit AWS network/bucket configuration
+in the spec preparation workflow.
 
-**NLBs and ALBs are prepared manually.** Existing-reference generation, read-only
-preflight and Kubernetes target registration are supported; expanding their AWS
-resource creation is not part of this work. Legacy optional ingress/network
-creation paths still exist, but are not the recommended preparation route here.
+| Infrastructure | External owner prepares | CLI consumes and projects |
+| --- | --- | --- |
+| Five signing KMS keys for two sequencers | Keys, aliases, key policies | Canonical ARN, region, public key and derived signer address |
+| Six application roles | Trust, KMS/S3 policies and Pod Identity associations | Named ServiceAccounts; optional IRSA annotations for legacy deployments |
+| dstack role | Pod Identity association, EC2 policy, optional instance-profile access | Controller ServiceAccount name and default credential chain |
+| Existing archive/proof/snapshot buckets | Buckets, complete access policies, encryption and retention | Region, bucket, prefix and artifact URLs |
+| Proof Secret | Secret metadata and two random credentials | Secret name/region and ExternalSecret references; never credential contents |
+| ALBs and target groups | Listeners, routes, TLS/DNS, SG/backend access | TargetGroupBindings and TSO subnet peers |
+| Optional bootnode NLB | NLB, fixed EIPs, target groups and partner allowlist | Binding, SG IDs and exported public endpoints |
+| External Secrets reader | Prefix-scoped role and separately installed ServiceAccount | Existing reader/SecretStore references |
+| EKS, OIDC, VPC, NAT, ACM, RDS | Existing platform infrastructure | Existing cluster, network, database and certificate references |
 
-## Service and resource inventory
+The CLI retains local schema/required-input validation, clear resource-read
+errors and pinned identity preservation. `setup aws` is repeatable discovery;
+`setup render` projects its outputs into `*-production.yaml`. Credentials and
+application artifacts are uploaded only by their explicit later workflow steps.
+Those uploads do not grant bucket public access or change IAM policies.
 
-| Consumer / resource | Existing preparation route | Operator handoff / remaining gap |
-|---|---|---|
-| L2 sequencer, fee oracle, eth-da-submitter: KMS signing keys, IAM role and IRSA | `setup aws` identities / `setup gen-keystore`; [keystore guide](keystore.md) | Choose KMS explicitly; supply account, EKS and service identity inputs. EKS/OIDC and the operator's provisioning access must exist. |
-| Withdrawal processor: Bridge sequencer KMS key and signing grants | `preparation.bridge.production.sequencerKms` in `setup aws`; [spec workflow](spec-preparation.md#commands) | Create/reuse modes; role selection and imported key prerequisites remain explicit. This does not create a fee-wallet KMS signer. |
-| Proof coordinator and withdrawal processor: artifact S3 bucket, workload roles, shared token Secret, optional S3 endpoint | `preparation.proofAws` / `setup proof-aws-init`; [proof runbook](proof-operator-runbook.md), [artifact storage](ethereum-da-s3.md) | Select external read mode. Reuse requires existing resources. Cross-region endpoints/gateway delivery and effective worker/signer read access need operator verification. |
-| eth-da-submitter: DA archive bucket, writer role policy and public read policy | `preparation.archive` / `setup eth-da-submitter`; `setup artifact-access --store da`; [archive guide](ethereum-da-s3.md) | KMS identity setup supplies a role, or supply an existing writer role. `configure` preserves the existing-bucket boundary; public read requires explicit selection. |
-| Snapshot publication/bootstrap: S3 bucket and writer/public read policy | `setup artifact-access --store snapshot` configures/checks an existing bucket; [preflight guide](deployment-preflight.md) | **No snapshot bucket creation step.** Prepare bucket and writer identity separately; this is not the proof bucket workflow. Source snapshot contents and publication are separate operator work. |
-| Proof program and signer kit publication: S3 object prefixes/read policy | `setup proof-publish`, `setup signer-kit-publish`; [spec workflow](spec-preparation.md) | Reuses the proof store; publishing identity needs prefix-scoped access. Does not prepare ECR/image registries. |
-| dstack controller / capacity-manager workers: EC2 provisioning role and IRSA | Importing the AWS provider (`preparation.dstack.providers: [aws]`) in `setup aws`; [new runbook](dstack-aws-preparation.md) | Creates the controller role, or verifies the role named by an existing annotation, and binds it; reads existing networks. Worker profile, VPC egress, controller reachability and GPU quotas remain manual. Capacity-manager itself does not need the controller's EC2 role. |
-| Runtime application Secrets: Secrets Manager records and Kubernetes references | `setup upload-secrets` / `setup push-secrets`; [spec workflow](spec-preparation.md) | Uploads values and configures references; **does not install External Secrets Operator or grant its reader role**. Dstack bundles and monitoring Secrets have their own direct Kubernetes upload path. |
-| Stateful services: Reth, Dogecoin, Blockbook, bridge history, monitoring, optional SQLite dstack | Helm PVCs via SDK charts; `setup deployment-preflight` covers selected compute/manifest prerequisites, not storage topology | **EBS CSI identity/add-on, StorageClasses and optional snapshot controller are cluster prerequisites**, not provisioned by service setup. Verify AZ/topology, reclaim policy and backups. |
-| Shared PostgreSQL: Blockscout, dstack and other database consumers | `setup db-init`; staged selections create databases/users in an existing PostgreSQL server | **No RDS instance, subnet group, database SG, backups or parameter-group creation.** Connection inputs do not prove server/network readiness. |
-| Bootnode public P2P: NLB, EIP, SG, TCP listener/IP target group | Manual resource preparation; `setup nlb` validates; [NLB runbook](existing-nlb.md) links SDK creation/handoff instructions | Intentionally manual. Preserve per-node identity, approved partner CIDRs, AZ alignment and resource lifecycle outside Helm. |
-| Public HTTP services: ALB, listener/rules, IP target groups and SGs | Manual resource preparation; `setup alb` validates; [ALB runbook](existing-alb.md) | Intentionally manual. AWS Load Balancer Controller and TargetGroupBinding CRD/permissions must already exist. |
-| TLS and endpoint names: ACM certificates, DNS records/private zones | Domain/ingress projection and selected certificate checks; [ALB guidance](existing-alb.md), [spec TLS guidance](spec-preparation.md#internal-dstack-https-with-managed-certificate-renewal) | **No general certificate issuance/DNS setup workflow.** Operator creates/validates certificates, binds listeners and creates public/private records, including renewal validation records. |
-| EKS shared foundation: VPC/subnets, cluster/node groups, OIDC, add-on roles | Input references and read preflight only; [deployment preflight](deployment-preflight.md) | **No complete cluster bootstrap runbook in the CLI.** Prepare before per-service IAM. The dstack guide now includes OIDC association and required worker route rules. |
-| Optional AWS GPU quotas, billing alerts and service-linked roles | Existing Core AWS runbook linked from [dstack guide](dstack-controller.md) | Manual account operations. No quota-increase or budget/alert creation in the staged CLI. Check each selected region; quota submission is not approval. |
-| CubeSigner-backed signer services | CubeSigner preparation/governance/session steps; [CubeSigner workflow](cubesigner-preparation.md) | CubeSigner organization/keys/policies are provider prerequisites, not AWS resources that this CLI creates in the operator account. Partner-host EC2/EBS/network setup, if selected, remains partner infrastructure. |
+Use stable infrastructure names. Test resources should use an explicit
+`nonproduction-deletable` classification, descriptive aliases and corresponding
+tags. Deletable labels do not bypass CloudFormation Retain or LB deletion
+protection: teardown remains an explicit infrastructure operation.
 
-## Gaps worth addressing next
+## EKS Pod Identity
 
-The service-level KMS and S3 paths have preparation commands. The main remaining
-operator handoffs are cluster foundations and optional infrastructure:
-
-1. A reusable EKS prerequisite runbook: OIDC provider, EBS CSI, External Secrets
-   reader IAM scoped to the deployment Secret prefix (plus KMS decrypt when using
-   a customer-managed Secret key), and the Load Balancer Controller/CRD. Include
-   role ownership and read-only acceptance checks, not automatic role takeover.
-2. A shared PostgreSQL/RDS prerequisite runbook: engine/version, network reachability,
-   TLS, admin bootstrap, backup and restore acceptance. `db-init` operates inside
-   this server and must not be described as creating RDS.
-3. A snapshot store creation/handoff procedure: bucket, region, writer identity,
-   versioning/encryption, sanitized source snapshot, publication and read acceptance.
-4. A certificate/DNS handoff covering issued ACM certificates, listener attachment,
-   public/private resolution and renewal validation. Keep NLB/ALB creation in the
-   existing manual runbooks.
-
-These gaps are recorded for follow-up; this change adds dstack role preparation
-and documentation, not new provisioning for these unrelated resources.
+New AWS deployments select `infrastructure.aws.workloadIdentity: pod-identity`.
+Prepare the cluster Agent and workload roles/associations using the external
+[CloudFormation lifecycle templates](../infrastructure/aws/cloudformation/README.md).
+`setup aws` reads the selected role and association metadata. Rendering pins the
+ServiceAccount name and removes its IRSA role annotation; it does not write IAM
+policies or create an association. Proof consumers use ambient SDK credentials.
+Shared ESO retains its separate IRSA reader. An omitted field keeps legacy IRSA
+behavior; migrating existing Pods requires the normal Helm rollout after render.

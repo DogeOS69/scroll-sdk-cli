@@ -11,6 +11,7 @@ import type {Invoke} from './preparation-runner.js'
 import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {writeConfigs} from './config-writer.js'
 import {inspectContractOwner} from './contract-owner.js'
+import {normalizeNativeRethGenesis} from './native-reth-genesis.js'
 import {resolveEnvValue} from './non-interactive.js'
 import {digest, localPath, privateWrite, writeJson} from './preparation-io.js'
 
@@ -50,10 +51,13 @@ export async function prepareLocalGenesis(root: string, spec: DeploymentSpec, in
   await invoke(stage, 'genesis-local', ['gen-l2-artifacts', '-N', '--skip-deployment-salt-update', '--skip-l1-fee-vault-update',
     ...(source ? ['--contracts-source', path.resolve(root, source)] : []),
   ])
-  const wrapped = fs.readFileSync(localPath(stage, 'values/genesis.yaml'), 'utf8')
+  let wrapped = fs.readFileSync(localPath(stage, 'values/genesis.yaml'), 'utf8')
   const document = yaml.load(wrapped) as {scrollConfig?: unknown}
-  const genesis = typeof document.scrollConfig === 'string' ? JSON.parse(document.scrollConfig) : document.scrollConfig
+  let genesis = typeof document.scrollConfig === 'string' ? JSON.parse(document.scrollConfig) : document.scrollConfig
   if (!genesis || typeof genesis !== 'object' || !genesis.alloc || genesis.config?.chainId !== spec.network.l2ChainId) throw new Error('Genesis generator returned invalid genesis or the wrong chain ID')
+  genesis = normalizeNativeRethGenesis(genesis)
+  document.scrollConfig = typeof document.scrollConfig === 'string' ? JSON.stringify(genesis, null, 2) : genesis
+  wrapped = yaml.dump(document, {lineWidth: -1, noRefs: true})
   for (const file of ['genesis.yaml', 'values/genesis.yaml']) privateWrite(localPath(root, file), wrapped)
   const json = JSON.stringify(genesis, null, 2) + '\n'
   for (const file of ['genesis.json', '.data/genesis.json']) privateWrite(localPath(root, file), json)

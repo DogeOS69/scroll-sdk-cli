@@ -9,6 +9,7 @@ import {isRetiredServiceFile} from '../../utils/retired-services.js'
 
 export default class SetupTls extends Command {
   static override description = 'Configure ACM TLS on enabled AWS ALB ingresses in deployment values (no cluster changes)'
+
   static override examples = ['<%= config.bin %> <%= command.id %> --certificate-arn arn:aws:acm:us-east-1:123456789012:certificate/00000000-0000-0000-0000-000000000000 --non-interactive']
   static override flags = {
     'certificate-arn': Flags.string({description: 'Issued ACM certificate ARN covering the enabled ingress hosts; comma-separated ARNs are supported'}),
@@ -16,6 +17,9 @@ export default class SetupTls extends Command {
     'non-interactive': Flags.boolean({char: 'N', default: false}),
     'values-dir': Flags.string({default: 'values'}),
   }
+
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
 
   async run(): Promise<void> {
     const {flags} = await this.parse(SetupTls)

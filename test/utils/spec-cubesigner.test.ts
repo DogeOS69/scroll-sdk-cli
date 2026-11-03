@@ -8,7 +8,7 @@ import {resolveCubesignerIdentity} from '../../src/utils/spec-cubesigner.js'
 describe('spec CubeSigner public identity discovery', () => {
   const fixture = () => {
     const key = new SigningKey(Wallet.createRandom().privateKey)
-    const spec = {bridge: {}, dogecoin: {network: 'testnet'}, signing: {cubesigner: {identity: {roleId: 'Role#test'}}}} as DeploymentSpec
+    const spec = {bridge: {cubesigner: {identity: {roleId: 'Role#test'}}}, dogecoin: {network: 'testnet'}} as DeploymentSpec
     const calls: string[][] = []
     const query = (args: string[]) => {
       calls.push(args)
@@ -22,22 +22,22 @@ describe('spec CubeSigner public identity discovery', () => {
   it('queries a singleton role and freezes a normalized key without private provider fields', () => {
     const f = fixture()
     const resolved = resolveCubesignerIdentity(f.spec, args => ({...f.query(args), session: 'NONFUNCTIONAL_TEST_SESSION'}))
-    expect(resolved.bridge.teePubkey).to.equal(f.key.compressedPublicKey.slice(2))
-    expect(resolved.signing.cubesigner!.roles![0].keys[0].publicKeyCompressed).to.equal(resolved.bridge.teePubkey)
-    expect(resolved.signing.cubesigner).not.to.have.property('identity')
+    expect(resolved.bridge.cubesigner!.publicKey).to.equal(f.key.compressedPublicKey.slice(2))
+    expect(resolved.bridge.cubesigner!.roles![0].keys[0].publicKeyCompressed).to.equal(resolved.bridge.cubesigner!.publicKey)
+    expect(resolved.bridge.cubesigner).not.to.have.property('identity')
     expect(JSON.stringify(resolved)).not.to.include('NONFUNCTIONAL_TEST_SESSION')
     expect(f.calls[1]).to.deep.equal(['key', 'get', '--key-id=Key#test', '--role-id=Role#test'])
     resolveCubesignerIdentity(resolved, () => {throw new Error('Frozen input must not query again')})
-    expect(f.spec.bridge).not.to.have.property('teePubkey')
+    expect(f.spec.bridge.cubesigner).not.to.have.property('publicKey')
   })
 
   it('requires an explicit member key for multiple-key roles', () => {
     const f = fixture()
     const query = (args: string[]) => args[0] === 'role' ? {...f.query(args), keys: [{key_id: 'Key#test'}, {key_id: 'Key#other'}]} : f.query(args)
     expect(() => resolveCubesignerIdentity(f.spec, query)).to.throw('exactly one key')
-    f.spec.signing.cubesigner!.identity!.keyId = 'Key#test'
-    expect(resolveCubesignerIdentity(f.spec, query).bridge.teePubkey).to.equal(f.key.compressedPublicKey.slice(2))
-    f.spec.signing.cubesigner!.identity!.keyId = 'Key#unrelated'
+    f.spec.bridge.cubesigner!.identity!.keyId = 'Key#test'
+    expect(resolveCubesignerIdentity(f.spec, query).bridge.cubesigner!.publicKey).to.equal(f.key.compressedPublicKey.slice(2))
+    f.spec.bridge.cubesigner!.identity!.keyId = 'Key#unrelated'
     expect(() => resolveCubesignerIdentity(f.spec, query)).to.throw('belonging')
   })
 
@@ -47,7 +47,7 @@ describe('spec CubeSigner public identity discovery', () => {
     expect(() => resolveCubesignerIdentity(f.spec, args => ({...f.query(args), key_id: 'Key#wrong'}))).to.throw('mismatched key')
     expect(() => resolveCubesignerIdentity(f.spec, args => ({...f.query(args), public_key: '02' + 'ff'.repeat(32)}))).to.throw('curve point')
     expect(() => resolveCubesignerIdentity(f.spec, args => ({...f.query(args), key_type: 'SecpDogeAddr'}))).to.throw('Dogecoin network')
-    f.spec.bridge.teePubkey = new SigningKey(Wallet.createRandom().privateKey).compressedPublicKey
+    f.spec.bridge.cubesigner!.publicKey = new SigningKey(Wallet.createRandom().privateKey).compressedPublicKey
     expect(() => resolveCubesignerIdentity(f.spec, f.query)).to.throw('conflicts')
   })
 })

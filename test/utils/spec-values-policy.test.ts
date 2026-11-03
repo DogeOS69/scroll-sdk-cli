@@ -102,7 +102,7 @@ describe('spec values runtime policy across entry points', () => {
     it(`bootstraps ${network} before policy receipts exist without downgrading enforcement`, async () => {
       spec.dogecoin.network = network
       spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet).toAddress().toString()
-      spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
+      spec.bridge.cubesigner = {mode: 'production_verifier_key_policy'}
       const directory = path.join(root, 'deployment')
       await run('--bootstrap', directory, '--sdk-dir', sdk)
       expect(fs.existsSync(path.join(directory, 'config.toml'))).to.equal(true)
@@ -126,7 +126,7 @@ describe('spec values runtime policy across entry points', () => {
   }
 
   it('does not ignore supplied invalid policy receipts during bootstrap', async () => {
-    spec.signing.cubesigner = {
+    spec.bridge.cubesigner = {
       mode: 'production_verifier_key_policy',
       policyReceipts: {} as any,
       roles: [{keys: [{keyId: 'fixture-key', keyType: 'SecpDogeTestAddr', materialId: 'fixture-material', publicKey: new bitcore.PrivateKey().toPublicKey().toString()}], name: 'fixture-role', roleId: 'fixture-role'}],
@@ -142,7 +142,7 @@ describe('spec values runtime policy across entry points', () => {
     for (const mode of ['--bootstrap', '--with-values', '--values-only']) it(`projects existing ALB bindings through ${mode} with ${rpcSelection} RPC endpoints on fresh generation and regeneration`, async () => {
     spec.infrastructure = {...spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture', region: 'us-east-1'}, provider: 'aws'}
     // Exercise the stacked bootstrap fix together with existing ALB projection.
-    if (mode === '--bootstrap') spec.signing.cubesigner = {mode: 'production_verifier_key_policy'}
+    if (mode === '--bootstrap') spec.bridge.cubesigner = {mode: 'production_verifier_key_policy'}
     const directory = path.join(root, 'deployment')
     await run(mode, directory, '--sdk-dir', sdk)
     const prefix = 'arn:aws:elasticloadbalancing:us-east-1:000000000000:'
@@ -312,7 +312,7 @@ describe('spec values runtime policy across entry points', () => {
       const directory = path.join(root, mode.slice(2))
       await run(mode, directory)
       const rpc = read(directory, 'l2-reth-rpc')
-      expect(rpc.reth.extraArgs).to.deep.equal(['--gpo.maxprice', '420000000000000', '--network.legacy-geth-header-transform', 'true'])
+      expect(rpc.reth.extraArgs).to.deep.equal(['--consensus.exit-on-signer-rotation', '--gpo.maxprice', '420000000000000'])
       expect(rpc.reth.networkId).to.equal(String(spec.network.l2ChainId))
       expect(rpc.image.tag).to.equal('explicit-test-release')
       expect(rpc.resources.requests.cpu).to.equal('3')

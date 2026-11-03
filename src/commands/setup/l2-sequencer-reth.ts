@@ -8,6 +8,7 @@ import * as path from 'node:path'
 import type { DogeConfig } from '../../types/doge-config.js'
 import type { ManagedSignerRole } from '../../utils/signer-roles.js'
 
+import {type AwsWorkloadIdentity, bindAwsServiceAccount} from '../../utils/aws-workload-identity.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import {
@@ -18,6 +19,7 @@ import {
   truncateIamRoleName,
 } from '../../utils/kms-signer-provisioner.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
+import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 
 type RethSecretMode = 'external-secret' | 'plain'
 type RethSignerBackend = 'aws_kms' | 'local'
@@ -45,6 +47,7 @@ export interface RethInstanceConfig {
   }
   signer?: {
     address?: string
+    awsWorkloadIdentity?: AwsWorkloadIdentity
     eksCluster?: string
     kmsKeyArn?: string
     kmsKeyId?: string
@@ -65,6 +68,7 @@ export interface ResolvedSequencerRethConfig {
   secretName: string
   signer: {
     address?: string
+    awsWorkloadIdentity?: AwsWorkloadIdentity
     backend: RethSignerBackend
     eksCluster?: string
     kmsKeyArn?: string
@@ -191,17 +195,6 @@ export function shouldReuseExistingSequencerRethKmsKey(
   return existingKmsKeyId === getSequencerRethDefaultKmsAlias(index, identity)
 }
 
-export function shouldReuseExistingSequencerRethRoleArn(
-  existingRoleArn: string | undefined,
-  index: number,
-  identity: KmsProvisionIdentity
-): boolean {
-  if (!existingRoleArn) return false
-
-  const expectedRoleName = getSequencerRethDefaultKmsRoleName(index, identity)
-  return existingRoleArn.endsWith(`:role/${expectedRoleName}`) || existingRoleArn.endsWith(`/role/${expectedRoleName}`)
-}
-
 export function applySequencerRethValues(yamlData: any, config: ResolvedSequencerRethConfig): void {
   const chartResourceNames = getChartResourceNames(yamlData, getSequencerRethResourceName(config.index))
   yamlData.reth ||= {}
@@ -248,13 +241,7 @@ export function applySequencerRethValues(yamlData: any, config: ResolvedSequence
   if (yamlData.persistence?.keys) delete yamlData.persistence.keys
 
   if (config.signer.backend === 'aws_kms') {
-    yamlData.serviceAccount ||= {}
-    yamlData.serviceAccount.create = true
-    yamlData.serviceAccount.name = config.signer.serviceAccountName || getSequencerRethResourceName(config.index)
-    if (config.signer.serviceAccountRoleArn) {
-      yamlData.serviceAccount.annotations ||= {}
-      yamlData.serviceAccount.annotations['eks.amazonaws.com/role-arn'] = config.signer.serviceAccountRoleArn
-    }
+    bindAwsServiceAccount(yamlData, config.signer.serviceAccountName || getSequencerRethResourceName(config.index), config.signer.serviceAccountRoleArn, config.signer.awsWorkloadIdentity)
   }
 }
 
@@ -400,8 +387,6 @@ export default class SetupL2SequencerReth extends Command {
       options: ['external-secret', 'plain'],
     }),
     'non-interactive': Flags.boolean({ char: 'N', default: false, description: 'Run without prompts. Generates missing local keys.' }),
-    'role-arn': Flags.string({ description: 'Existing IAM role ARN to annotate on the sequencer service account.' }),
-    'service-account': Flags.string({ description: 'Kubernetes service account used by this sequencer.' }),
     'signer-mode': Flags.string({
       description: 'How the reth sequencer block signer is configured.',
       options: ['aws-kms', 'external-secret', 'plain'],
@@ -460,6 +445,7 @@ export default class SetupL2SequencerReth extends Command {
   }
 
   public async run(): Promise<void> {
+    requirePreparationStep(['identities'])
     const { flags } = await this.parse(SetupL2SequencerReth) as any
     const jsonCtx = new JsonOutputContext('setup l2-sequencer-reth', flags.json)
     jsonCtx.addWarning('Use setup gen-keystore --service sequencer-reth instead.')
@@ -639,7 +625,7 @@ export default class SetupL2SequencerReth extends Command {
     }
 
     if (existing?.signer?.mode === 'aws_kms' && existing.signer.kmsKeyId && existing.signer.kmsRegion &&
-        !['aws-region', 'eks-cluster', 'network-alias', 'namespace', 'kms-key-id', 'role-arn', 'service-account'].some(name => this.hasFlag(name))) {
+        !['aws-region', 'eks-cluster', 'network-alias', 'namespace', 'kms-key-id'].some(name => this.hasFlag(name))) {
       const address = new KmsSignerProvisioner(jsonCtx, flags['aws-profile']).inspectAddress(existing.signer.kmsRegion, existing.signer.kmsKeyId)
       if (existing.signer.address && address.toLowerCase() !== existing.signer.address.toLowerCase()) throw new Error('Sequencer KMS public key does not match its configured address')
       return {...existing.signer, address, backend: 'aws_kms', privateKey: undefined}
@@ -660,17 +646,9 @@ export default class SetupL2SequencerReth extends Command {
         ? existingKmsKeyId
         : undefined
     )
-    const explicitRoleArn = resolveEnvValue(flags['role-arn'])
-    const existingRoleArn = existing?.signer?.serviceAccountRoleArn
-    const roleArn = explicitRoleArn || (
-      shouldReuseExistingSequencerRethRoleArn(existingRoleArn, index, identity)
-        ? existingRoleArn
-        : undefined
-    )
     const provisioned = await provisioner.provision(role, identity, {
       kmsKeyId,
-      roleArn,
-      serviceAccount: resolveEnvValue(flags['service-account']) || existing?.signer?.serviceAccountName || getSequencerRethResourceName(index),
+      serviceAccount: getSequencerRethResourceName(index),
     })
     if (existing?.signer?.address && existing.signer.address.toLowerCase() !== provisioned.address.toLowerCase()) throw new Error('Refusing to change the existing sequencer signing address')
     return {
@@ -683,7 +661,6 @@ export default class SetupL2SequencerReth extends Command {
       namespace: provisioned.signerConfig.namespace,
       networkAlias: provisioned.signerConfig.networkAlias,
       serviceAccountName: provisioned.serviceAccount,
-      serviceAccountRoleArn: provisioned.roleArn,
     }
   }
 
@@ -727,6 +704,7 @@ export default class SetupL2SequencerReth extends Command {
       },
       signer: {
         address: resolved.signer.address,
+        awsWorkloadIdentity: dogeConfig.awsWorkloadIdentity,
         eksCluster: resolved.signer.eksCluster,
         kmsKeyArn: resolved.signer.kmsKeyArn,
         kmsKeyId: resolved.signer.kmsKeyId,

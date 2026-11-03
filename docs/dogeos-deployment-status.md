@@ -1,5 +1,8 @@
 # DogeOS deployment status and runbook corrections
 
+> Historical execution record: removed setup commands below describe the recorded run, not the current interface. Use `setup render`, `setup proof-materials`, `setup proof-publish` and `setup deployment-preflight` for the saved-spec workflow.
+
+
 This page consolidates findings from the 2026-09-08/09 from-scratch devnet deployment.
 It is a **partial, verified-progress record**, not a completed end-to-end manual.
 The README command reference lists available commands, not their execution order.

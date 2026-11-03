@@ -4,6 +4,7 @@ import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { setupManagedSigner } from '../../utils/managed-signer-setup.js'
 import { createNonInteractiveContext } from '../../utils/non-interactive.js'
+import {requirePreparationStep} from '../../utils/preparation-internal-command.js'
 
 export default class SetupFeeOracle extends Command {
   static override description = 'Configure the fee-oracle L2_GAS_ORACLE_SENDER signer'
@@ -45,13 +46,6 @@ export default class SetupFeeOracle extends Command {
       default: false,
       description: 'Run without prompts. Uses existing config or provided flags.',
     }),
-    'role-arn': Flags.string({
-      description: 'Existing IAM role ARN to annotate on the fee-oracle service account.',
-    }),
-    'service-account': Flags.string({
-      default: 'fee-oracle',
-      description: 'Kubernetes service account used by fee-oracle.',
-    }),
     'signer-backend': Flags.string({
       description: 'Signer backend for L2_GAS_ORACLE_SENDER / fee-oracle.',
       options: ['local', 'aws-kms'],
@@ -61,6 +55,7 @@ export default class SetupFeeOracle extends Command {
   static override hidden = true
 
   public async run(): Promise<void> {
+    requirePreparationStep(['identities'])
     const { flags } = await this.parse(SetupFeeOracle) as any
     const nonInteractive = flags['non-interactive']
     const jsonMode = flags.json

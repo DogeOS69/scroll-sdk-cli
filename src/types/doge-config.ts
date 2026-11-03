@@ -225,7 +225,7 @@ export interface DogeConfig {
       port: number
     }>
   }
-  monitoring?: import('../utils/monitoring-slack.js').MonitoringConfig
+  monitoring?: import('../utils/monitoring-slack.js').MonitoringRuntimeConfig
   network: Network
   /** Compiler-backed proof topology, including intent projected from DeploymentSpec. */
   proof_topology?: ProofTopologySpec

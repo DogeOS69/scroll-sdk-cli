@@ -15,6 +15,7 @@ import {loadPreparationEnv} from '../../utils/preparation-io.js'
 
 export default class MonitoringSecrets extends Command {
   static override description = 'Prepare Grafana credentials for push-secrets and optionally upload the Slack Kubernetes Secret'
+
   static override flags = {
     apply: Flags.boolean({default: false, dependsOn: ['kube-context', 'namespace']}),
     'deployment-dir': Flags.string({default: '.'}),
@@ -23,6 +24,9 @@ export default class MonitoringSecrets extends Command {
     'kube-context': Flags.string(),
     namespace: Flags.string(),
   }
+
+  // Lower-level setup utility; retain direct access for focused maintenance.
+  static override hidden = true
 
   public async run(): Promise<void> {
     const {flags} = await this.parse(MonitoringSecrets)

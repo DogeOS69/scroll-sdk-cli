@@ -115,12 +115,12 @@ spec.dogecoin.externalRpc = {
 };
 spec.ethereumDa.l1RpcUrl = url;
 spec.ethereumDa.chainId = 1;
-spec.bridge.teePubkey = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toPublicKey().toString();
-spec.bridge.timelock = 999999;
+spec.bridge.cubesigner.publicKey = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toPublicKey().toString();
+spec.bridge.recovery.timelock = 999999;
 delete spec.bridge.seedString;
 spec.bridge.confirmationsRequired = 2;
-spec.attestationSigners = Array.from({length: spec.bridge.keyCounts.attestation}, (_, index) => ({name: `partner-${index}`, attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}));
-spec.bridge.initialAttestationKeyset = {signerIds: spec.attestationSigners.map(s => s.name), threshold: spec.bridge.thresholds.attestation};
+spec.bridge.attestation.signers = Array.from({length: 3}, (_, index) => ({name: `partner-${index}`, attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}));
+spec.bridge.attestation.threshold = 2;
 const image = 'dogeos69/bridge-genesis-tools@sha256:27e646fd5d9c340926df82f47f7d352fd5333de4e6178c5a8c56aa9637769262';
 fs.writeFileSync(root + '/vast-key', 'NONFUNCTIONAL_TEST_VAST_KEY');
 spec.preparation = {
@@ -130,9 +130,7 @@ spec.preparation = {
         mode: 'production', image, production: {
             ethereumAnchor: {
                 blockNumber: 100, transactionIndex: 0
-            }, sequencerPublicKey: seq.toPublicKey().toString(), sequencerKeyEnv: 'PREP_SEQ_KEY', recoveryPublicKeys: Array.from({
-                length: spec.bridge.keyCounts.recovery
-            }, () => new bitcore.PrivateKey(null, bitcore.Networks.testnet).toPublicKey().toString())
+            }, sequencerPublicKey: seq.toPublicKey().toString(), sequencerKeyEnv: 'PREP_SEQ_KEY'
         }
     }, proofMaterials: {
         mode: 'existing'
@@ -178,11 +176,11 @@ function fund(address, amount, marker = false) {
 }
 try {
     await cmd('01-plan', ['plan', '--spec', root + '/intent.yaml', '--output', deployment, '--sdk-dir', sdk, '--env-file', root + '/environment']);
-    let result = await cmd('02-genesis', ['genesis', '--dir', deployment]);
+    await cmd('02-aws-local-identities', ['aws', '--dir', deployment]);
+    let result = await cmd('03-genesis', ['genesis', '--dir', deployment]);
     if (result?.status !== 'stage-complete' || !fs.existsSync(deployment + '/genesis.json'))
         throw Error('Local genesis stage did not complete');
     if (calls.length !== 0) throw Error('Genesis contacted a chain RPC');
-    await cmd('03-aws-local-identities', ['aws', '--dir', deployment]);
     result = await cmd('04-wallet-wait', ['bridge-funding', '--dir', deployment]);
     if (result?.currentStep !== 'production-wallets')
         throw Error('Expected production wallet funding pause');

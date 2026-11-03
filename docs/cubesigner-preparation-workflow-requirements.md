@@ -143,7 +143,7 @@ cubesigner-policy-build
 external-inputs
 proof-release-bake
 proof-materializer-export
-proof-worker-check
+proof-worker-image-check
 proof-materials
 charts                      <- release/attachment receipt wait occurs here
 proof-publish               <- cloud mutation with --apply
@@ -445,7 +445,7 @@ owned by the reviewed governance/release process.
    permission to overwrite concurrent changes. Start with
    `preparation-policy-receipts.ts`, `cubesigner-policy-receipts.ts`,
    `cubesigner-policy-reconcile.ts`, `preparation-runner.ts`, `preparation-plan.ts`,
-   `proof-config-check` and the values generator. Trace every receipt check that
+   `deployment-preflight` and the values generator. Trace every receipt check that
    would still block early rendering, topology compilation or kit export.
 2. Implement the expected-input contract and preparation/activation validation
    separation first. Keep the existing governed-receipt path working unchanged
