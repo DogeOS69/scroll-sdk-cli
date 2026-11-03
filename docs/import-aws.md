@@ -75,6 +75,24 @@ region. Each named stack is read once; there is no account-wide discovery.
 | `capacity-alb`, `capacity-target` | Separate existing controller stacks | Same connection from component outputs; ALB uses `PrivateUrl` |
 | `secret-metadata` | Proof token metadata stack | `preparation.proofAws.secretName` only |
 
+`alb`, `http-target`, `bootnode-nlb`, `capacity-alb` and `capacity-target` accept an
+optional `prefix` for stacks that hold several resources of the same kind. The
+importer then reads `<prefix><Output>` instead of `<Output>`, for example one ALB
+stack with several target groups, or one stack with two bootnode NLBs:
+
+```yaml
+- kind: http-target
+  stack: example-public-edge
+  binding: frontends
+  prefix: Portal            # reads PortalTargetGroupArn
+- kind: bootnode-nlb
+  stack: example-p2p-network
+  index: 0
+  prefix: Bootnode0         # reads Bootnode0TargetGroupArn and Bootnode0SecurityGroupId
+```
+
+A prefix starts with an uppercase letter and contains only letters and digits.
+
 Older internal ALB stacks lack the URL output. Keep the certificate hostname in
 `capacityManager.connection.serverUrl`, or update the stack from the current
 template before importing. Never use an ALB-generated DNS name as a substitute

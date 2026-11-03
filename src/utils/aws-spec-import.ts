@@ -8,11 +8,13 @@ import {isDeepStrictEqual} from 'node:util'
 
 import {privateWrite} from './preparation-io.js'
 
-type Source = {binding?: string; endpoint?: string; file?: string; identity?: string; index?: number; kind: string; stack?: string}
+type Source = {binding?: string; endpoint?: string; file?: string; identity?: string; index?: number; kind: string; prefix?: string; stack?: string}
 type Change = {conflict: boolean; path: string}
+// `prefix` selects one resource's outputs in a stack that holds several of the
+// same kind, for example `PortalTargetGroupArn` or `Bootnode0SecurityGroupId`.
 const kinds: Record<string, string[]> = {
-  alb: ['endpoint'], 'bootnode-nlb': ['index'], 'capacity-access': [],
-  'capacity-alb': [], 'capacity-network': [], 'capacity-target': [], 'http-target': ['binding'],
+  alb: ['endpoint', 'prefix'], 'bootnode-nlb': ['index', 'prefix'], 'capacity-access': [],
+  'capacity-alb': ['prefix'], 'capacity-network': [], 'capacity-target': ['prefix'], 'http-target': ['binding', 'prefix'],
   'public-network': ['endpoint', 'index'], 'secret-metadata': [], 'secrets-reader': [], 'signing-identities': [], 'signing-key': ['identity', 'index'], 'workload-access': [],
 }
 const mapping = (v: any): v is Record<string, any> => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
@@ -96,6 +98,8 @@ export function importAwsSpec(options: {manifest: string; profile?: string; read
     const source = raw as Source
     if (source.stack && placeholder(source.stack)) throw new Error('Replace the example stack name before importing')
     if (Boolean(source.file) === Boolean(source.stack) || source.file !== undefined && typeof source.file !== 'string' || source.stack !== undefined && (typeof source.stack !== 'string' || !/^[A-Za-z][\w-]*$/.test(source.stack))) throw new Error('Each source needs exactly one file path or stack name')
+    if (source.prefix !== undefined && (typeof source.prefix !== 'string' || !/^[A-Z][\dA-Za-z]*$/.test(source.prefix))) throw new Error('Invalid source prefix')
+    const outputPrefix = source.prefix ?? ''
     for (const field of ['endpoint', 'binding', 'identity'] as const) if (source[field] !== undefined && (!name(source[field]) || ['__proto__', 'constructor', 'prototype'].includes(source[field]!))) throw new Error(`Invalid source ${field}`)
     if (source.index !== undefined && (!Number.isSafeInteger(source.index) || source.index < 0)) throw new Error('Invalid source index')
     const cacheKey = source.file ? path.resolve(path.dirname(manifestPath), source.file) : `stack:${source.stack}`
@@ -187,24 +191,24 @@ export function importAwsSpec(options: {manifest: string; profile?: string; read
       case 'secrets-reader': { put(['infrastructure', 'aws', 'roles', 'externalSecrets'], 'RoleArn', 'iam:role/'); break
       }
 
-      case 'alb': { alb(''); break
+      case 'alb': { alb(outputPrefix); break
       }
 
       case 'public-network': { alb('Https'); if (source.index !== undefined) nlb('Bootnode'); break
       }
 
-      case 'bootnode-nlb': { nlb(''); break
+      case 'bootnode-nlb': { nlb(outputPrefix); break
       }
 
       case 'http-target': {
         if (!source.binding || !mapping(aws.alb?.bindings?.[source.binding])) throw new Error('Configure the named alb.bindings entry and serviceRef before importing')
-        put(['infrastructure', 'aws', 'alb', 'bindings', source.binding, 'targetGroupArn'], 'TargetGroupArn', 'elasticloadbalancing:targetgroup/')
+        put(['infrastructure', 'aws', 'alb', 'bindings', source.binding, 'targetGroupArn'], `${outputPrefix}TargetGroupArn`, 'elasticloadbalancing:targetgroup/')
         break
       }
 
       case 'capacity-target': {
         if (!mapping(spec.capacityManager)) throw new Error('Configure capacityManager intent before importing')
-        put(['capacityManager', 'connection', 'existingAlb', 'targetGroupArn'], 'TargetGroupArn', 'elasticloadbalancing:targetgroup/')
+        put(['capacityManager', 'connection', 'existingAlb', 'targetGroupArn'], `${outputPrefix}TargetGroupArn`, 'elasticloadbalancing:targetgroup/')
         break
       }
 
@@ -213,13 +217,13 @@ export function importAwsSpec(options: {manifest: string; profile?: string; read
         if (!mapping(spec.capacityManager)) throw new Error('Configure capacityManager intent before importing')
         const base = ['capacityManager', 'connection']
         set([...base, 'mode'], 'existing-alb')
-        const prefix = source.kind === 'capacity-network' ? 'Https' : ''
+        const albPrefix = source.kind === 'capacity-network' ? 'Https' : outputPrefix
         for (const [field, output, resource] of [
-          ['loadBalancerArn', `${prefix}LoadBalancerArn`, 'loadbalancer/app/'], ['listenerArn', `${prefix}ListenerArn`, 'listener/app/'],
+          ['loadBalancerArn', `${albPrefix}LoadBalancerArn`, 'loadbalancer/app/'], ['listenerArn', `${albPrefix}ListenerArn`, 'listener/app/'],
           ...(source.kind === 'capacity-network' ? [['targetGroupArn', 'ControllerTargetGroupArn', 'targetgroup/']] : []),
         ]) put([...base, 'existingAlb', field], output, `elasticloadbalancing:${resource}`)
-        if (outputs[`${prefix}PrivateUrl`]) {
-          const url = get(`${prefix}PrivateUrl`)
+        if (outputs[`${albPrefix}PrivateUrl`]) {
+          const url = get(`${albPrefix}PrivateUrl`)
           if (!/^https:\/\/[\d.A-Za-z-]+$/.test(url)) throw new Error('Invalid HttpsPrivateUrl output')
           set([...base, 'serverUrl'], url)
         } else if (!spec.capacityManager.connection?.serverUrl) throw new Error('Older capacity stack lacks HttpsPrivateUrl; fill capacityManager.connection.serverUrl with its certificate hostname')
