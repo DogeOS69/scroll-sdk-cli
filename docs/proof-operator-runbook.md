@@ -150,14 +150,16 @@ statement and the token Secret's metadata — are prepared with the infrastructu
 templates. The CLI never creates or changes them: `setup aws` reads them and
 writes `.data/proof-aws.json`. The DA archive configuration is independent.
 
-Before `setup aws`, initialize the token Secret value:
+The token Secret itself is created by the infrastructure `proof-secret.yaml`
+template. Before `setup aws`, initialize its value:
 
 ```bash
 scrollsdk setup proof-tokens --secret-name YOUR_PROOF_SECRET --aws-region YOUR_REGION
 ```
 
-It creates `proof-work-token` and the coordinator-only `prover-worker-master`
-when missing and never prints them. Select the public-read mode according to who
+It writes `proof-work-token` and the coordinator-only `prover-worker-master`
+when they are missing and never prints them. It refuses a Secret that does not
+exist; dogeos-core requires both values, kept separate, of at least 32 characters. Select the public-read mode according to who
 serves external reads:
 
 - `existing-public-s3` uses the regional S3 endpoint on an existing, possibly

@@ -3,7 +3,8 @@ import {expect} from 'chai'
 import {assertAwsReadOnly} from '../../src/utils/aws-cli.js'
 import {ensureProofTokenSecret} from '../../src/utils/proof-token-secret.js'
 
-function fakeSecret(existing?: Record<string, string> | string) {
+// `null` is a Secret created by the template without a value; `undefined` is no Secret.
+function fakeSecret(existing?: Record<string, string> | null | string) {
   const writes: Array<{args: string[]; secret: Record<string, string>}> = []
   const messages: string[] = []
   const aws = {
@@ -19,6 +20,7 @@ function fakeSecret(existing?: Record<string, string> | string) {
     },
     text(args: string[]) {
       assertAwsReadOnly(args)
+      if (existing === null) throw new Error('An error occurred (ResourceNotFoundException): no value for staging label AWSCURRENT')
       return typeof existing === 'string' ? existing : JSON.stringify(existing)
     },
   }
@@ -26,11 +28,18 @@ function fakeSecret(existing?: Record<string, string> | string) {
 }
 
 describe('proof token Secret value', () => {
-  it('creates both tokens in a new Secret through an explicit secret-value write', () => {
+  it('never creates the Secret and points to the infrastructure template', () => {
     const f = fakeSecret()
-    expect(ensureProofTokenSecret(f.aws, 'us-west-2', 'test/proof', false, f.info)).to.equal('created')
-    expect(f.writes.map(write => write.args.join(' '))).to.deep.equal(['secretsmanager create-secret'])
+    expect(() => ensureProofTokenSecret(f.aws, 'us-west-2', 'test/proof', false, f.info)).to.throw('proof-secret.yaml')
+    expect(f.writes).to.deep.equal([])
+  })
+
+  it('initializes both tokens in a template-created Secret that has no value yet', () => {
+    const f = fakeSecret(null)
+    expect(ensureProofTokenSecret(f.aws, 'us-west-2', 'test/proof', false, f.info)).to.equal('initialized')
+    expect(f.writes.map(write => write.args.join(' '))).to.deep.equal(['secretsmanager put-secret-value'])
     expect(Object.keys(f.writes[0].secret).sort()).to.deep.equal(['proof-work-token', 'prover-worker-master'])
+    expect(f.writes[0].secret['proof-work-token']).to.match(/^[\da-f]{64}$/)
   })
 
   it('rotates both tokens and requires Secret synchronization and WP restart', () => {

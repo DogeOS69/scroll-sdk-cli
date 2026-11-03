@@ -185,8 +185,10 @@ and artifacts. Relevant examples:
   transaction only after every output succeeds;
 - `export-deployment-kit` writes a new kit from current deployment facts and
   refuses an existing output directory;
-- `setup proof-tokens` creates the proof token Secret value only when missing
-  and otherwise reuses it, unless `--rotate` is passed. It never prints tokens.
+- `setup proof-tokens` writes the proof token values into the existing Secret
+  (from the infrastructure `proof-secret.yaml` template) only when they are
+  missing and otherwise reuses them, unless `--rotate` is passed. It never
+  creates the Secret or prints tokens.
   The proof bucket, its policy, workload roles and any S3 Gateway endpoint come
   from the infrastructure templates; `setup aws` only reads them and writes
   stable, non-secret resource facts to `.data/proof-aws.json`;

@@ -9,7 +9,7 @@ import type {AwsCliOptions} from './aws-cli.js'
  */
 export const PROOF_TOKEN_PROPERTIES = ['proof-work-token', 'prover-worker-master'] as const
 
-export type ProofTokenSecretAction = 'created' | 'migrated' | 'reused' | 'rotated'
+export type ProofTokenSecretAction = 'initialized' | 'migrated' | 'reused' | 'rotated'
 
 type Aws = {
   json(args: string[], options?: AwsCliOptions): unknown
@@ -17,28 +17,22 @@ type Aws = {
 }
 
 /**
- * Create, complete or rotate the proof token Secret value. Writes only the
- * Secret value; the Secret's metadata and access policy belong to the
- * infrastructure templates. Never prints or echoes token values.
+ * Initialize, complete or rotate the proof token Secret value. The Secret
+ * itself (metadata, encryption key, access policy) comes from the
+ * infrastructure `proof-secret.yaml` template; this only writes its value and
+ * never prints or echoes token values.
  */
 export function ensureProofTokenSecret(aws: Aws, region: string, secretName: string, rotate: boolean, info: (message: string) => void): ProofTokenSecretAction {
   const fresh = (): string => randomBytes(32).toString('hex')
   const write = {contentWrite: 'secret-value', region} as const
   const secretString = JSON.stringify(Object.fromEntries(PROOF_TOKEN_PROPERTIES.map(property => [property, fresh()])))
 
-  let exists = true
   try {
     aws.json(['secretsmanager', 'describe-secret', '--secret-id', secretName], {region})
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (!message.includes('ResourceNotFoundException')) throw error
-    exists = false
-  }
-
-  if (!exists) {
-    aws.json(['secretsmanager', 'create-secret', '--name', secretName, '--secret-string', secretString], write)
-    info(`proof tokens: created ${secretName}`)
-    return 'created'
+    throw new Error(`proof tokens: Secret ${secretName} does not exist; create it with the infrastructure proof-secret.yaml template, then rerun`)
   }
 
   if (rotate) {
@@ -50,9 +44,20 @@ export function ensureProofTokenSecret(aws: Aws, region: string, secretName: str
 
   // Shared-token deployments predate the master. Add a fresh one instead of
   // promoting the old shared token, which every existing worker knows.
+  let value: string
+  try {
+    value = aws.text(['secretsmanager', 'get-secret-value', '--secret-id', secretName], {query: 'SecretString', region})
+  } catch (error) {
+    // A Secret created by the template has no value yet.
+    if (!(error instanceof Error && error.message.includes('ResourceNotFoundException'))) throw error
+    aws.json(['secretsmanager', 'put-secret-value', '--secret-id', secretName, '--secret-string', secretString], write)
+    info(`proof tokens: initialized ${secretName}`)
+    return 'initialized'
+  }
+
   let existing: unknown
   try {
-    existing = JSON.parse(aws.text(['secretsmanager', 'get-secret-value', '--secret-id', secretName], {query: 'SecretString', region}))
+    existing = JSON.parse(value)
   } catch {
     // JSON.parse errors can quote secret plaintext; never surface them.
     throw new Error(`proof tokens: ${secretName} could not be read as a JSON property map (contents omitted)`)

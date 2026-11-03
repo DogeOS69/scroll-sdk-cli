@@ -1746,7 +1746,7 @@ _See code: [src/commands/setup/proof-publish.ts](https://github.com/dogeos69/scr
 
 ## `scrollsdk setup proof-tokens`
 
-Create, complete or rotate the proof-work token and coordinator-only prover-worker master in the proof token Secret. Writes only the Secret value; never prints tokens.
+Initialize, complete or rotate the proof-work token and coordinator-only prover-worker master in an existing proof token Secret (created by the infrastructure proof-secret.yaml template). Writes only the Secret value; never prints tokens.
 
 ```
 USAGE
@@ -1762,8 +1762,9 @@ FLAGS
                          preparation.proofAws.secretName
 
 DESCRIPTION
-  Create, complete or rotate the proof-work token and coordinator-only prover-worker master in the proof token Secret.
-  Writes only the Secret value; never prints tokens.
+  Initialize, complete or rotate the proof-work token and coordinator-only prover-worker master in an existing proof
+  token Secret (created by the infrastructure proof-secret.yaml template). Writes only the Secret value; never prints
+  tokens.
 
 EXAMPLES
   $ scrollsdk setup proof-tokens --secret-name scroll/example/proof-coordinator-secrets --aws-region us-west-2

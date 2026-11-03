@@ -66,7 +66,8 @@ producer、CUDA Worker、coordinator、topology compiler、publisher。
    AWS 资源，`setup aws` 只读取并校验。已有共享桶使用 `existing-public-s3` 或
    `existing-gateway`。`existing-public-s3` 会确认本部署前缀下外部读取路径（含
    `deployment-kits/`）可匿名读取，缺失的授权由桶的基础设施负责方添加。在 `setup aws`
-   之前用 `setup proof-tokens` 初始化 proof 令牌。DA/snapshot 桶的权限用
+   之前用 `setup proof-tokens` 初始化 proof 令牌（Secret 本身由基础设施模板
+   `proof-secret.yaml` 创建）。DA/snapshot 桶的权限用
    `artifacts access` 生成计划并检查，变更通过基础设施模板应用。
 2. 按 [saved-spec proof 工作流](proof-config-transactions.md)，在 spec 中固定
    release、proof mode 和运行意图，执行 `setup proof-materials --dir .`。
