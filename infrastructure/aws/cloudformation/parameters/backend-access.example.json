@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "REPLACE_ENV"
+  },
+  {
+    "ParameterKey": "ResourceClassification",
+    "ParameterValue": "nonproduction-deletable"
+  },
+  {
+    "ParameterKey": "LoadBalancerSecurityGroupId",
+    "ParameterValue": "sg-REPLACELB"
+  },
+  {
+    "ParameterKey": "BackendSecurityGroupId",
+    "ParameterValue": "sg-REPLACEBACKEND"
+  },
+  {
+    "ParameterKey": "PortFrom",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "PortTo",
+    "ParameterValue": "3000"
+  },
+  {
+    "ParameterKey": "AddEgress",
+    "ParameterValue": "false"
+  }
+]

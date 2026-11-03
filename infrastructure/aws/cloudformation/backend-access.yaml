@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Explicit load balancer to backend access, independent of Helm and TargetGroupBinding reconciliation.
+Parameters:
+  Environment:
+    Type: String
+    AllowedPattern: '[a-z][a-z0-9-]{2,47}'
+  ResourceClassification:
+    Type: String
+    Default: production
+    AllowedValues: [production, nonproduction-deletable]
+  LoadBalancerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  BackendSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  PortFrom:
+    Type: Number
+    MinValue: 1
+    MaxValue: 65535
+  PortTo:
+    Type: Number
+    MinValue: 1
+    MaxValue: 65535
+  AddEgress:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Only true if this egress rule is not already owned by the ALB stack.
+Conditions:
+  NeedsEgress: {Fn::Equals: [{Ref: AddEgress}, 'true']}
+Resources:
+  BackendIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: {Ref: BackendSecurityGroupId}
+      SourceSecurityGroupId: {Ref: LoadBalancerSecurityGroupId}
+      IpProtocol: tcp
+      FromPort: {Ref: PortFrom}
+      ToPort: {Ref: PortTo}
+      Description: {Fn::Sub: 'DogeOS ${ResourceClassification} ${Environment} backend access'}
+  LoadBalancerEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: NeedsEgress
+    Properties:
+      GroupId: {Ref: LoadBalancerSecurityGroupId}
+      DestinationSecurityGroupId: {Ref: BackendSecurityGroupId}
+      IpProtocol: tcp
+      FromPort: {Ref: PortFrom}
+      ToPort: {Ref: PortTo}
+      Description: {Fn::Sub: 'DogeOS ${ResourceClassification} ${Environment} backend access'}
