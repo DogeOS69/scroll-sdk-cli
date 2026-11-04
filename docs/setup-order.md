@@ -12,7 +12,7 @@ scrollsdk setup aws --dir deployment
 ```
 
 The generator, deployer and verification images use `gen-configs-<revision>`,
-`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.11`.
+`deploy-<revision>` and `verify-<revision>` with the same approved release tag or full contracts revision. The default is `dogeos-v0.3.0-rc.12`.
 Choose a new deployment salt for a new instance. Owner and index-0 Reth signer checks must pass first. This produces
 `values/genesis.yaml`, which Bridge preparation consumes.
 

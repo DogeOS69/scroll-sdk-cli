@@ -37,6 +37,6 @@ export function validateGenesisPredeploys(file: string): void {
 
   const queueCode = alloc[GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE.slice(2)].code as string
   if ((queueCode.length - 2) / 2 !== L2_MESSAGE_QUEUE_RUNTIME.length || keccak256(queueCode.toLowerCase()) !== L2_MESSAGE_QUEUE_RUNTIME.keccak256) {
-    throw new Error(`Generated genesis has an unexpected L2_MESSAGE_QUEUE runtime at ${GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE}; current core needs the hash-chain withdrawal queue from scroll-contracts dogeos-v0.3.0-rc.11. Regenerate with that contracts image or source.`)
+    throw new Error(`Generated genesis has an unexpected L2_MESSAGE_QUEUE runtime at ${GENESIS_PREDEPLOYS.L2_MESSAGE_QUEUE}; current core needs the hash-chain withdrawal queue from scroll-contracts dogeos-v0.3.0-rc.11 or later. Regenerate with the default contracts image or source.`)
   }
 }

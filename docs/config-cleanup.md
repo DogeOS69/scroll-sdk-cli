@@ -9,12 +9,17 @@ For the general command sequence, see [CLI setup order](setup-order.md).
 
 ## Matching contracts release
 
-The CLI defaults to `dogeos-v0.3.0-rc.11` in
+The CLI defaults to `dogeos-v0.3.0-rc.12` in
 `dogeos69/scroll-stack-contracts`:
 
-- `gen-configs-dogeos-v0.3.0-rc.11`
-- `deploy-dogeos-v0.3.0-rc.11`
-- `verify-dogeos-v0.3.0-rc.11`
+- `gen-configs-dogeos-v0.3.0-rc.12`
+- `deploy-dogeos-v0.3.0-rc.12`
+- `verify-dogeos-v0.3.0-rc.12`
+
+Release rc.12 adds `"tsukiV2Time": 0` to the genesis template. dogeos-reth
+tsuki-v0.13 and core refuse a genesis that sets `tsukiTime` without
+`tsukiV2Time`, so an rc.11 genesis does not start. Contract bytecode is the
+same as rc.11.
 
 Release rc.10 removes the retired `config.scroll.l1DataFeeBufferCheck` field
 from the genesis template for native Reth compatibility. The CLI keeps its
