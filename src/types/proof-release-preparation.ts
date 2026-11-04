@@ -8,6 +8,9 @@ export interface ProofReleasePreparationFileV1 {
 }
 
 export interface ProofReleasePreparationV1 {
+  /** The revision compiled into the bake; present only when it differs from coreRevision. */
+  bakeRevision?: string
+  /** The selected release's revision. */
   coreRevision: string
   /** The prepare-real output tree: the producer's Scroll programs, the deployment's Bridge bake and its 11 identity exports. */
   files: {

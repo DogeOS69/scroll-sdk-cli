@@ -365,6 +365,38 @@ describe('real-proof program bundle publication', () => {
     expect(JSON.stringify(result.receipt)).not.to.include('temporary-secret')
   })
 
+  it('reports and records a publisher from another revision', async () => {
+    const release = releaseFixture(coreRevision)
+    const materials = JSON.parse(fs.readFileSync(path.join(root, '.data/proof-materials-v1.json'), 'utf8'))
+    for (const [key, name] of [['productionWorker', 'prover-worker-cuda'], ['topologyCompiler', 'dogeos-proof-topology']] as const) {
+      release.images[name] = `${materials.images[key].repository}@${materials.images[key].digest}`
+    }
+
+    const body = JSON.stringify(release)
+    fs.writeFileSync(path.join(root, 'release.json'), body)
+    const other = 'e'.repeat(40)
+    const warnings: string[] = []
+    const result = await publishProofProgramBundle({
+      ...common(), anonymousRead: async url => published.get(url)!, coreDir: undefined, output: '.data/publication.json',
+      release: 'release.json', releaseSha256: digest(body),
+      run(command, args, options) {
+        if (command === 'aws') return JSON.stringify({AccessKeyId: 'temporary-id', Expiration: new Date(Date.now() + 600_000).toISOString(), SecretAccessKey: 'temporary-secret', SessionToken: 'temporary-session', Version: 1})
+        if (args[0] === 'pull') return ''
+        if (args[0] === 'image') return args.at(-1)!.includes('proof-bundle.mapping') ? 'v1-11-files' : other
+        const mount = args[args.indexOf('--mount') + 1]
+        const staged = mount.slice('type=bind,src='.length).split(',dst=')[0]
+        const scriptArgs = args.slice(args.indexOf('--bundle-dir'))
+        scriptArgs[1] = staged
+        return run('publisher', scriptArgs, options)
+      },
+      warn: message => warnings.push(message),
+    })
+    expect(warnings).to.have.length(1)
+    expect(warnings[0]).to.include('proof-bundle-publisher').and.include(other)
+    expect(result.receipt.coreRevision).to.equal(coreRevision)
+    expect(result.receipt.publisherImageRevision).to.equal(other)
+  })
+
   const TSO_URL = 'https://tso.example.com'
 
   /** An active/real deployment with a bound contract, a doge-config proof intent and a TSO ingress host. */

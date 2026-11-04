@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import {immutableProofImage, resolveImmutableProofImage, validateMockWorkerIdentity} from './proof-materials.js'
+import {proofImageRevisionWarning} from './proof-software-release.js'
 
 export type ProofToolRunner = (args: string[]) => string
 
@@ -65,11 +66,12 @@ function copyCoordinatorMaterializers(reference: string, outputDir: string, run:
 }
 
 /** The release's coordinator owns the materializers the topology compiler validates and Kubernetes installs. */
-export function exportCoordinatorMaterializers(options: {expectedRevision: string; image: string; outputDir: string; run?: ProofToolRunner}): Record<keyof typeof COORDINATOR_MATERIALIZERS, string> {
+export function exportCoordinatorMaterializers(options: {expectedRevision: string; image: string; outputDir: string; run?: ProofToolRunner; warn?: (message: string) => void}): Record<keyof typeof COORDINATOR_MATERIALIZERS, string> {
   const run = options.run ?? docker
   run(['pull', options.image])
   const revision = run(['image', 'inspect', options.image, '--format', '{{ index .Config.Labels "org.opencontainers.image.revision" }}']).trim()
-  if (revision !== options.expectedRevision) throw new Error(`coordinator image revision ${revision} does not match expected ${options.expectedRevision}`)
+  const revisionWarning = proofImageRevisionWarning('proof-coordinator image', revision, options.expectedRevision)
+  if (revisionWarning) (options.warn ?? console.warn)(revisionWarning)
   fs.mkdirSync(options.outputDir, {mode: 0o700, recursive: true})
   return copyCoordinatorMaterializers(options.image, options.outputDir, run)
 }

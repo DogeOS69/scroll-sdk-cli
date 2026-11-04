@@ -19,6 +19,8 @@ export interface ProofProgramPublicationV1 {
   proofTopologyBundleRevision: string
   publishedAt: string
   publisherImage?: string
+  /** The publisher's own revision label; present only when it differs from coreRevision. */
+  publisherImageRevision?: string
   releaseSha256?: string
   schema: typeof PROOF_PROGRAM_PUBLICATION_SCHEMA
   schemaVersion: 1

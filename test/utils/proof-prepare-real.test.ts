@@ -59,18 +59,30 @@ describe('offline complete real preparation', () => {
     expect(fs.readdirSync(root).some(name => name.startsWith('.proof-prepare'))).to.equal(false)
   })
 
-  it('rejects a producer whose revision label differs from the release', () => {
+  it('reports a producer and bake from another revision and records the bake', () => {
+    const other = 'e'.repeat(40)
+    const run = runner(out => fs.writeFileSync(path.join(out, 'bridge/worker-identity-bundle.json'), JSON.stringify({image_revision: other})))
+    const warnings: string[] = []
+    const result = prepareRealProofRelease({...options(), run: args => args[0] === 'image' ? other : run(args), warn: message => warnings.push(message)})
+    expect(warnings).to.have.length(2)
+    expect(warnings[0]).to.include('proof-preparation-producer').and.include(other)
+    expect(warnings[1]).to.include('Bridge bake').and.include(other)
+    const preparation = readProofReleasePreparation(result.preparationReceipt)
+    expect(preparation.coreRevision).to.equal('a'.repeat(40))
+    expect(preparation.bakeRevision).to.equal(other)
+  })
+
+  it('rejects a producer with a malformed revision label', () => {
     const run = runner()
-    expect(() => prepareRealProofRelease({...options(), run: args => args[0] === 'image' ? 'e'.repeat(40) : run(args)})).to.throw('revision differs')
+    expect(() => prepareRealProofRelease({...options(), run: args => args[0] === 'image' ? '' : run(args)})).to.throw('revision label')
     expect(fs.existsSync(path.join(root, 'result'))).to.equal(false)
   })
 
-  for (const problem of ['context', 'revision', 'missing', 'empty', 'symlink', 'native-failure']) {
+  for (const problem of ['context', 'missing', 'empty', 'symlink', 'native-failure']) {
     it(`keeps the final output absent after ${problem}`, () => {
       const run = runner(out => {
         if (problem === 'native-failure') throw new Error('injected native failure')
         if (problem === 'context') fs.writeFileSync(path.join(out, 'protocol_context.json'), '{"other":1}')
-        if (problem === 'revision') fs.writeFileSync(path.join(out, 'bridge/worker-identity-bundle.json'), JSON.stringify({image_revision: 'e'.repeat(40)}))
         if (problem === 'missing') fs.rmSync(path.join(out, 'verifier/aggregate-vk'))
         if (problem === 'empty') fs.writeFileSync(path.join(out, 'bridge/openvm.toml'), '')
         if (problem === 'symlink') fs.symlinkSync(path.join(out, 'protocol_context.json'), path.join(out, 'link'))

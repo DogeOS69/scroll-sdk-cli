@@ -59,6 +59,7 @@ export default class ProofWorkerImageCheck extends Command {
         expectedCoreRevision,
         image: resolveImmutableProofImage(flags.image, '--image'),
         output: path.resolve(deploymentDir, flags.output),
+        warn: message => output.addWarning(message),
       })
       output.logSuccess(`Validated production Worker image ${result.receipt.image.repository}@${result.receipt.image.digest}`)
       output.addWarning('This GPU-less label check does not run a proof or certify the target GPU architecture')

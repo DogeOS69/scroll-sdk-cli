@@ -7,9 +7,11 @@ the material import and compiler preflight in [the operator runbook](proof-opera
 For normal configuration, [the composed prepare/publish flow](proof-config-transactions.md)
 runs both actions for you from one release manifest.
 
-Every image must have an `org.opencontainers.image.revision` label equal to the
-explicit full `--expected-core-revision` for `export`, or to the release
-manifest's `revision` for `prepare-real`. Tags are resolved once; execution and
+Every image must have an `org.opencontainers.image.revision` label. For `export`,
+it must equal the explicit full `--expected-core-revision`. For `prepare-real`, a
+label that differs from the release manifest's `revision` is reported as a warning
+(see [Images from more than one revision](proof-release-workflow.md#images-from-more-than-one-revision)).
+Tags are resolved once; execution and
 receipts use immutable digests. Pulling requires registry access; the tools
 themselves run with no network, credentials or GPU. This isolation is not a
 substitute for selecting trusted images.
@@ -28,8 +30,8 @@ scrollsdk setup proof-image-tools --action prepare-real \
   --output .data/preparation-candidate --json
 ```
 
-The CLI checks the `proof-preparation-producer` revision label, then runs the
-producer exactly as dogeos-core documents it:
+The CLI compares the `proof-preparation-producer` revision label with the release
+and warns on a difference, then runs the producer exactly as dogeos-core documents it:
 
 ```bash
 docker run --rm --network none \
