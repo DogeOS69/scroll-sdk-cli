@@ -221,6 +221,12 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     handoff.approvals = [write('approval-changed.json', approval)]; write(GOVERNANCE_INPUT, handoff)
     await rejects(() => activate(), kind === 'expired' ? 'expired' : kind === 'partial' ? 'pending' : kind === 'wrong-request' ? 'request mismatch' : 'Missing')
   })
+  it('accepts a provider approval snapshot whose request path is percent-encoded', async () => {
+    approval.request = {...request, path: request.path.replaceAll('#', '%23')}
+    handoff.approvals = [write('approval-encoded.json', approval)]; write(GOVERNANCE_INPUT, handoff)
+    expect((await activate()).activation).equal('verified')
+  })
+
   it('rejects expired, tampered and nested-key attestation mismatch', async () => {
     expect(() => verifyRoleAttestation(jwt({...claims(), exp: 1}), jwks)).throw('expired')
     const signed = jwt(claims()); expect(() => verifyRoleAttestation(signed.slice(0, -4) + 'AAAA', jwks)).throw('signature')
@@ -319,6 +325,13 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     write('invalid-input.json', input)
     await rejects(() => reconcileCubesignerPolicy({connect: async () => client, directory: root, input: 'invalid-input.json', output: 'invalid-policy', prepareOnly: true}), field === 'policyIdentifier' ? 'immutable' : field === 'programIdentityDigest' ? 'identity digest' : 'context')
     expect(fs.existsSync(path.join(root, 'invalid-policy'))).equal(false)
+  })
+
+  it('archives a Core mfa snapshot whose request path is percent-encoded as the same exact request', () => {
+    fs.writeFileSync(path.join(root, 'gov-log-encoded.jsonl'), JSON.stringify(executed) + '\n')
+    fs.writeFileSync(path.join(root, 'core-mfa-encoded.txt'), JSON.stringify({...approval, request: {...request, path: request.path.replaceAll('#', '%23')}}, null, 2) + '\nRESULT: command=mfa applied=0 needs_approval=0 mfa_ids=\n')
+    const result = createGovernanceHandoff({approval: ['core-mfa-encoded.txt'], config: 'gov.json', directory: root, kind: 'sealed-upgrade', operations: 'gov-log-encoded.jsonl', sessionLifetime: 3600, state: 'gov-state.json'})
+    expect(result.outcomes.attachmentExecution).equal('recorded-not-verified')
   })
 
   it('adapts actual Core JSONL and mfa RESULT output and preserves the exact request across resumes', () => {

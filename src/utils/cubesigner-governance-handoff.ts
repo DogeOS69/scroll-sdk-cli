@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {isDeepStrictEqual} from 'node:util'
 
-import {GOVERNANCE_CORE_REVISION, GOVERNANCE_INPUT, requirePolicy} from './cubesigner-governance.js'
+import {GOVERNANCE_CORE_REVISION, GOVERNANCE_INPUT, normalizeProviderRequest, requirePolicy} from './cubesigner-governance.js'
 import {digest, localPath, writeJson} from './preparation-io.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
 
@@ -35,7 +35,7 @@ export function createGovernanceHandoff(options: {approval: string[]; config: st
 
   const contents: Record<string, string> = {'config.json': configText, 'operations.json': JSON.stringify(operations), 'state.json': read(options.state)}
   const snapshots = options.approval.map(file => JSON.parse(read(file).split('\n').filter(line => !line.startsWith('RESULT:')).join('\n')))
-  snapshots.forEach((snapshot, index) => {requirePolicy(isDeepStrictEqual(snapshot.request, request), 'Approval belongs to a different exact request'); contents[`approval-${index}.json`] = JSON.stringify(snapshot)})
+  snapshots.forEach((snapshot, index) => {requirePolicy(isDeepStrictEqual(normalizeProviderRequest(snapshot.request), request), 'Approval belongs to a different exact request'); contents[`approval-${index}.json`] = JSON.stringify(snapshot)})
   if (options.provisioning) contents['provisioning.json'] = read(options.provisioning)
   else if (options.kind === 'initial-provisioning' && options.initialSealLastReviewed) contents['provisioning.json'] = JSON.stringify({basis: 'explicit-operator-review-declaration', keyId: state.key_id, reviewedAt: new Date().toISOString(), schema: 'scrollsdk/cubesigner-initial-provisioning/v1', sealedBeforeBridgeRegistration: true, unregisteredAndUnfunded: true})
   const relative = `.scrollsdk/inputs/cubesigner-policy/governance-${digest(JSON.stringify(contents)).slice(0, 20)}`
