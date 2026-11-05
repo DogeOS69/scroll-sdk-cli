@@ -8,7 +8,7 @@ describe('frontend explorer URLs', () => {
     expect(defaultEthereumExplorer('unknown')).to.equal('')
   })
 
-  for (const value of [undefined, '', 'https://sochain.com/DOGE', 'https://sochain.com/DOGETEST', 'https://sepolia.etherscan.io/', 'http://explorer.internal:8080']) {
+  for (const value of [undefined, '', 'https://sochain.com/doge', 'https://sochain.com/dogetest', 'https://sepolia.etherscan.io', 'http://explorer.internal:8080']) {
     it(`accepts ${value}`, () => {
       expect(frontendExplorerUrlProblem('field', value)).to.equal(undefined)
     })
@@ -17,6 +17,12 @@ describe('frontend explorer URLs', () => {
   for (const value of ['not a url', 'ftp://explorer.dogeos.io', 'https://explorer.dogeos.io/tx?id=', 'https://explorer.dogeos.io/#tx', 'https://explorer.dogeos.io?', 7]) {
     it(`rejects the shape of ${value}`, () => {
       expect(frontendExplorerUrlProblem('field', value)).to.include('<base>/tx/<txid>')
+    })
+  }
+
+  for (const value of ['https://sochain.com/dogetest/', 'https://sepolia.etherscan.io/', 'http://explorer.internal:8080//']) {
+    it(`rejects the trailing slash of ${value}`, () => {
+      expect(frontendExplorerUrlProblem('field', value)).to.include('remove the trailing slash')
     })
   }
 

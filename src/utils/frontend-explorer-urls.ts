@@ -23,6 +23,8 @@ export function frontendExplorerUrlProblem(field: string, value: unknown): strin
   let url: URL
   try {url = new URL(value)} catch {return shape}
   if (!['http:', 'https:'].includes(url.protocol) || url.search || url.hash || value.includes('?') || value.includes('#')) return shape
+  // Not every frontend link strips it, and `<base>//tx/<txid>` is a 404 on an explorer such as SoChain.
+  if (value.endsWith('/')) return `${shape}; remove the trailing slash`
   if (PLACEHOLDER_HOST.test(url.hostname)) return `${shape}; ${url.hostname} is a placeholder host`
   return undefined
 }

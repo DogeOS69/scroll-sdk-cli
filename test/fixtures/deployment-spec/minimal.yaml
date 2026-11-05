@@ -107,8 +107,8 @@ frontend:
   protocol: https
   baseDomain: scrollsdk
   externalUrls:
-    l1Rpc: "https://sochain.com/DOGETEST"
-    l1Explorer: "https://sochain.com/DOGETEST"
+    l1Rpc: "https://sochain.com/dogetest"
+    l1Explorer: "https://sochain.com/dogetest"
   subdomains:
     frontend: portal
     rpcGateway: rpc

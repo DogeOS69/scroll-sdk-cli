@@ -87,7 +87,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       baseDomain: 'example.com',
       externalUrls: {
         grafana: 'https://grafana.example.com',
-        l1Explorer: 'https://sochain.com/DOGETEST',
+        l1Explorer: 'https://sochain.com/dogetest',
         l1Rpc: 'https://l1-rpc.example.com',
         l2Explorer: 'https://l2-explorer.example.com',
         l2Rpc: 'https://l2-rpc.example.com',
@@ -367,7 +367,7 @@ describe('deployment-spec-generator', () => {
 
       const normalized = normalizeDeploymentSpec(spec);
 
-      expect(normalized.contracts.verification?.l1ExplorerUri).to.equal('https://sochain.com/DOGETEST');
+      expect(normalized.contracts.verification?.l1ExplorerUri).to.equal('https://sochain.com/dogetest');
       expect(normalized.frontend.hosts).not.to.have.property('blockbook');
       expect(normalized.contracts.verification?.l2ExplorerUri).to.equal('https://blockscout.testnet.dogeos.io');
     });

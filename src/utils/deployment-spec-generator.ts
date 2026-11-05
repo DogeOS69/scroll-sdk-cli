@@ -502,7 +502,7 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
     // An explicit empty explorer is meaningful: a shadowfork's transactions are invisible to public explorers.
     ethExplorer: existingExternalUrls.ethExplorer ?? defaultEthereumExplorer(getEthereumDaChain(spec)),
     grafana: existingExternalUrls.grafana || publicUrl(protocol, hosts.grafana),
-    l1Explorer: existingExternalUrls.l1Explorer ?? (spec.dogecoin?.network === 'regtest' ? '' : `https://sochain.com/${spec.dogecoin?.network === 'mainnet' ? 'DOGE' : 'DOGETEST'}`),
+    l1Explorer: existingExternalUrls.l1Explorer ?? (spec.dogecoin?.network === 'regtest' ? '' : `https://sochain.com/${spec.dogecoin?.network === 'mainnet' ? 'doge' : 'dogetest'}`),
     l1Rpc: existingExternalUrls.l1Rpc || publicUrl(protocol, hosts.rpcGateway),
     l2Explorer: existingExternalUrls.l2Explorer || publicUrl(protocol, hosts.blockscout),
     l2Rpc: existingExternalUrls.l2Rpc || publicUrl(protocol, hosts.rpcGateway),

@@ -455,8 +455,8 @@ export default class SetupDomains extends Command {
     const defaultDogeExternalRpcUrl = selectedDogeNetwork === 'regtest'
       ? regtestDogecoinUrl
       : selectedDogeNetwork === 'mainnet'
-        ? 'https://sochain.com/DOGE'
-        : 'https://sochain.com/DOGETEST'
+        ? 'https://sochain.com/doge'
+        : 'https://sochain.com/dogetest'
     const defaultDogeExternalExplorerUrl = selectedDogeNetwork === 'regtest'
       ? regtestDogecoinUrl
       : defaultDogeExternalRpcUrl
