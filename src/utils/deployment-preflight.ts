@@ -49,7 +49,7 @@ export function inspectDeployment(options: {
       result.warnings.push(...policy.warnings)
     } catch (error) {result.blockers.push(error instanceof Error ? error.message : String(error))}
   }
-  else {result.blockers.push('Set cubesigner.mode explicitly in the source configuration: transport_only for non-mainnet, or production_verifier_key_policy with its receipts')}
+  else {result.blockers.push('Set cubesigner.mode explicitly in the source configuration: production_verifier_key_policy (with its receipts) whenever the selected key carries a hosted verifier policy, or transport_only for a non-mainnet key without one')}
 
   const wpFile = path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml')
   const wp = readToml(wpFile)

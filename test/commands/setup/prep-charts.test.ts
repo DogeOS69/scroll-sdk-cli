@@ -915,6 +915,7 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
           data: {
             DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
             DOGEOS_L1_INTERFACE_NETWORK_STR: 'testnet',
+            DOGEOS_L1_INTERFACE_REPLAY_READ__P2PKH_VERSIONED_ENVELOPE_START_WITHDRAW_INDEX: '0',
           },
         },
       },
@@ -924,8 +925,10 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
 
     expect(changes.map(change => change.key)).to.deep.equal([
       'configMaps.env.data.DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER',
+      'configMaps.env.data.DOGEOS_L1_INTERFACE_REPLAY_READ__P2PKH_VERSIONED_ENVELOPE_START_WITHDRAW_INDEX',
     ])
     expect(values.configMaps.env.data).not.to.have.property('DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER')
+    expect(values.configMaps.env.data).not.to.have.property('DOGEOS_L1_INTERFACE_REPLAY_READ__P2PKH_VERSIONED_ENVELOPE_START_WITHDRAW_INDEX')
     expect(values.configMaps.env.data.DOGEOS_L1_INTERFACE_NETWORK_STR).to.equal('testnet')
   })
 
