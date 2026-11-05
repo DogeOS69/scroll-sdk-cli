@@ -204,8 +204,13 @@ export function resolveCubesignerPolicy(input: {
       || bindings.teePublicKey !== parsed.tee || bindings.bridgeProgramCommitment !== identity.programCommitmentHash
       || bindings.aggregateVkIdentity !== identity.verificationKeyHash) throw new Error('Policy namespace/Bridge/program commitment/VK bindings mismatch')
     const testsReport = object(JSON.parse(fs.readFileSync(readFile(path.dirname(release.file), {path: string(tests.path, 'test report'), sha256: String(tests.sha256)}, 16 * 1024 * 1024), 'utf8')), 'tests')
-    for (const [field, value] of Object.entries(bindings)) {
-      if (object(testsReport.bindings, 'tested build bindings')[field] !== value) throw new Error('Reviewed tests do not bind compiled policy inputs')
+    // Compiled bindings in the report are optional: the report is already bound to the exact policy source
+    // commit, Wasm hash and protocol context above, and the Wasm hash pins the compiled inputs. When a report
+    // does carry bindings they must match the values compiled here.
+    if (testsReport.bindings !== undefined) {
+      for (const [field, value] of Object.entries(bindings)) {
+        if (object(testsReport.bindings, 'tested build bindings')[field] !== value) throw new Error('Reviewed tests do not bind compiled policy inputs')
+      }
     }
 
     const build = object(JSON.parse(fs.readFileSync(readFile(root, prepared.buildReceipt, 1024 * 1024), 'utf8')), 'build receipt')

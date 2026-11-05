@@ -157,6 +157,24 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     await rejects(() => prepare(), 'Prepared organization differs')
   })
 
+  it('prepares with a test report that pins the build by commit, Wasm and context instead of compiled bindings', async () => {
+    fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
+    const {release} = input
+    release.tests = {...write('tests-no-bindings.json', {coreRevision: release.coreRevision, protocolContextSha256: release.protocolContextSha256, result: 'passed', wasmSha256: release.wasm.sha256}), result: 'passed'}
+    const result = await prepare()
+    expect(result.status).to.equal('configuration-inputs-prepared-activation-pending')
+  })
+
+  it('rejects a test report without compiled bindings that exercised a different Wasm', async () => {
+    fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
+    const {release} = input
+    release.tests = {...write('tests-other-wasm.json', {coreRevision: release.coreRevision, protocolContextSha256: release.protocolContextSha256, result: 'passed', wasmSha256: `sha256:${'f'.repeat(64)}`}), result: 'passed'}
+    const error = await prepare().then(() => new Error('resolved'), (error_: Error) => error_)
+    expect(error.message).to.equal('Test report must record passed tests bound to the source, Wasm and protocol context; build success is not test evidence')
+  })
+
   it('prepares complete production pins without creating attachment receipts; strict resolution remains closed', () => {
     const selected: any = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8'))
     expect(selected.cubesigner.policyReceipts).equal(undefined)
