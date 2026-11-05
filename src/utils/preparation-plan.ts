@@ -224,6 +224,11 @@ export function validatePreparation(spec: DeploymentSpec): void {
   if (p.bridge.fundingFile && !p.bridge.fundingFile.startsWith('.scrollsdk/inputs/')) throw new Error('Funding input must live under .scrollsdk/inputs/')
 }
 
+/** Artifacts an unfinished step writes itself, so losing them needs no restore from backup. */
+const RECREATED_BY_STEP: Record<string, RegExp> = {
+  'cubesigner-session': /^secrets\/cubesigner-signer(?:-session\.json|\.env)$/,
+}
+
 function operatorEditableArtifact(relative: string): boolean {
   return relative === 'Makefile' || /^values\/.*\.ya?ml$/.test(relative)
 }
@@ -361,8 +366,17 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     const missingArtifacts: string[] = []
     for (const [file, hash] of Object.entries(state.files)) {
       const current = localPath(root, file)
-      if (!fs.existsSync(current)) missingArtifacts.push(file)
-      else if (!operatorEditableArtifact(file) && digest(fs.readFileSync(current)) !== hash) warn(`Prepared artifact changed: ${file}. Continuing with the current file; completed steps will not be regenerated.`)
+      if (!fs.existsSync(current)) {
+        // Only a step that has not completed may recreate its own output. Anything
+        // else stays a recovery case, because completed work is never replayed.
+        const owner = Object.entries(RECREATED_BY_STEP).find(([, pattern]) => pattern.test(file))?.[0]
+        if (owner && plan.steps.some(step => step.id === owner) && state.steps[owner] !== 'completed') {
+          delete state.files[file]
+          warn(`Registered artifact ${file} is missing; step ${owner} has not completed and will recreate it.`)
+        } else {
+          missingArtifacts.push(file)
+        }
+      } else if (!operatorEditableArtifact(file) && digest(fs.readFileSync(current)) !== hash) warn(`Prepared artifact changed: ${file}. Continuing with the current file; completed steps will not be regenerated.`)
     }
 
     if (missingArtifacts.length > 0) {

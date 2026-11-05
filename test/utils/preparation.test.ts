@@ -668,6 +668,44 @@ describe('resumable preparation plan', () => {
     await rejected(() => resolvePreparationProofRelease(spec, deployment), 'digest mismatch')
   })
 
+  describe('registered session files moved aside', () => {
+    const SESSION_FILE = 'secrets/cubesigner-signer.env'
+
+    async function stagedPlanWithSessionFile(sessionStep: 'completed' | 'failed', file = SESSION_FILE) {
+      const spec = fixture()
+      spec.bridge.cubesigner = {}
+      fs.writeFileSync(path.join(root, 'intent.yaml'), yaml.dump(spec))
+      await createPreparationPlan({output: deployment, sdkDirectory: sdk, spec: path.join(root, 'intent.yaml'), staged: true})
+      const statePath = path.join(deployment, '.scrollsdk/state.json')
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+      fs.writeFileSync(statePath, JSON.stringify({...state, files: {...state.files, [file]: 'registered-hash'}, steps: {...state.steps, 'cubesigner-session': sessionStep}}))
+      return statePath
+    }
+
+    it('lets an unfinished session step recreate them, with a warning', async () => {
+      const statePath = await stagedPlanWithSessionFile('failed')
+      const warnings: string[] = []
+      const result = await applyPreparation(deployment, {async run() {}}, undefined, {stage: 'aws', warn: message => warnings.push(message)})
+      expect(result.status).to.not.equal('recovery-required')
+      expect(warnings.join('\n')).include(SESSION_FILE)
+      expect(JSON.parse(fs.readFileSync(statePath, 'utf8')).files).to.not.have.property(SESSION_FILE)
+    })
+
+    it('still requires recovery when the session step already completed', async () => {
+      await stagedPlanWithSessionFile('completed')
+      const result = await applyPreparation(deployment, {async run() {}}, undefined, {stage: 'aws'})
+      expect(result.status).to.equal('recovery-required')
+      expect(result.waiting?.message).include(SESSION_FILE)
+    })
+
+    it('still requires recovery for any other registered file', async () => {
+      await stagedPlanWithSessionFile('failed', 'secrets/other.env')
+      const result = await applyPreparation(deployment, {async run() {}}, undefined, {stage: 'aws'})
+      expect(result.status).to.equal('recovery-required')
+      expect(result.waiting?.message).include('secrets/other.env')
+    })
+  })
+
   async function savedPlanFromEarlierCli(change: string, stepState: 'completed' | 'running' = 'completed') {
     const spec = fixture()
     spec.bridge.cubesigner = {}
