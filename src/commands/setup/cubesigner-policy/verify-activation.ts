@@ -5,6 +5,7 @@ import {connectActivationClient} from '../../../utils/cubesigner-activation-clie
 import {GOVERNANCE_INPUT, PolicyValidationError} from '../../../utils/cubesigner-governance.js'
 import {DEFAULT_DEPLOYMENT} from '../../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../../utils/json-output.js'
+import {safeErrorMessage} from '../../../utils/safe-error-message.js'
 
 export default class VerifyActivation extends Command {
   static description = 'Check current rendered signer values, remote attachment, Council evidence and runtime session before installation; read-only provider calls, no Helm mutation'
@@ -31,7 +32,7 @@ export default class VerifyActivation extends Command {
       output.success(result)
       if (result.activation !== 'verified') process.exitCode = 2
     } catch (error) {
-      output.error('E744_CUBESIGNER_ACTIVATION_PENDING', (error instanceof PolicyValidationError ? error.message + '. ' : '') + 'Activation pending or invalid. Check expected artifacts, effective Helm values, executed attachment, fresh governance evidence and runtime credentials. Do not install cubesigner-signer.', 'VALIDATION', true)
+      output.error('E744_CUBESIGNER_ACTIVATION_PENDING', (error instanceof PolicyValidationError ? error.message : safeErrorMessage(error) ?? 'Unexpected failure') + '. Activation pending or invalid. Check expected artifacts, effective Helm values, executed attachment, fresh governance evidence and runtime credentials. Do not install cubesigner-signer.', 'VALIDATION', true)
     }
   }
 }

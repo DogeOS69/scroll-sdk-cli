@@ -299,13 +299,20 @@ an explicit Kubernetes mutation and creates no signer workload. Apply the prepar
 printing Secret data; activation compares their contents in memory.
 
 ```bash
+scrollsdk setup cubesigner-policy prepare-runtime-secrets --dir . \
+  --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE"
 scrollsdk setup cubesigner-policy verify-activation --dir . \
   --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE" --json
 make install-cubesigner-signer KUBE_CONTEXT="$KUBE_CONTEXT" NAMESPACE="$NAMESPACE"
 ```
 
-The companion **scroll-sdk** `examples/Makefile.example` change runs activation
-again immediately before Helm, with the same context/namespace/chart/version/
+On a fresh cluster the signer chart has not created its ExternalSecrets yet, so
+`verify-activation` has no Secrets to compare. `prepare-runtime-secrets` delivers
+them without creating a signer workload. If they are missing, `verify-activation`
+fails with an `E744` message that names this command.
+
+The companion **scroll-sdk** `examples/Makefile.example` change delivers the Secrets
+and runs activation again immediately before Helm, with the same context/namespace/chart/version/
 values. It checks effective rendered env entries, key Secret indirection,
 read-only seed mount, one replica/private cache, current provider bindings and
 the actual delivered seed. A cached success report never authorizes installation.
@@ -313,10 +320,11 @@ A read-only preflight cannot eliminate a provider change between check and insta
 the Core signer retains its static runtime readiness checks.
 
 Existing operator Makefiles are preserved. Update only their
-`install-cubesigner-signer` recipe by adding this line immediately before the
+`install-cubesigner-signer` recipe by adding these lines immediately before the
 existing Helm command (with a real tab):
 
 ```make
+	scrollsdk setup cubesigner-policy prepare-runtime-secrets --dir . --kube-context "$(KUBE_CONTEXT)" --values values/cubesigner-signer-production.yaml --chart oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer --chart-version 0.1.9 --namespace "$(NAMESPACE)"
 	scrollsdk setup cubesigner-policy verify-activation --dir . --kube-context "$(KUBE_CONTEXT)" --values values/cubesigner-signer-production.yaml --chart oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer --chart-version 0.1.9 --namespace "$(NAMESPACE)"
 ```
 

@@ -62,9 +62,10 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
 
   const prepare = () => {write('input.json', input); return reconcileCubesignerPolicy({connect: async () => client, directory: root, input: 'input.json', output: 'prepared-policy', prepareOnly: true})}
   const mounts = [{mountPath: '/app/protocol_context.json', name: 'context', readOnly: true, subPath: 'protocol_context.json'}, {mountPath: '/etc/cubesigner', name: 'session', readOnly: true}, {mountPath: '/app/.sessions', name: 'cache'}]
+  const signerManifest = () => yaml.dump({kind: 'Deployment', spec: {replicas: 1, template: {spec: {containers: [{env, name: 'signer', volumeMounts: mounts}], volumes: [{configMap: {name: 'protocol-context-config'}, name: 'context'}, {name: 'session', secret: {secretName: 'cubesigner-signer-session'}}, {emptyDir: {}, name: 'cache'}]}}}})
   const activate = (extra = {}) => verifyCubesignerActivation({async connect() {calls.push('provider'); return client}, directory: root, kubeContext: 'fixture-context', readConfigMap: () => ({data: {'protocol_context.json': fs.readFileSync(path.join(root, '.data/protocol_context.json'), 'utf8')}}), readSecret: name => ({data: name === 'cubesigner-signer-env' ? {DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID: Buffer.from(key.keyId).toString('base64')} : {'session.json': fs.readFileSync(path.join(root, 'secrets/cubesigner-signer-session.json')).toString('base64')}}), render() {
     calls.push('helm template')
-    return yaml.dump({kind: 'Deployment', spec: {replicas: 1, template: {spec: {containers: [{env, name: 'signer', volumeMounts: mounts}], volumes: [{configMap: {name: 'protocol-context-config'}, name: 'context'}, {name: 'session', secret: {secretName: 'cubesigner-signer-session'}}, {emptyDir: {}, name: 'cache'}]}}}})
+    return signerManifest()
   }, ...extra})
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'cubesigner-activation-test-'))
@@ -291,6 +292,13 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
   })
   it('checks delivered cluster secrets rather than treating local file existence as delivery', async () => {
     await rejects(() => activate({readSecret: () => ({data: {}})}), 'Installed Secret key differs')
+  })
+  it('names the supported pre-delivery step when a rendered ExternalSecret has not delivered its Secret', async () => {
+    const withExternalSecret = () => `${signerManifest()}\n---\napiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata: {name: cubesigner-signer-session}\nspec: {target: {name: cubesigner-signer-session}}\n`
+    await rejects(() => activate({readSecret() {}, render: withExternalSecret}), 'prepare-runtime-secrets')
+  })
+  it('does not suggest pre-delivery for a Secret the chart does not reference', async () => {
+    await rejects(() => activate({readSecret() {}}), 'does not exist')
   })
   it('checks the effective key Secret indirection', async () => {
     env.find(entry => entry.name === 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID').valueFrom.secretKeyRef.name = 'different-key'
