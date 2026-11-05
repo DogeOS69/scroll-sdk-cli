@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values are dynamic YAML mappings. */
 import type {DogeConfig} from '../types/doge-config.js'
+import type {MonitoringConfig} from './monitoring-slack.js'
 
 import {resolveEthereumRpc} from './ethereum-rpc-secrets.js'
 import {grafanaAdminReference} from './grafana-admin.js'
@@ -104,6 +105,27 @@ function rpcUrl(value: unknown, label: string): string {
   }
 
   throw new Error(`${label} must be an HTTP(S) RPC URL for scroll-monitor`)
+}
+
+/** Spec thresholds win when set; otherwise the values file keeps its setting. */
+export function reconcileScrollMonitorAlerts(values: any, alerts?: MonitoringConfig['alerts']): MonitorChange[] {
+  const changes: MonitorChange[] = []
+  const stall = alerts?.l2BatchStallSeconds
+  const business = mapping(values.businessAlerts, 'businessAlerts')
+  if (stall !== undefined && business.l2BatchStallSeconds !== stall) {
+    changes.push({key: 'businessAlerts.l2BatchStallSeconds', newValue: String(stall), oldValue: String(business.l2BatchStallSeconds)})
+    values.businessAlerts = {...business, l2BatchStallSeconds: stall}
+  }
+
+  const minimum = alerts?.feeWalletMinimumDoge
+  const balance = mapping(values.balanceMonitoring, 'balanceMonitoring')
+  const feeWallet = mapping(balance.feeWallet, 'balanceMonitoring.feeWallet')
+  if (minimum !== undefined && feeWallet.minimumDoge !== minimum) {
+    changes.push({key: 'balanceMonitoring.feeWallet.minimumDoge', newValue: String(minimum), oldValue: String(feeWallet.minimumDoge)})
+    values.balanceMonitoring = {...balance, feeWallet: {...feeWallet, minimumDoge: minimum}}
+  }
+
+  return changes
 }
 
 /** Reconcile public service identities; retain operator thresholds and Secret-owned RPC URLs. */

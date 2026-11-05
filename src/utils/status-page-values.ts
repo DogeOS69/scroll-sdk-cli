@@ -110,6 +110,7 @@ export function reconcileScrollMonitorStatusPage(values: any, inputs: Inputs): A
     return []
   }
 
+  if (!String(inputs.environment ?? '').trim()) throw new Error('statusPage.enabled is true without an environment: declare monitoring.statusPage.enabled: true in the deployment spec (the environment is projected from metadata.environment), or set statusPage.enabled: false in the values file')
   const environment = requiredString(inputs.environment, 'statusPage.environment')
   if (!['devnet', 'mainnet', 'testnet'].includes(environment)) throw new Error('statusPage requires an explicit mainnet, testnet or devnet environment')
   const networkName = requiredString(inputs.networkName, 'general.CHAIN_NAME_L2')

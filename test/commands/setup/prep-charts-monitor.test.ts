@@ -6,7 +6,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import PrepCharts from '../../../src/commands/setup/prep-charts.js'
-import {reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner} from '../../../src/utils/scroll-monitor-values.js'
+import {reconcileScrollMonitorAlerts, reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner} from '../../../src/utils/scroll-monitor-values.js'
 
 const ORACLE_ADDRESS = `0x${'11'.repeat(20)}`
 const DA_ADDRESS = `0x${'22'.repeat(20)}`
@@ -39,6 +39,25 @@ function inputs(): any {
     l2RpcUrl: 'http://l2-rpc:8545',
   }
 }
+
+describe('scroll-monitor alert thresholds from the spec', () => {
+  it('lets spec thresholds win and survive balance reconciliation', () => {
+    const values: any = {balanceMonitoring: {feeWallet: {jobRegex: 'kept', minimumDoge: 100}}, businessAlerts: {jobMaxAgeSeconds: 900, l2BatchStallSeconds: 7500}}
+    const alerts = {feeWalletMinimumDoge: 0.5, l2BatchStallSeconds: 14_400}
+    expect(reconcileScrollMonitorAlerts(values, alerts).map(change => change.key)).to.deep.equal(['businessAlerts.l2BatchStallSeconds', 'balanceMonitoring.feeWallet.minimumDoge'])
+    reconcileScrollMonitorBalances(values, inputs())
+    expect(values.balanceMonitoring.feeWallet).to.deep.include({jobRegex: 'kept', minimumDoge: 0.5})
+    expect(values.businessAlerts).to.deep.equal({jobMaxAgeSeconds: 900, l2BatchStallSeconds: 14_400})
+    expect(reconcileScrollMonitorAlerts(values, alerts)).to.deep.equal([])
+  })
+
+  it('keeps values-file thresholds the spec does not set', () => {
+    const values: any = {balanceMonitoring: {feeWallet: {minimumDoge: 25}}}
+    expect(reconcileScrollMonitorAlerts(values)).to.deep.equal([])
+    expect(reconcileScrollMonitorAlerts(values, {})).to.deep.equal([])
+    expect(values).to.deep.equal({balanceMonitoring: {feeWallet: {minimumDoge: 25}}})
+  })
+})
 
 describe('setup prep-charts scroll-monitor balance generation', () => {
   it('uses each real signer on its transaction network and generates default thresholds', () => {

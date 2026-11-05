@@ -1581,6 +1581,12 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   validateMonitoring(spec.monitoring)
   if (spec.monitoring) config.monitoring = {...structuredClone(spec.monitoring), ...(spec.monitoring.statusPage ? {environment: spec.metadata.environment} : {})}
+  // A devnet seeds far less than the 100 DOGE production floor, which would fire from the first minute.
+  const feeWalletSeedSats = spec.metadata.environment === 'devnet' && spec.bridge ? getBridgeTargetAmountsSats(spec).feeWallet : 0
+  if (feeWalletSeedSats > 0 && spec.monitoring?.alerts?.feeWalletMinimumDoge === undefined) {
+    config.monitoring = {...config.monitoring, alerts: {...config.monitoring?.alerts, feeWalletMinimumDoge: feeWalletSeedSats / 2 / 100_000_000}}
+  }
+
   validateBootnodePublicP2p(spec.bootnodePublicP2p, Array.from({length: spec.infrastructure.bootnodeCount}, (_, index) => index), spec.infrastructure.provider)
   if (spec.bootnodePublicP2p !== undefined) config.bootnodePublicP2p = structuredClone(spec.bootnodePublicP2p)
   if (spec.infrastructure.provider === 'aws') config.awsWorkloadIdentity = awsWorkloadIdentity(spec)

@@ -955,6 +955,46 @@ a local-generation mode. Install the generated private Secrets through the
 existing deployment workflow. After Helm installation, `scroll-monitor` evaluates
 health and updates Instatus continuously. See [status-page configuration](status-page.md).
 
+Rendering into a new deployment directory starts from the SDK templates, so values
+edited by hand are not carried over. To keep bindings and deadlines across renders,
+declare them in the spec. A value set here wins over the values file; anything left
+out stays with the values file:
+
+```yaml
+monitoring:
+  alerts:
+    feeWalletMinimumDoge: 50 # Devnet defaults to half of bridge.targetAmountsSats.feeWallet.
+    l2BatchStallSeconds: 14400
+  statusPage:
+    enabled: true
+    health:
+      batchPublicationDeadlineSeconds: 7200
+      depositDeadlineSeconds: 3600
+      wfStallSeconds: 3600
+      withdrawalDeadlineSeconds: 7200
+    instatus:
+      componentIds:
+        withdrawals: example-component-id
+      groupId: example-group-id
+      pageId: example-page-id
+```
+
+`statusPage.enabled: true` in a values file without this spec block has no
+environment to use, and render stops with a message naming these fields. A deadline
+of 0 leaves that builtin health rule unconfigured, so a long queue never degrades the
+component. Choose deadlines that match the deployment's normal processing time.
+
+A devnet that is idle or running on a shadowfork usually also wants these chart
+switches, set through a `helmValues` overlay for `scroll-monitor-production.yaml`:
+
+```yaml
+businessAlerts:
+  l2BatchRequirePendingWork: true
+  proofQueueRequireNoProgress: true
+recoveryRunwayAlerts:
+  observationStaleEnabled: false # A shadowfork's getblockchaininfo reports chain "shadowfork".
+```
+
 ## Frontend external URLs
 
 `frontend.externalUrls.l1Explorer` and `ethExplorer` are base URLs. The portal links

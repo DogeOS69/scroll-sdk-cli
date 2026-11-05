@@ -386,6 +386,19 @@ describe('deployment-spec-generator', () => {
       expect(externalUrls.l1Explorer).to.equal('');
     });
 
+    it('defaults the devnet fee-wallet alert to half of the seed, and an explicit threshold wins', () => {
+      const spec = createMinimalSpec();
+      spec.metadata.environment = 'devnet';
+      spec.bridge.targetAmountsSats = {bridge: 100_000_000, feeWallet: 100_000_000, sequencer: 42_069_000};
+      const threshold = () => (toml.parse(generateDogeConfigToml(spec)) as any).monitoring?.alerts?.feeWalletMinimumDoge;
+      expect(threshold()).to.equal(0.5);
+      spec.monitoring = {alerts: {feeWalletMinimumDoge: 7}};
+      expect(threshold()).to.equal(7);
+      spec.monitoring = undefined;
+      spec.metadata.environment = 'testnet';
+      expect(threshold()).to.equal(undefined);
+    });
+
     it('rejects a placeholder explorer before it reaches portal links', () => {
       const spec = createMinimalSpec();
       spec.frontend.externalUrls.l1Explorer = 'https://explorer.example.invalid';
