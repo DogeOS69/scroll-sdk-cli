@@ -1456,6 +1456,7 @@ function generateFrontendsConfigValues(spec: DeploymentSpec): string {
     REACT_APP_CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID,
     REACT_APP_DOGE_NETWORK: spec.dogecoin.network,
     REACT_APP_ETH_SYMBOL: spec.network.tokenSymbol,
+    REACT_APP_EXTERNAL_EXPLORER_URI_ETH: spec.frontend.externalUrls.ethExplorer,
     REACT_APP_EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
     REACT_APP_EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,

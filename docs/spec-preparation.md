@@ -955,6 +955,21 @@ a local-generation mode. Install the generated private Secrets through the
 existing deployment workflow. After Helm installation, `scroll-monitor` evaluates
 health and updates Instatus continuously. See [status-page configuration](status-page.md).
 
+## Frontend external URLs
+
+`frontend.externalUrls.l1Explorer` and `ethExplorer` are base URLs. The portal links
+to `<base>/tx/<txid>` and uses the base itself as a menu link. Validation rejects
+query strings, fragments and placeholder hosts such as `*.invalid` or `example.com`.
+
+| Field | Default |
+| --- | --- |
+| `l1Explorer` | `https://sochain.com/DOGE` on mainnet, `https://sochain.com/DOGETEST` on testnet, empty on regtest |
+| `ethExplorer` | From `ethereumDa.chain`: `https://etherscan.io`, `https://sepolia.etherscan.io`, or empty on `devnet` |
+
+An empty value shows the transaction hash as plain text. Set `l1Explorer: ""` on a
+shadowfork, because public explorers cannot see its transactions. The portal's header
+menu is built from the same value, so review that item when leaving it empty.
+
 ## Slack notifications
 
 `monitoring.slack.enabled: true` enables the spec-owned Grafana `slack-alerts`

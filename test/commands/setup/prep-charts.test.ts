@@ -126,6 +126,7 @@ describe('setup prep-charts generated frontend config', () => {
     const values: Record<string, string> = {
       'frontend.ADMIN_SYSTEM_DASHBOARD_URI': 'https://admin.testnet.example',
       'frontend.BRIDGE_API_URI': 'https://bridge.testnet.example/api',
+      'frontend.EXTERNAL_EXPLORER_URI_ETH': 'https://sepolia.etherscan.io',
       'frontend.EXTERNAL_EXPLORER_URI_L1': '',
       'frontend.EXTERNAL_EXPLORER_URI_L2': 'https://explorer.testnet.example',
       'frontend.EXTERNAL_RPC_URI_L1': 'https://l1.example',
@@ -136,6 +137,7 @@ describe('setup prep-charts generated frontend config', () => {
 
     expect(buildFrontendExternalUrlUpdates(key => values[key])).to.deep.equal({
       GRAFANA_URI: 'https://grafana.testnet.example',
+      REACT_APP_EXTERNAL_EXPLORER_URI_ETH: 'https://sepolia.etherscan.io',
       REACT_APP_EXTERNAL_EXPLORER_URI_L1: '',
       REACT_APP_EXTERNAL_EXPLORER_URI_L2: 'https://explorer.testnet.example',
       REACT_APP_EXTERNAL_RPC_URI_L1: 'https://l1.example',

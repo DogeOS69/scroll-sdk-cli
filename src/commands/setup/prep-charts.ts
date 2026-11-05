@@ -173,6 +173,7 @@ export function buildFrontendExternalUrlUpdates(
 ): Record<string, unknown> {
   return {
     GRAFANA_URI: getConfigValue('frontend.GRAFANA_URI'),
+    REACT_APP_EXTERNAL_EXPLORER_URI_ETH: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_ETH'),
     REACT_APP_EXTERNAL_EXPLORER_URI_L1: getConfigValue('frontend.DOGE_EXTERNAL_EXPLORER_URI_L1') ?? getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L1'),
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L2'),
     REACT_APP_EXTERNAL_RPC_URI_L1: getConfigValue('frontend.DOGE_EXTERNAL_RPC_URI_L1') ?? getConfigValue('frontend.EXTERNAL_RPC_URI_L1'),

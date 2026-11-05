@@ -4,6 +4,7 @@ import {validateBridgeHistory} from './bridge-history.js'
 import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {validateExistingAlb} from './existing-alb.js'
 import {existingNlbEntries} from './existing-nlb.js'
+import {defaultEthereumExplorer, frontendExplorerUrlProblem} from './frontend-explorer-urls.js'
 import {validateMonitoring} from './monitoring-slack.js'
 import {validateNetworkPolicyIntent} from './network-policy-preflight.js'
 import {specDstackController} from './spec-kubernetes-target.js'
@@ -432,7 +433,8 @@ function assertGeneratedDataNetworkConsistency(configs: GeneratedConfigs): void 
 }
 
 function getEthereumDaChain(rawSpec: DeploymentSpec): keyof typeof ETHEREUM_DA_DEFAULTS {
-  return rawSpec.ethereumDa?.chain || (rawSpec.metadata.environment === 'mainnet' ? 'mainnet' : 'sepolia')
+  // Controller-only specs reach normalization without metadata.
+  return rawSpec.ethereumDa?.chain || (rawSpec.metadata?.environment === 'mainnet' ? 'mainnet' : 'sepolia')
 }
 
 function getEthereumDaChainId(rawSpec: DeploymentSpec): number {
@@ -497,8 +499,10 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
 
   const existingExternalUrls = (frontend.externalUrls || {}) as Partial<FrontendExternalUrls>
   const externalUrls = {
+    // An explicit empty explorer is meaningful: a shadowfork's transactions are invisible to public explorers.
+    ethExplorer: existingExternalUrls.ethExplorer ?? defaultEthereumExplorer(getEthereumDaChain(spec)),
     grafana: existingExternalUrls.grafana || publicUrl(protocol, hosts.grafana),
-    l1Explorer: existingExternalUrls.l1Explorer || (spec.dogecoin?.network === 'regtest' ? '' : `https://sochain.com/${spec.dogecoin?.network === 'mainnet' ? 'DOGE' : 'DOGETEST'}`),
+    l1Explorer: existingExternalUrls.l1Explorer ?? (spec.dogecoin?.network === 'regtest' ? '' : `https://sochain.com/${spec.dogecoin?.network === 'mainnet' ? 'DOGE' : 'DOGETEST'}`),
     l1Rpc: existingExternalUrls.l1Rpc || publicUrl(protocol, hosts.rpcGateway),
     l2Explorer: existingExternalUrls.l2Explorer || publicUrl(protocol, hosts.blockscout),
     l2Rpc: existingExternalUrls.l2Rpc || publicUrl(protocol, hosts.rpcGateway),
@@ -571,6 +575,12 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   const warnings: ValidationWarning[] = []
   try {specAwsSecretPrefix(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'preparation.secretUpload.awsPrefix'})}
   try {validateMonitoring(spec.monitoring)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: (error as Error).message.split(' ')[0]})}
+  for (const key of ['ethExplorer', 'l1Explorer'] as const) {
+    const path = `frontend.externalUrls.${key}`
+    const message = frontendExplorerUrlProblem(path, spec.frontend?.externalUrls?.[key])
+    if (message) errors.push({code: 'E601_INVALID_VALUE', message, path})
+  }
+
 
   try {resolveSpecAttestationSigners(spec)} catch (error) {
     errors.push({code: 'E601_INVALID_VALUE', message: error instanceof Error ? error.message : 'Invalid attestation signer identities', path: 'bridge.attestation.signers'})
@@ -1452,6 +1462,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     BASE_CHAIN: spec.network.tokenSymbol,
     CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID,
     ETH_SYMBOL: spec.network.tokenSymbol,
+    EXTERNAL_EXPLORER_URI_ETH: spec.frontend.externalUrls.ethExplorer,
     EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
     EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
     EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,

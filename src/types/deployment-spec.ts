@@ -703,8 +703,13 @@ export interface FrontendConfig {
   /** Base domain for all services */
   baseDomain: string
 
-  /** External URLs (for user-facing links). Omitted values are derived from protocol, baseDomain, and subdomains. */
+  /**
+   * External URLs (for user-facing links). Omitted values are derived from protocol, baseDomain, and subdomains.
+   * The frontend builds transaction links as `${explorer}/tx/${txid}`; an empty explorer shows the hash as plain text.
+   */
   externalUrls: {
+    /** Explorer of the Ethereum DA chain. Defaults from `ethereumDa.chain`. */
+    ethExplorer?: string
     grafana?: string
     l1Explorer?: string
     l1Rpc?: string

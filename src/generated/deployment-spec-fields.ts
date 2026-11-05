@@ -115,7 +115,7 @@ export const deploymentSpecFields: Record<string, {keys?: readonly string[]; kin
   "$.ethereumDa.publish": {"keys":["allowLivenessBudgetOverride","budgetWindow","highBacklogThreshold","maxBatchWait","maxBlobsPerTx","maxLivenessDelay","maxPendingBlobTxs","targetBlobsPerTx"],"kind":"object"},
   "$.feeOracle": {"keys":["contractWriteMode","ethereumRpcUrl"],"kind":"object"},
   "$.frontend": {"keys":["baseDomain","externalUrls","hosts","protocol","subdomains","walletConnectProjectId"],"kind":"object"},
-  "$.frontend.externalUrls": {"keys":["grafana","l1Explorer","l1Rpc","l2Explorer","l2Rpc"],"kind":"object"},
+  "$.frontend.externalUrls": {"keys":["ethExplorer","grafana","l1Explorer","l1Rpc","l2Explorer","l2Rpc"],"kind":"object"},
   "$.frontend.hosts": {"keys":["blockscout","celestia","dogecoin","frontend","grafana","l1Devnet","proofCoordinator","rpcGateway","rpcGatewayWs","tso"],"kind":"object"},
   "$.frontend.subdomains": {"keys":["blockscout","celestia","dogecoin","frontend","grafana","l1Devnet","proofCoordinator","rpcGateway","rpcGatewayWs","tso"],"kind":"object"},
   "$.genesis": {"keys":["baseFeePerGas","baseFeePerGasWei","deployerInitialBalance","deployerInitialBalanceWei","gasLimit","maxEthSupply","maxEthSupplyWei"],"kind":"object"},

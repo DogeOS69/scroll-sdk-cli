@@ -87,7 +87,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       baseDomain: 'example.com',
       externalUrls: {
         grafana: 'https://grafana.example.com',
-        l1Explorer: 'https://l1-explorer.example.com',
+        l1Explorer: 'https://sochain.com/DOGETEST',
         l1Rpc: 'https://l1-rpc.example.com',
         l2Explorer: 'https://l2-explorer.example.com',
         l2Rpc: 'https://l2-rpc.example.com',
@@ -370,6 +370,28 @@ describe('deployment-spec-generator', () => {
       expect(normalized.contracts.verification?.l1ExplorerUri).to.equal('https://sochain.com/DOGETEST');
       expect(normalized.frontend.hosts).not.to.have.property('blockbook');
       expect(normalized.contracts.verification?.l2ExplorerUri).to.equal('https://blockscout.testnet.dogeos.io');
+    });
+
+    it('derives the Ethereum explorer from the DA chain and keeps an explicit empty explorer', () => {
+      const spec = createMinimalSpec();
+      for (const [chain, expected] of [['mainnet', 'https://etherscan.io'], ['sepolia', 'https://sepolia.etherscan.io'], ['devnet', '']]) {
+        spec.ethereumDa = {...spec.ethereumDa, chain} as any;
+        expect(normalizeDeploymentSpec(spec).frontend.externalUrls.ethExplorer).to.equal(expected);
+      }
+
+      spec.frontend.externalUrls = {...spec.frontend.externalUrls, ethExplorer: '', l1Explorer: ''};
+      spec.ethereumDa = {...spec.ethereumDa, chain: 'sepolia'} as any;
+      const {externalUrls} = normalizeDeploymentSpec(spec).frontend;
+      expect(externalUrls.ethExplorer).to.equal('');
+      expect(externalUrls.l1Explorer).to.equal('');
+    });
+
+    it('rejects a placeholder explorer before it reaches portal links', () => {
+      const spec = createMinimalSpec();
+      spec.frontend.externalUrls.l1Explorer = 'https://explorer.example.invalid';
+      const {errors, valid} = validateDeploymentSpec(spec);
+      expect(valid).to.equal(false);
+      expect(errors.map(error => error.path)).to.include('frontend.externalUrls.l1Explorer');
     });
 
     it('preserves explicit frontend overrides', () => {
