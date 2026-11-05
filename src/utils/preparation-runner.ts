@@ -43,6 +43,18 @@ import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/run.js')
 export type Invoke = (root: string, step: string, args: string[], environment?: Record<string, string>) => Promise<void>
+
+/**
+ * Environment for a preparation step child. Children run inside the deployment directory, so a relative
+ * `NODE_EXTRA_CA_CERTS` given to the parent (for example an RDS CA bundle under the private repository) is
+ * resolved against the parent's working directory before it is handed down; otherwise Node silently ignores it.
+ */
+export function preparationChildEnvironment(step: string, environment: Record<string, string> = {}, base: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {...base, ...environment, SCROLLSDK_PREPARATION_STEP: step}
+  if (env.NODE_EXTRA_CA_CERTS && !path.isAbsolute(env.NODE_EXTRA_CA_CERTS)) env.NODE_EXTRA_CA_CERTS = path.resolve(cwd, env.NODE_EXTRA_CA_CERTS)
+  return env
+}
+
 export const invokePreparationCommand: Invoke = async (root, step, args, environment = {}) => {
   const logs = localPath(root, '.scrollsdk/logs')
   fs.mkdirSync(logs, {mode: 0o700, recursive: true})
@@ -50,7 +62,7 @@ export const invokePreparationCommand: Invoke = async (root, step, args, environ
   try {
     await new Promise<void>((resolve, reject) => {
       const commandArgs = args[0] === 'cubesigner' ? args : ['setup', ...args]
-      const child = spawn(process.execPath, [CLI, ...commandArgs, '--json'], {cwd: root, env: {...process.env, ...environment, SCROLLSDK_PREPARATION_STEP: step}, stdio: ['ignore', fd, fd]})
+      const child = spawn(process.execPath, [CLI, ...commandArgs, '--json'], {cwd: root, env: preparationChildEnvironment(step, environment), stdio: ['ignore', fd, fd]})
       child.once('error', () => reject(new Error(`Unable to start ${step}`)))
       child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Step ${step} failed; inspect .scrollsdk/logs/${step}.log privately`)))
     })
