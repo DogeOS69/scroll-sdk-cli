@@ -1437,7 +1437,8 @@ A matching schema and step contract can resume across CLI builds. Other schemas
 or step layouts are rejected; the CLI never adopts a different step list into a
 saved plan or reinterprets completed funding records.
 
-The generated SDK `install-cubesigner-signer` target first invokes
+When `cubesigner-signer-env` or `cubesigner-signer-session` is missing, the
+generated SDK `install-cubesigner-signer` target first invokes
 `setup cubesigner-policy prepare-runtime-secrets`. After the cloud Secret upload,
 this renders the selected chart, applies only its two namespaced SecretStores and
 two ExternalSecrets, and waits for delivery. It refuses resources owned by another

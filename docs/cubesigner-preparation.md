@@ -318,8 +318,9 @@ them without creating a signer workload. If they are missing, `verify-activation
 fails with an `E744` message that names this command.
 
 The companion **scroll-sdk** `examples/Makefile.example` change delivers the Secrets
-and runs activation again immediately before Helm, with the same context/namespace/chart/version/
-values. It checks effective rendered env entries, key Secret indirection,
+only when either one is missing, so upgrades and manually delivered Secrets are left
+alone. It then runs activation again immediately before Helm, with the same
+context/namespace/chart/version/values. It checks effective rendered env entries, key Secret indirection,
 read-only seed mount, one replica/private cache, current provider bindings and
 the actual delivered seed. A cached success report never authorizes installation.
 A read-only preflight cannot eliminate a provider change between check and install;
@@ -330,7 +331,7 @@ Existing operator Makefiles are preserved. Update only their
 existing Helm command (with a real tab):
 
 ```make
-	scrollsdk setup cubesigner-policy prepare-runtime-secrets --dir . --kube-context "$(KUBE_CONTEXT)" --values values/cubesigner-signer-production.yaml --chart oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer --chart-version 0.1.9 --namespace "$(NAMESPACE)"
+	kubectl --context "$(KUBE_CONTEXT)" -n "$(NAMESPACE)" get secret cubesigner-signer-env cubesigner-signer-session >/dev/null 2>&1 || scrollsdk setup cubesigner-policy prepare-runtime-secrets --dir . --kube-context "$(KUBE_CONTEXT)" --values values/cubesigner-signer-production.yaml --chart oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer --chart-version 0.1.9 --namespace "$(NAMESPACE)"
 	scrollsdk setup cubesigner-policy verify-activation --dir . --kube-context "$(KUBE_CONTEXT)" --values values/cubesigner-signer-production.yaml --chart oci://ghcr.io/dogeos69/scroll-sdk/helm/cubesigner-signer --chart-version 0.1.9 --namespace "$(NAMESPACE)"
 ```
 
