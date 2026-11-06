@@ -6,6 +6,7 @@ import type {MonitoringConfig} from './monitoring-slack.js'
 
 import {resolveEthereumRpc} from './ethereum-rpc-secrets.js'
 import {grafanaAdminReference} from './grafana-admin.js'
+import {withScrapeJob} from './scrape-jobs.js'
 import {getRequiredManagedSignerAddress} from './signer-roles.js'
 
 const ATTESTATION_SIGNER_JOB = 'attestation-signer'
@@ -150,8 +151,7 @@ export function reconcileScrollMonitorAttestationSigner(values: any, config?: Mo
   if (!Array.isArray(previous)) throw new TypeError('Attestation signer scrape generation requires array additionalScrapeConfigs')
   const targets = [...new Set(config.targets ?? [])].sort()
   const scrape = {job_name: ATTESTATION_SIGNER_JOB, metrics_path: '/metrics', static_configs: [{targets}]}
-  const others = previous.filter((job: any) => job?.job_name !== ATTESTATION_SIGNER_JOB)
-  const jobs = config.enabled ? [...others, scrape] : others
+  const jobs = withScrapeJob(previous, ATTESTATION_SIGNER_JOB, config.enabled ? scrape : undefined)
   if (isDeepStrictEqual(previous, jobs)) return changes
   stack.prometheus ??= {}
   stack.prometheus.prometheusSpec ??= {}

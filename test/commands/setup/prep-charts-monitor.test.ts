@@ -83,6 +83,13 @@ describe('scroll-monitor attestation signer monitoring from the spec', () => {
     expect(reconcileScrollMonitorAttestationSigner(values, signer)).to.deep.equal([])
   })
 
+  it('keeps its position beside a job generated later, so repeated runs report nothing', () => {
+    const scrape = {job_name: 'attestation-signer', metrics_path: '/metrics', static_configs: [{targets: ['signer.internal:9100']}]}
+    const values: any = {attestationSignerMonitoring: {enabled: true}, ...withJobs(scrape, statusProbes)}
+    expect(reconcileScrollMonitorAttestationSigner(values, {enabled: true, targets: ['signer.internal:9100']})).to.deep.equal([])
+    expect(jobs(values)).to.deep.equal([scrape, statusProbes])
+  })
+
   it('removes only its own job when disabled', () => {
     const values: any = {attestationSignerMonitoring: {enabled: true}, ...withJobs(statusProbes, {job_name: 'attestation-signer'})}
     reconcileScrollMonitorAttestationSigner(values, {enabled: false, targets: ['kept-in-spec.internal:9100']})

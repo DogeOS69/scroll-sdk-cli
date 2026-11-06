@@ -2,6 +2,7 @@
 import * as yaml from 'js-yaml'
 import {isDeepStrictEqual} from 'node:util'
 
+import {withScrapeJob} from './scrape-jobs.js'
 import {buildAlloyProbes, reconcileWebsocketContainer} from './status-page-alloy.js'
 import {normalizeHealth, normalizeProbes} from './status-page-health.js'
 import {normalizeMaintenance} from './status-page-maintenance.js'
@@ -180,7 +181,7 @@ export function reconcileComponentPublication(values: any, config: any, readNode
   if (probeScrape || previous?.probeScrape) {
     stack.prometheus ??= {}
     stack.prometheus.prometheusSpec ??= {}
-    stack.prometheus.prometheusSpec.additionalScrapeConfigs = [...jobs.filter((job: any) => job.job_name !== scrapeName), ...(probeScrape ? [probeScrape] : [])]
+    stack.prometheus.prometheusSpec.additionalScrapeConfigs = withScrapeJob(jobs, scrapeName, probeScrape)
     values['kube-prometheus-stack'] = stack
   }
 
