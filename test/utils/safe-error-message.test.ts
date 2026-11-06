@@ -36,10 +36,30 @@ describe('safeErrorMessage', () => {
     [`body {\\"token\\":\\"${MARKER}\\"}`, 'body {\\"token\\":[redacted]'],
     [`Authorization: Bearer ${MARKER}`, 'Authorization: [redacted]'],
     [`Authorization: ${MARKER}`, 'Authorization: [redacted]'],
-    [`{"authorization":"Basic ${MARKER}"}`, '{"authorization":"[redacted]"}'],
+    [`{"authorization":"Basic ${MARKER}"}`, '{"authorization":[redacted]'],
+    [`{"authorization":["${MARKER}"]}`, '{"authorization":[redacted]'],
+    [`{"cookie":"email=a@b.com; session=${MARKER}"}`, '{"cookie":[redacted]'],
+    [`{"mnemonic":"word@x ${MARKER} ${MARKER}"}`, '{"mnemonic":[redacted]'],
+    [`"set-cookie":["a=[1]","session=${MARKER}"]`, '"set-cookie":[redacted]'],
+    [`{"seed":[["a"],["${MARKER}"]]}`, '{"seed":[redacted]'],
+    [`Cookie: [x]=1; session=${MARKER}`, 'Cookie: [redacted]'],
+    [`'set-cookie': [\n  'session=${MARKER}',\n  'other=${MARKER}'\n]`, "'set-cookie': [redacted]"],
+    [`authorization_header: Basic ${MARKER}`, 'authorization_header: [redacted]'],
+    [`mnemonicPhrase: ${MARKER} ${MARKER}`, 'mnemonicPhrase: [redacted]'],
+    [`{"mnemonics":"${MARKER} ${MARKER}"}`, '{"mnemonics":[redacted]'],
+    [`cookies: session=${MARKER} other=${MARKER}`, 'cookies: [redacted]'],
+    [`seed: ${MARKER} ${MARKER}`, 'seed: [redacted]'],
+    [`{"seed":"${MARKER} ${MARKER}"}`, '{"seed":[redacted]'],
+    [`seedWords: ${MARKER} ${MARKER}`, 'seedWords: [redacted]'],
+    [`Authorization: Digest user="${MARKER}", response="${MARKER}"`, 'Authorization: [redacted]'],
+    [`Cookie: session=${MARKER}; other=${MARKER}`, 'Cookie: [redacted]'],
+    [`set-cookie: session=${MARKER}\nnext line`, 'set-cookie: [redacted] next line'],
+    [`mnemonic=${MARKER} ${MARKER}`, 'mnemonic=[redacted]'],
+    [`seed phrase: ${MARKER} ${MARKER}`, 'seed phrase: [redacted]'],
+    [`{"seedString":"${MARKER} ${MARKER}"}`, '{"seedString":[redacted]'],
     [`sent bearer ${MARKER} upstream`, 'sent bearer [redacted] upstream'],
   ]) {
-    it(`removes the credentials from ${input.replace(MARKER, '<marker>')}`, () => {
+    it(`removes the credentials from ${input.replaceAll(MARKER, '<marker>')}`, () => {
       expect(safeErrorMessage(new Error(input))).to.equal(expected)
     })
   }
@@ -47,6 +67,10 @@ describe('safeErrorMessage', () => {
   it('keeps Kubernetes wording that names a Secret without a value', () => {
     const message = 'Error from server (NotFound): secrets "signer-env" not found'
     expect(safeErrorMessage(new Error(message))).to.equal(message)
+  })
+
+  it('keeps ordinary failure wording that mentions a secret kind', () => {
+    for (const message of ['Authorization failed: role is disabled', 'seed lookup failed: connection refused']) expect(safeErrorMessage(new Error(message))).to.equal(message)
   })
 
   it('keeps an ordinary validation message readable', () => {
@@ -64,6 +88,12 @@ describe('safeErrorMessage', () => {
     expect(message).to.not.include(MARKER)
     expect(message).to.include('https://api.example.test')
     expect(message).to.include('[redacted]')
+  })
+
+  it('stays fast on a very long message', () => {
+    const started = Date.now()
+    expect(safeErrorMessage(new Error('seed'.repeat(40_000)))).to.have.length.at.most(403)
+    expect(Date.now() - started).to.be.below(1000)
   })
 
   it('collapses whitespace and bounds the length', () => {
