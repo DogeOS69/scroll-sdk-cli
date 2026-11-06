@@ -2,7 +2,7 @@ import {resolveCapacityManager} from './capacity-manager.js'
 import {canonicalDogecoinNetwork} from './dogecoin-network.js'
 import {reconcileEthereumRpcSecrets} from './ethereum-rpc-secrets.js'
 import {reconcileMonitoringSlack} from './monitoring-slack.js'
-import {specAwsSecretPrefix} from './spec-secret-prefix.js'
+import {specAwsSecretPrefix, specAwsSecretRegion} from './spec-secret-prefix.js'
 /**
  * Helm Values Generator
  *
@@ -74,12 +74,11 @@ interface SecretProviderConfig {
  * Generated values read AWS Secrets from the region the upload step writes them to.
  */
 export function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderConfig {
-  const upload = spec.preparation?.secretUpload
-  const uploadRegion = upload?.provider === 'aws' ? upload.awsRegion : undefined
+  const region = specAwsSecretRegion(spec)
   switch (spec.infrastructure.provider) {
     case 'aws': {
       return {
-        awsRegion: uploadRegion || spec.infrastructure.aws?.region || 'us-west-2',
+        awsRegion: region || 'us-west-2',
         prefix: specAwsSecretPrefix(spec),
         provider: 'aws'
       }
@@ -95,7 +94,7 @@ export function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderCon
 
     default: {
       return {
-        ...(uploadRegion ? {awsRegion: uploadRegion} : {}),
+        ...(region ? {awsRegion: region} : {}),
         prefix: specAwsSecretPrefix(spec),
         provider: spec.infrastructure.local?.useK8sSecrets === false ? 'aws' : 'kubernetes'
       }

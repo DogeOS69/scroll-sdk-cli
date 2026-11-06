@@ -51,7 +51,7 @@ import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {resolveSpecIdentities} from './spec-identities.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
-import {specAwsSecretPrefix} from './spec-secret-prefix.js'
+import {specAwsSecretPrefix, specAwsSecretRegion} from './spec-secret-prefix.js'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -1611,10 +1611,12 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   config.attestationSigner = attestation
 
 
+  const secretProvider = spec.infrastructure.provider === 'local' ? (spec.infrastructure.local?.useK8sSecrets === false ? 'aws' : 'kubernetes') : spec.infrastructure.provider
+  const secretRegion = specAwsSecretRegion(spec) || (spec.infrastructure.provider === 'aws' ? 'us-west-2' : undefined)
   config.ethereumRpcSecretStore = {
     prefix: spec.infrastructure.provider === 'gcp' ? (spec.infrastructure.gcp?.secretsProject ?? spec.infrastructure.gcp?.project ?? 'default-project') : specAwsSecretPrefix(spec),
-    provider: spec.infrastructure.provider === 'local' ? (spec.infrastructure.local?.useK8sSecrets === false ? 'aws' : 'kubernetes') : spec.infrastructure.provider,
-    ...(spec.infrastructure.provider === 'aws' ? {awsRegion: spec.infrastructure.aws?.region ?? 'us-west-2'} : {}),
+    provider: secretProvider,
+    ...(secretProvider === 'aws' && secretRegion ? {awsRegion: secretRegion} : {}),
     ...(spec.infrastructure.provider === 'gcp' ? {gcpProject: spec.infrastructure.gcp?.project} : {}),
   }
   config.feeOracle = {contractWriteMode: spec.feeOracle?.contractWriteMode ?? 'live', ethereumRpcUrl: spec.feeOracle?.ethereumRpcUrl ?? 'https://ethereum-rpc.publicnode.com'}

@@ -11,6 +11,12 @@ function validPrefix(prefix: string): string {
   return prefix
 }
 
+/** The region the upload step writes AWS Secrets to, which generated values must read from. */
+export function specAwsSecretRegion(spec: DeploymentSpec): string | undefined {
+  const upload = spec.preparation?.secretUpload
+  return (upload?.provider === 'aws' ? upload.awsRegion : undefined) || spec.infrastructure.aws?.region
+}
+
 /** One namespace for generated references and uploads, isolated by deployment. */
 export function specAwsSecretPrefix(spec: DeploymentSpec): string {
   const infrastructure = spec.infrastructure.aws?.secretsPrefix

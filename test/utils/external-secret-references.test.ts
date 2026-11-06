@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Inspect generated YAML values. */
+import * as toml from '@iarna/toml'
+import bitcore from 'bitcore-lib-doge'
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
 import fs from 'node:fs'
@@ -7,7 +9,8 @@ import {fileURLToPath} from 'node:url'
 
 import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
 
-import {normalizeDeploymentSpec} from '../../src/utils/deployment-spec-generator.js'
+import {generateDogeConfigToml, normalizeDeploymentSpec} from '../../src/utils/deployment-spec-generator.js'
+import {reconcileEthereumRpcSecrets} from '../../src/utils/ethereum-rpc-secrets.js'
 import {reconcileExternalSecretFiles, reconcileExternalSecretReferences} from '../../src/utils/external-secret-references.js'
 import {generateValuesFiles, getSecretProviderConfig} from '../../src/utils/values-generator.js'
 
@@ -75,15 +78,39 @@ describe('reconcileExternalSecretReferences', () => {
     expect(getSecretProviderConfig(spec).awsRegion).to.equal('ap-southeast-1')
   })
 
-  it('generates every values file with the upload region', () => {
-    const spec = normalizeDeploymentSpec(yaml.load(fs.readFileSync(path.join(cliRoot, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8')
+  const fullSpec = () => {
+    const spec: any = normalizeDeploymentSpec(yaml.load(fs.readFileSync(path.join(cliRoot, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8')
       .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
       .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec)
-    spec.infrastructure.aws!.region = 'ap-southeast-1'
-    ;(spec as any).preparation = {bridge: {image: 'fixture', mode: 'helper'}, secretUpload: {awsRegion: 'ap-southeast-2', provider: 'aws'}}
-    const regions = Object.values(generateValuesFiles(spec)).flatMap(content => Object.values((yaml.load(content) as any)?.externalSecrets ?? {}).map((secret: any) => secret.secretRegion))
+    spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString()
+    spec.bridge.attestation.signers = [0, 1, 2].map(index => ({attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: `partner-${index}`, transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}))
+    spec.bridge.attestation.threshold = 2
+    spec.infrastructure.aws.region = 'ap-southeast-1'
+    spec.preparation = {bridge: {image: 'fixture', mode: 'helper'}, secretUpload: {awsRegion: 'ap-southeast-2', provider: 'aws'}}
+    return spec
+  }
+
+  it('generates every values file with the upload region', () => {
+    const regions = Object.values(generateValuesFiles(fullSpec())).flatMap(content => Object.values((yaml.load(content) as any)?.externalSecrets ?? {}).map((secret: any) => secret.secretRegion))
     expect(regions).to.include('ap-southeast-2')
     expect(regions).to.not.include('ap-southeast-1')
+  })
+
+  it('keeps the upload region when render reconciles the Ethereum RPC Secrets', () => {
+    const spec = fullSpec()
+    const store = (toml.parse(generateDogeConfigToml(spec)) as any).ethereumRpcSecretStore
+    expect(store.awsRegion).to.equal('ap-southeast-2')
+    const values = yaml.load(generateValuesFiles(spec)['fee-oracle-production.yaml']) as any
+    expect(reconcileEthereumRpcSecrets(values, 'fee-oracle', store)).to.equal(false)
+    expect(Object.values(values.externalSecrets).map((secret: any) => secret.secretRegion)).to.not.include('ap-southeast-1')
+  })
+
+  it('records a region only for a store that reads AWS', () => {
+    const spec = fullSpec()
+    delete spec.preparation.secretUpload
+    expect((toml.parse(generateDogeConfigToml(spec)) as any).ethereumRpcSecretStore.awsRegion).to.equal('ap-southeast-1')
+    spec.infrastructure.provider = 'local'
+    expect((toml.parse(generateDogeConfigToml(spec)) as any).ethereumRpcSecretStore).to.not.have.property('awsRegion')
   })
 
   it('leaves other providers alone', () => {
