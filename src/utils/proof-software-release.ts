@@ -33,7 +33,7 @@ export const PROOF_PUBLICATION_FILES = [
 ] as const
 
 export interface ProofSoftwareRelease {
-  /** repository@sha256 references; each image's revision label equals `revision`. */
+  /** repository@sha256 references. An official release's images all carry `revision`; a label that differs is reported. */
   images: Record<ProofReleaseImageName, string>
   revision: string
   schema: typeof PROOF_RELEASE_SCHEMA
@@ -69,6 +69,17 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[], labe
 function text(value: unknown, label: string, pattern?: RegExp): string {
   if (typeof value !== 'string' || !value || value.trim() !== value || (pattern && !pattern.test(value))) throw new Error(`Invalid ${label}`)
   return value
+}
+
+/**
+ * Revision labels are an audit trail, not program identity: commitments are injected at build time,
+ * so the same commit can build different programs and different commits the same ones. The commitment
+ * checks are what refuse a wrong program, so a differing label is reported rather than refused. A
+ * missing or malformed label still fails, because it means the image is not a release build.
+ */
+export function proofImageRevisionWarning(subject: string, actual: string, expected: string): string | undefined {
+  text(actual, `${subject} revision label`, /^[\da-f]{40}$/)
+  return actual === expected ? undefined : `${subject} revision ${actual} differs from proof release revision ${expected}; check its program commitments before relying on it`
 }
 
 export function validateProofSoftwareRelease(value: unknown): ProofSoftwareRelease {

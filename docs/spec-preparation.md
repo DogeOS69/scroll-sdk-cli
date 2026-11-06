@@ -876,7 +876,7 @@ the release owner must publish them. The operator does not locate or compute a
 digest. Private GitHub access uses `GH_TOKEN`, then `GITHUB_TOKEN`, then the
 existing `gh auth login` session for github.com. Credentials are not stored in
 the plan or downloaded release files.
-For an offline approved release, use `{manifest, sha256}` instead of `version`. `setup proof-materials` generates `.data/proof-release-preparation/` from the
+For an offline approved release, use `{manifest, sha256}` instead of `version`. For a set built from several commits, see [Images from more than one revision](proof-release-workflow.md#images-from-more-than-one-revision). `setup proof-materials` generates `.data/proof-release-preparation/` from the
 canonical protocol context, including `bridge/worker-identity-bundle.json`;
 exports the coordinator materializers; checks the production CUDA image; and
 imports `.data/proof-materials-v1.json`. Operators do not invent identity hashes

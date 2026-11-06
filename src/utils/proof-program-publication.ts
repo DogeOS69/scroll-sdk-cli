@@ -14,7 +14,7 @@ import {readProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {resolveContractFile} from './proof-deployment-contract.js'
 import {immutableProofImage, readProofMaterials} from './proof-materials.js'
-import {PROOF_PUBLICATION_FILES, proofFileHash, proofRegularFile, readProofSoftwareRelease} from './proof-software-release.js'
+import {PROOF_PUBLICATION_FILES, proofFileHash, proofImageRevisionWarning, proofRegularFile, readProofSoftwareRelease} from './proof-software-release.js'
 import {validateProofTopologyBundle} from './proof-topology-compiler.js'
 
 export const DEFAULT_PROOF_PROGRAM_PUBLICATION_RECEIPT = '.data/proof-program-publication-v1.json'
@@ -66,6 +66,7 @@ export interface PublishProofProgramOptions extends PlanProofProgramPublicationO
   awsProfile?: string
   expectedPlan?: ProofProgramPublicationPlan
   output: string
+  warn?: (message: string) => void
 }
 
 const EXPECTED_BUNDLE_PATHS = new Set([
@@ -337,11 +338,17 @@ export async function publishProofProgramBundle(options: PublishProofProgramOpti
       '--skip-bucket-setup',
     ]
     let body: string
+    let publisherImageRevision: string | undefined
     if (plan.publisherImage) {
       if (/[\n\r,]/.test(staged)) throw new Error('Unsupported publisher mount path')
       run('docker', ['pull', plan.publisherImage])
       const revision = run('docker', ['image', 'inspect', plan.publisherImage, '--format', '{{ index .Config.Labels "org.opencontainers.image.revision" }}']).trim()
-      if (revision !== plan.coreRevision) throw new Error('Publisher OCI revision differs from release')
+      const revisionWarning = proofImageRevisionWarning('proof-bundle-publisher image', revision, plan.coreRevision)
+      if (revisionWarning) {
+        publisherImageRevision = revision
+        ;(options.warn ?? console.warn)(revisionWarning)
+      }
+
       const mapping = run('docker', ['image', 'inspect', plan.publisherImage, '--format', '{{ index .Config.Labels "dogeos.proof-bundle.mapping" }}']).trim()
       if (mapping !== 'v1-11-files') throw new Error('Publisher image mapping contract differs from release')
       const profile = options.awsProfile ? ['--profile', options.awsProfile] : []
@@ -398,6 +405,7 @@ export async function publishProofProgramBundle(options: PublishProofProgramOpti
       proofTopologyBundleRevision: plan.proofTopologyBundleRevision,
       publishedAt: new Date().toISOString(),
       ...(plan.releaseSha256 ? {publisherImage: plan.publisherImage, releaseSha256: plan.releaseSha256} : {}),
+      ...(publisherImageRevision ? {publisherImageRevision} : {}),
       schema: PROOF_PROGRAM_PUBLICATION_SCHEMA,
       schemaVersion: 1,
       verification: {anonymousHttpReadback: 'passed', authenticatedS3Readback: 'passed'},

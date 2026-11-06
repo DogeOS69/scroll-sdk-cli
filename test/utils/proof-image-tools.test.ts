@@ -123,8 +123,10 @@ describe('offline proof image tools', () => {
     })
     expect(calls.map(args => args[0])).to.deep.equal(['pull', 'image', 'create', 'cp', 'cp', 'rm'])
     expect(calls.some(args => args[0] === 'run' || args[0] === 'start')).to.equal(false)
-    expect(() => exportCoordinatorMaterializers({expectedRevision: 'e'.repeat(40), image, outputDir: path.join(root, 'other'), run}))
-      .to.throw('does not match expected')
-    expect(fs.existsSync(path.join(root, 'other'))).to.equal(false)
+    const warnings: string[] = []
+    exportCoordinatorMaterializers({expectedRevision: 'e'.repeat(40), image, outputDir: path.join(root, 'other'), run, warn: message => warnings.push(message)})
+    expect(warnings).to.have.length(1)
+    expect(warnings[0]).to.include('proof-coordinator').and.include(revision)
+    expect(fs.existsSync(path.join(root, 'other/scroll-runtime-materializer'))).to.equal(true)
   })
 })

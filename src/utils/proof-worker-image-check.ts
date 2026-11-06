@@ -8,6 +8,7 @@ import type {ProofWorkerImageCheckV1} from '../types/proof-worker-image-check.js
 
 import {PROOF_WORKER_IMAGE_CHECK_SCHEMA} from '../types/proof-worker-image-check.js'
 import {immutableProofImage, parseProofIdentityEnv} from './proof-materials.js'
+import {proofImageRevisionWarning} from './proof-software-release.js'
 
 export const DEFAULT_PROOF_WORKER_IMAGE_CHECK = '.data/proof-worker-image-check-v1.json'
 
@@ -24,6 +25,7 @@ export interface CheckProofWorkerImageOptions {
   image: ProofTopologyImageReference
   output: string
   run?: ProofWorkerImageDockerRunner
+  warn?: (message: string) => void
 }
 
 export function assertProofWorkerImageMatchesPreparation(
@@ -104,7 +106,9 @@ export function checkProofWorkerImage(options: CheckProofWorkerImageOptions): {
   }
 
   exact(labels['org.opencontainers.image.title'], 'prover-worker-cuda', 'Worker image title')
-  exact(labels['org.opencontainers.image.revision'], options.expectedCoreRevision, 'Worker image revision')
+  const imageRevision = requiredString(labels['org.opencontainers.image.revision'], 'Worker image revision')
+  const revisionWarning = proofImageRevisionWarning('prover-worker-cuda image', imageRevision, options.expectedCoreRevision)
+  if (revisionWarning) (options.warn ?? console.warn)(revisionWarning)
   exact(labels['dogeos.component'], 'proving', 'Worker image component')
   exact(labels['dogeos.service'], 'prover-worker-cuda', 'Worker image service')
   exact(
@@ -126,6 +130,7 @@ export function checkProofWorkerImage(options: CheckProofWorkerImageOptions): {
       batchProgramCommitmentRaw: options.expectedBatchProgramCommitmentRaw,
     },
     image: options.image,
+    ...(revisionWarning ? {imageRevision} : {}),
     inspectedAt: new Date().toISOString(),
     schema: PROOF_WORKER_IMAGE_CHECK_SCHEMA,
     schemaVersion: 1,
@@ -148,6 +153,8 @@ export function validateProofWorkerImageCheck(raw: unknown, label: string): Proo
   }
   if (!SHA256.test(parsedImage.digest)) throw new Error(`${label}.image.digest must be an immutable sha256 digest`)
   immutableProofImage(parsedImage)
+  const imageRevision = root.imageRevision === undefined ? undefined : requiredString(root.imageRevision, `${label}.imageRevision`)
+  if (imageRevision !== undefined && !CORE_REVISION.test(imageRevision)) throw new Error(`${label}.imageRevision must be a full lowercase Git SHA`)
   const identities = mapping(root.identities, `${label}.identities`)
   const batchProgramCommitmentRaw = requiredString(
     identities.batchProgramCommitmentRaw,
@@ -168,6 +175,7 @@ export function validateProofWorkerImageCheck(raw: unknown, label: string): Proo
     cudaArchitectures,
     identities: {batchAggregationProgramCommitmentRaw, batchProgramCommitmentRaw},
     image: parsedImage,
+    ...(imageRevision ? {imageRevision} : {}),
     inspectedAt: requiredString(root.inspectedAt, `${label}.inspectedAt`),
     schema: PROOF_WORKER_IMAGE_CHECK_SCHEMA,
     schemaVersion: 1,

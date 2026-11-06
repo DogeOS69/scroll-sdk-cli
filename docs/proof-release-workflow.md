@@ -50,8 +50,8 @@ scrollsdk setup proof-image-tools --action prepare-real \
   --output .data/preparation --json
 ```
 
-It checks the producer's revision label against `revision`, then runs the
-producer's own entrypoint with the network off:
+It compares the producer's revision label with `revision` and warns on a
+difference, then runs the producer's own entrypoint with the network off:
 `docker run --rm --network none <producer> /in/protocol_context.json /out/artifacts`.
 The output is the Worker `ARTIFACT_ROOT` layout:
 
@@ -72,9 +72,9 @@ The output is the Worker `ARTIFACT_ROOT` layout:
     └── batch-aggregation-openvm.toml
 ```
 
-The command refuses symlinks, empty files, a baked protocol context that
-differs from the input, and a Bridge bake whose `image_revision` is not the
-release revision. To capture an output tree that was baked by hand with the
+The command refuses symlinks, empty files and a baked protocol context that
+differs from the input. A Bridge bake whose `image_revision` is not the release
+revision is reported and recorded as `bakeRevision` in the receipt. To capture an output tree that was baked by hand with the
 same producer, run:
 
 ```bash
@@ -111,10 +111,39 @@ scrollsdk setup proof-worker-image-check \
 ```
 
 The tag is resolved once to an immutable digest. The command pulls that digest
-and checks the OCI source revision, all-family CUDA component/service labels,
-compiled Batch commitment, compiled standalone Aggregation commitment, and
-advertised CUDA architectures. It does not execute the CUDA binary: a real GPU
+and checks the all-family CUDA component/service labels, compiled Batch
+commitment, compiled standalone Aggregation commitment, and advertised CUDA
+architectures. An OCI source revision that differs from the release is reported
+and recorded as `imageRevision` in the receipt. It does not execute the CUDA binary: a real GPU
 smoke and proof are still required on the selected provider.
+
+## Images from more than one revision
+
+An official release pins five images from one commit. A deployment can also use
+an approved set built from several commits, such as a Worker rebuilt for another
+CUDA architecture. No official release exists for such a set, so write
+`dogeos-proof-release-v1.json` yourself with the same schema and select it with
+`preparation.proofRelease: {manifest, sha256}`. Set `revision` to the
+proof-coordinator's commit.
+
+Revision labels are an audit trail, not program identity. Commitments are
+injected at build time, so the same commit can build different programs and
+different commits can build the same ones. The CLI therefore reports a label that
+differs from `revision` and continues. These receipts record the difference:
+
+| Image or output | Receipt field |
+| --- | --- |
+| Bridge bake | `bakeRevision` in `proof-release-preparation-v1.json` |
+| `prover-worker-cuda` | `imageRevision` in `proof-worker-image-check-v1.json` |
+| `proof-bundle-publisher` | `publisherImageRevision` in the publication receipt |
+
+The producer and proof-coordinator labels only produce a warning.
+
+These still fail: a missing or malformed revision label, a Worker whose Batch or
+Aggregation commitment differs from the bake, and any other identity mismatch
+when materials are imported. Commitments do not cover host code such as the
+coordinator-to-Worker API, so review the source differences between the commits
+before approving a mixed set.
 
 ## 3. Import the complete real materials
 

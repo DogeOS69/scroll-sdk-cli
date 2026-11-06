@@ -70,14 +70,24 @@ describe('proof release preparation receipt', () => {
     expect(() => readProofReleasePreparation(output)).to.throw('content drift')
   })
 
-  it('rejects an unexpected core revision and never writes the receipt', () => {
+  it('records a bake from another revision and rejects one that later changes', () => {
     const output = path.join(root, 'receipt.json')
-    expect(() => captureProofReleasePreparation({
+    const {receipt} = captureProofReleasePreparation({
       artifactRoot: artifacts,
       expectedCoreRevision: 'c'.repeat(40),
       output,
-    })).to.throw('does not match expected')
-    expect(fs.existsSync(output)).to.equal(false)
+    })
+    expect(receipt.coreRevision).to.equal('c'.repeat(40))
+    expect(receipt.bakeRevision).to.equal(revision)
+    expect(readProofReleasePreparation(output).bakeRevision).to.equal(revision)
+
+    fs.writeFileSync(path.join(artifacts, 'bridge/worker-identity-bundle.json'), JSON.stringify({image_revision: 'd'.repeat(40)}))
+    expect(() => readProofReleasePreparation(output)).to.throw()
+  })
+
+  it('records no bake revision when it matches', () => {
+    const output = path.join(root, 'receipt.json')
+    expect(captureProofReleasePreparation({artifactRoot: artifacts, expectedCoreRevision: revision, output}).receipt).not.to.have.property('bakeRevision')
   })
 
   it('rejects symlinked inputs and refuses to overwrite a receipt', () => {

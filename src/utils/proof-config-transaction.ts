@@ -107,6 +107,8 @@ export function prepareProofConfig(options: {
   const stage = fs.mkdtempSync(path.join(path.dirname(target), '.proof-config-'))
   // Materializers and the mock identity are copied into the materials tree; extraction stays outside the candidate.
   let toolDir: string | undefined
+  const revisionWarnings: string[] = []
+  const warn = (message: string): void => {revisionWarnings.push(message)}
   try {
     for (const input of ['.data/doge-config.toml', '.data/protocol_context.json', '.data/proof-aws.json', 'values', 'withdrawal-processor', 'proof-coordinator', 'eth-da-submitter']) {
       const source = path.join(root, input)
@@ -139,16 +141,16 @@ export function prepareProofConfig(options: {
     const topologyCompiler = parseImmutableProofImage(images['dogeos-proof-topology'], 'compiler')
     // Both generations bake the deployment: mock proving still materializes for real,
     // so it needs the release identities and the coordinator's materializers.
-    const prepared = (options.prepareReal ?? prepareRealProofRelease)({deploymentDir: stage, output: '.data/preparation', protocolContext: '.data/protocol_context.json', release: 'dogeos-proof-release-v1.json', releaseSha256: selected.sha256})
+    const prepared = (options.prepareReal ?? prepareRealProofRelease)({deploymentDir: stage, output: '.data/preparation', protocolContext: '.data/protocol_context.json', release: 'dogeos-proof-release-v1.json', releaseSha256: selected.sha256, warn})
     const preparation = readProofReleasePreparation(prepared.preparationReceipt)
     const identities = parseProofIdentityEnv(fs.readFileSync(preparation.files.identityEnv.path, 'utf8'))
     toolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proof-config-tools-'))
-    const materializers = (options.exportMaterializers ?? exportCoordinatorMaterializers)({expectedRevision: revision, image: images['proof-coordinator'], outputDir: toolDir})
+    const materializers = (options.exportMaterializers ?? exportCoordinatorMaterializers)({expectedRevision: revision, image: images['proof-coordinator'], outputDir: toolDir, warn})
     const {scroll} = preparation.files
     let materialOptions: Parameters<typeof prepareProofMaterials>[0]
     if (request.generation === 'real') {
       const productionWorker = parseImmutableProofImage(images['prover-worker-cuda'], 'production Worker')
-      checkProofWorkerImage({expectedBatchAggregationProgramCommitmentRaw: identities.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW, expectedBatchProgramCommitmentRaw: identities.DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW, expectedCoreRevision: revision, image: productionWorker, output: path.join(stage, '.data/proof-worker-image-check-v1.json')})
+      checkProofWorkerImage({expectedBatchAggregationProgramCommitmentRaw: identities.DOGEOS_BATCH_AGGREGATION_PROGRAM_COMMITMENT_RAW, expectedBatchProgramCommitmentRaw: identities.DOGEOS_BATCH_PROGRAM_COMMITMENT_RAW, expectedCoreRevision: revision, image: productionWorker, output: path.join(stage, '.data/proof-worker-image-check-v1.json'), warn})
       materialOptions = {
         ...materializers, bridgeArtifactDir: path.dirname(preparation.files.bridge.nativeManifest.path),
         deploymentDir: stage,
@@ -212,7 +214,7 @@ export function prepareProofConfig(options: {
     const handoff = path.join(stage, '.data/preparation/proof-release-preparation-v1.json')
     if (fs.existsSync(handoff)) fs.writeFileSync(handoff, fs.readFileSync(handoff, 'utf8').replaceAll(JSON.stringify(stage).slice(1, -1), JSON.stringify(target).slice(1, -1)))
     const readiness = proofEnforcementReadiness(stage, contract, config, 'preparation')
-    const warnings = [...policy.warnings, ...readiness.blockers.map(blocker => `Enforcement pending: ${blocker}`)]
+    const warnings = [...policy.warnings, ...revisionWarnings, ...readiness.blockers.map(blocker => `Enforcement pending: ${blocker}`)]
     const receipt = {contract: publicationPlan ? PREPARED_CONTRACT : '.data/proof-deployment.json',createdAt: new Date().toISOString(), releaseSha256: selected.sha256, request, schema: 'scrollsdk/proof-config-prepared/v1', warnings, ...(publicationPlan ? {publicationPlan, publicationPlanSha256: hash(publicationPlan)} : {}), files: snapshot(stage)}
     jsonWrite(path.join(stage, PREPARED), receipt)
     if (proofFileHash(selected.path) !== selected.sha256) throw new Error('Selected release changed during preparation')

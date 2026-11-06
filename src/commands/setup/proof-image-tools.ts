@@ -31,7 +31,7 @@ export default class ProofImageTools extends Command {
       if (flags.action === 'prepare-real') {
         if (!flags.release || !flags['release-sha256'] || !flags['protocol-context']) throw new Error('prepare-real requires release, release-sha256 and protocol-context')
         if (flags['worker-image'] || flags['coordinator-image'] || flags['require-real-materialization'] || flags['expected-core-revision']) throw new Error('prepare-real derives images and revision exclusively from the release manifest')
-        output.success(prepareRealProofRelease({deploymentDir: flags['deployment-dir'], output: flags.output, protocolContext: flags['protocol-context'], release: flags.release, releaseSha256: flags['release-sha256']}))
+        output.success(prepareRealProofRelease({deploymentDir: flags['deployment-dir'], output: flags.output, protocolContext: flags['protocol-context'], release: flags.release, releaseSha256: flags['release-sha256'], warn: message => output.addWarning(message)}))
         return
       }
 

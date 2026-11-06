@@ -61,7 +61,6 @@ describe('production proof Worker image check', () => {
   })
 
   for (const [name, label, value, expected] of [
-    ['revision', 'org.opencontainers.image.revision', 'e'.repeat(40), 'revision'],
     ['batch identity', 'dogeos.batch.program-commitment.raw', `0x${'e'.repeat(128)}`, 'Batch commitment'],
     ['aggregation identity', 'dogeos.batch-aggregation.program-commitment.raw', `0x${'e'.repeat(128)}`, 'Batch aggregation commitment'],
     ['service', 'dogeos.service', 'wrong-worker', 'service'],
@@ -69,6 +68,42 @@ describe('production proof Worker image check', () => {
     it(`rejects a mismatched ${name}`, () => {
       labels[label] = value
       expect(() => check()).to.throw(expected)
+      expect(fs.existsSync(path.join(root, 'receipt.json'))).to.equal(false)
+    })
+  }
+
+  it('reports and records a different revision label, without trusting it', () => {
+    labels['org.opencontainers.image.revision'] = 'e'.repeat(40)
+    const warnings: string[] = []
+    const check = (output: string) => checkProofWorkerImage({
+      expectedBatchAggregationProgramCommitmentRaw: aggregation,
+      expectedBatchProgramCommitmentRaw: batch,
+      expectedCoreRevision: revision,
+      image: {digest, repository: 'dogeos69/prover-worker-cuda'},
+      output: path.join(root, output),
+      run,
+      warn: message => warnings.push(message),
+    })
+    const result = check('receipt.json')
+    expect(warnings).to.have.length(1)
+    expect(warnings[0]).to.include('e'.repeat(40)).and.include(revision)
+    const receipt = readProofWorkerImageCheck(result.receiptPath)
+    expect(receipt.coreRevision).to.equal(revision)
+    expect(receipt.imageRevision).to.equal('e'.repeat(40))
+
+    labels['dogeos.batch.program-commitment.raw'] = `0x${'e'.repeat(128)}`
+    expect(() => check('other.json')).to.throw('Batch commitment')
+  })
+
+  it('records no image revision when the label matches', () => {
+    expect(readProofWorkerImageCheck(check().receiptPath)).not.to.have.property('imageRevision')
+  })
+
+  for (const value of [undefined, 'not-a-sha']) {
+    it(`rejects a ${value ?? 'missing'} revision label`, () => {
+      if (value) labels['org.opencontainers.image.revision'] = value
+      else delete labels['org.opencontainers.image.revision']
+      expect(() => check()).to.throw('revision')
       expect(fs.existsSync(path.join(root, 'receipt.json'))).to.equal(false)
     })
   }
