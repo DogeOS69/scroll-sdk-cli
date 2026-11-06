@@ -67,7 +67,7 @@ import {reconcileDeploymentIngresses} from '../../utils/public-service-ingress.j
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
-import {reconcileScrollMonitorAlerts, reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
+import {reconcileScrollMonitorAlerts, reconcileScrollMonitorAttestationSigner, reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
 import {validateServiceNetworkPolicy} from '../../utils/service-network-policy.js'
 import {
   getRequiredManagedSignerAddress,
@@ -2629,7 +2629,7 @@ export default class SetupPrepCharts extends Command {
         changes.push(...grafanaChanges)
         if (grafanaChanges.length > 0) updated = true
         const monitorChanges = reconcileMonitoringStatusPage(productionYaml, this.dogeConfig.monitoring)
-        monitorChanges.push(...reconcileScrollMonitorAlerts(productionYaml, this.dogeConfig.monitoring?.alerts), ...reconcileScrollMonitorBalances(productionYaml, {
+        monitorChanges.push(...reconcileScrollMonitorAlerts(productionYaml, this.dogeConfig.monitoring?.alerts), ...reconcileScrollMonitorAttestationSigner(productionYaml, this.dogeConfig.monitoring?.attestationSigner), ...reconcileScrollMonitorBalances(productionYaml, {
           dogeConfig: this.dogeConfig,
           l2ChainId: configuredL2ChainId,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),

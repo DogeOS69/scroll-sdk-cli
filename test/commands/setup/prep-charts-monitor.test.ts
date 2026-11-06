@@ -6,7 +6,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import PrepCharts from '../../../src/commands/setup/prep-charts.js'
-import {reconcileScrollMonitorAlerts, reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner} from '../../../src/utils/scroll-monitor-values.js'
+import {validateMonitoring} from '../../../src/utils/monitoring-slack.js'
+import {reconcileScrollMonitorAlerts, reconcileScrollMonitorAttestationSigner, reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner} from '../../../src/utils/scroll-monitor-values.js'
 
 const ORACLE_ADDRESS = `0x${'11'.repeat(20)}`
 const DA_ADDRESS = `0x${'22'.repeat(20)}`
@@ -56,6 +57,72 @@ describe('scroll-monitor alert thresholds from the spec', () => {
     expect(reconcileScrollMonitorAlerts(values)).to.deep.equal([])
     expect(reconcileScrollMonitorAlerts(values, {})).to.deep.equal([])
     expect(values).to.deep.equal({balanceMonitoring: {feeWallet: {minimumDoge: 25}}})
+  })
+})
+
+describe('scroll-monitor attestation signer monitoring from the spec', () => {
+  const JOBS = ['kube-prometheus-stack', 'prometheus', 'prometheusSpec', 'additionalScrapeConfigs'] as const
+  const jobs = (values: any) => JOBS.reduce((value, key) => value?.[key], values) as any[]
+  const statusProbes = {job_name: 'status-page-external-probes'}
+  const withJobs = (...scrapes: unknown[]) => ({'kube-prometheus-stack': {prometheus: {prometheusSpec: {additionalScrapeConfigs: scrapes}}}})
+
+  it('leaves the values file alone when the spec does not set it', () => {
+    const values: any = {attestationSignerMonitoring: {enabled: true}}
+    expect(reconcileScrollMonitorAttestationSigner(values)).to.deep.equal([])
+    expect(values).to.deep.equal({attestationSignerMonitoring: {enabled: true}})
+  })
+
+  it('enables the alerts, adds one scrape job beside others and is idempotent', () => {
+    const values: any = withJobs(statusProbes)
+    const signer = {enabled: true, targets: ['signer-b.internal:9100', 'signer-a.internal:9100', 'signer-a.internal:9100']}
+    const changes = reconcileScrollMonitorAttestationSigner(values, signer)
+    expect(changes.map(change => change.key)).to.deep.equal(['attestationSignerMonitoring.enabled', JOBS.join('.')])
+    expect(JSON.stringify(changes), 'the preview must not print host addresses').to.not.include('signer-a')
+    expect(values.attestationSignerMonitoring.enabled).to.equal(true)
+    expect(jobs(values)).to.deep.equal([statusProbes, {job_name: 'attestation-signer', metrics_path: '/metrics', static_configs: [{targets: ['signer-a.internal:9100', 'signer-b.internal:9100']}]}])
+    expect(reconcileScrollMonitorAttestationSigner(values, signer)).to.deep.equal([])
+  })
+
+  it('removes only its own job when disabled', () => {
+    const values: any = {attestationSignerMonitoring: {enabled: true}, ...withJobs(statusProbes, {job_name: 'attestation-signer'})}
+    reconcileScrollMonitorAttestationSigner(values, {enabled: false, targets: ['kept-in-spec.internal:9100']})
+    expect(values.attestationSignerMonitoring.enabled).to.equal(false)
+    expect(jobs(values)).to.deep.equal([statusProbes])
+  })
+
+  it('adds nothing for a disabled signer on a fresh values file', () => {
+    const values: any = {}
+    reconcileScrollMonitorAttestationSigner(values, {enabled: false})
+    expect(values).to.deep.equal({attestationSignerMonitoring: {enabled: false}})
+  })
+
+  it('refuses scrape configuration it cannot merge', () => {
+    const values: any = {'kube-prometheus-stack': {prometheus: {prometheusSpec: {additionalScrapeConfigs: {name: 'secret-ref'}}}}}
+    expect(() => reconcileScrollMonitorAttestationSigner(values, {enabled: true, targets: ['h:1']})).to.throw('array additionalScrapeConfigs')
+  })
+
+  for (const [config, message] of [
+    [{enabled: 'yes'}, 'enabled must be a boolean'],
+    [{enabled: true}, 'targets is required when enabled'],
+    [{enabled: true, targets: []}, 'targets is required when enabled'],
+    [{enabled: false, targets: ['https://host:9100']}, 'host:port'],
+    [{enabled: true, targets: ['user:fake@host:9100']}, 'host:port'],
+    [{enabled: true, targets: ['host']}, 'host:port'],
+    [{enabled: true, targets: ['host:70000']}, 'host:port'],
+  ] as const) {
+    it(`rejects ${JSON.stringify(config)}`, () => {
+      expect(() => validateMonitoring({attestationSigner: config as any})).to.throw(message)
+    })
+  }
+
+  it('accepts a disabled block and hostnames or addresses with ports', () => {
+    expect(() => validateMonitoring({attestationSigner: {enabled: false}})).to.not.throw()
+    expect(() => validateMonitoring({attestationSigner: {enabled: true, targets: ['signer.internal:9100', '10.0.0.4:9100']}})).to.not.throw()
+  })
+
+  it('allows only deadlines to be zero in status page health', () => {
+    expect(() => validateMonitoring({statusPage: {enabled: true, health: {depositDeadlineSeconds: 0}}})).to.not.throw()
+    expect(() => validateMonitoring({statusPage: {enabled: true, health: {wfStallSeconds: 0}}})).to.throw('wfStallSeconds must be a positive integer')
   })
 })
 

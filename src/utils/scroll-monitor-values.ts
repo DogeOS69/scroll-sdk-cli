@@ -1,10 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Helm values are dynamic YAML mappings. */
+import {isDeepStrictEqual} from 'node:util'
+
 import type {DogeConfig} from '../types/doge-config.js'
 import type {MonitoringConfig} from './monitoring-slack.js'
 
 import {resolveEthereumRpc} from './ethereum-rpc-secrets.js'
 import {grafanaAdminReference} from './grafana-admin.js'
 import {getRequiredManagedSignerAddress} from './signer-roles.js'
+
+const ATTESTATION_SIGNER_JOB = 'attestation-signer'
 
 interface MonitorChange {
   key: string
@@ -125,6 +129,35 @@ export function reconcileScrollMonitorAlerts(values: any, alerts?: MonitoringCon
     values.balanceMonitoring = {...balance, feeWallet: {...feeWallet, minimumDoge: minimum}}
   }
 
+  return changes
+}
+
+/**
+ * The spec owns the attestation-signer switch and scrape job when it sets them.
+ * The change preview leaves out the host addresses.
+ */
+export function reconcileScrollMonitorAttestationSigner(values: any, config?: MonitoringConfig['attestationSigner']): MonitorChange[] {
+  if (!config) return []
+  const changes: MonitorChange[] = []
+  const current = mapping(values.attestationSignerMonitoring, 'attestationSignerMonitoring')
+  if (current.enabled !== config.enabled) {
+    changes.push({key: 'attestationSignerMonitoring.enabled', newValue: String(config.enabled), oldValue: String(current.enabled)})
+    values.attestationSignerMonitoring = {...current, enabled: config.enabled}
+  }
+
+  const stack = structuredClone(mapping(values['kube-prometheus-stack'], 'kube-prometheus-stack'))
+  const previous = stack.prometheus?.prometheusSpec?.additionalScrapeConfigs ?? []
+  if (!Array.isArray(previous)) throw new TypeError('Attestation signer scrape generation requires array additionalScrapeConfigs')
+  const targets = [...new Set(config.targets ?? [])].sort()
+  const scrape = {job_name: ATTESTATION_SIGNER_JOB, metrics_path: '/metrics', static_configs: [{targets}]}
+  const others = previous.filter((job: any) => job?.job_name !== ATTESTATION_SIGNER_JOB)
+  const jobs = config.enabled ? [...others, scrape] : others
+  if (isDeepStrictEqual(previous, jobs)) return changes
+  stack.prometheus ??= {}
+  stack.prometheus.prometheusSpec ??= {}
+  stack.prometheus.prometheusSpec.additionalScrapeConfigs = jobs
+  values['kube-prometheus-stack'] = stack
+  changes.push({key: 'kube-prometheus-stack.prometheus.prometheusSpec.additionalScrapeConfigs', newValue: config.enabled ? `${ATTESTATION_SIGNER_JOB} job with ${targets.length} target(s)` : `${ATTESTATION_SIGNER_JOB} job removed`, oldValue: '[previous scrape jobs]'})
   return changes
 }
 

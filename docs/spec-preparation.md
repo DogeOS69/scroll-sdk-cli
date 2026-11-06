@@ -965,6 +965,10 @@ monitoring:
   alerts:
     feeWalletMinimumDoge: 50 # Devnet defaults to half of bridge.targetAmountsSats.feeWallet.
     l2BatchStallSeconds: 14400
+  attestationSigner:
+    enabled: true
+    targets:
+      - signer-1.internal.invalid:9100
   statusPage:
     enabled: true
     health:
@@ -982,7 +986,16 @@ monitoring:
 `statusPage.enabled: true` in a values file without this spec block has no
 environment to use, and render stops with a message naming these fields. A deadline
 of 0 leaves that builtin health rule unconfigured, so a long queue never degrades the
-component. Choose deadlines that match the deployment's normal processing time.
+component. `wfStallSeconds` has no such option and must be positive. Choose deadlines that match the deployment's normal processing time.
+
+`monitoring.attestationSigner` controls whether this cluster's Prometheus collects
+attestation signer metrics. Partner-run signers usually expose no metrics to the
+cluster, so leave it unset or `enabled: false` for them; the chart's signer metrics
+alerts then stay off, and TSO alerts still report signers. With `enabled: true`, render
+turns those alerts on and writes one `attestation-signer` job with these `host:port`
+targets to `additionalScrapeConfigs`, replacing any job of that name. With
+`enabled: false`, it removes that job. When the block is unset, the values file keeps
+its setting. Keep real addresses in the private deployment spec only.
 
 A devnet that is idle or running on a shadowfork usually also wants these chart
 switches, set through a `helmValues` overlay for `scroll-monitor-production.yaml`:
@@ -999,8 +1012,8 @@ recoveryRunwayAlerts:
 
 `frontend.externalUrls.l1Explorer` and `ethExplorer` are base URLs. The portal links
 to `<base>/tx/<txid>` and uses the base itself as a menu link. Validation rejects
-query strings, fragments, a trailing slash and placeholder hosts such as `*.invalid`
-or `example.com`.
+query strings, fragments, embedded credentials, a trailing slash and placeholder hosts
+such as `*.invalid`, `example.com` or `localhost`.
 
 | Field | Default |
 | --- | --- |
