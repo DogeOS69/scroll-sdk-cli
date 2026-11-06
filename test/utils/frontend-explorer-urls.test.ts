@@ -26,7 +26,12 @@ describe('frontend explorer URLs', () => {
     })
   }
 
-  for (const host of ['explorer.example.invalid', 'explorer.example', 'explorer.test', 'localhost', 'app.localhost', 'example.com', 'l1.example.com']) {
+  it('rejects embedded credentials, which the public frontend config would expose', () => {
+    expect(frontendExplorerUrlProblem('field', 'https://user:fake-key@explorer.internal/doge')).to.include('remove the embedded credentials')
+    expect(frontendExplorerUrlProblem('field', 'https://fake-token@explorer.internal')).to.include('remove the embedded credentials')
+  })
+
+  for (const host of ['explorer.example.invalid', 'explorer.example', 'explorer.test', 'localhost', 'app.localhost', 'example.com', 'l1.example.com', 'example.org', 'example.net']) {
     it(`rejects the placeholder host ${host}`, () => {
       expect(frontendExplorerUrlProblem('field', `https://${host}`)).to.include('placeholder host')
     })

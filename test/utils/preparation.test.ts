@@ -691,6 +691,19 @@ describe('resumable preparation plan', () => {
       expect(JSON.parse(fs.readFileSync(statePath, 'utf8')).files).to.not.have.property(SESSION_FILE)
     })
 
+    it('still requires recovery when only part of the session files is missing', async () => {
+      const statePath = await stagedPlanWithSessionFile('failed')
+      const remaining = 'secrets/cubesigner-signer-session.json'
+      fs.mkdirSync(path.join(deployment, 'secrets'), {recursive: true})
+      fs.writeFileSync(path.join(deployment, remaining), '{}')
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
+      fs.writeFileSync(statePath, JSON.stringify({...state, files: {...state.files, [remaining]: 'registered-hash'}}))
+      const result = await applyPreparation(deployment, {async run() {}}, undefined, {stage: 'aws'})
+      expect(result.status).to.equal('recovery-required')
+      expect(result.waiting?.message).include(SESSION_FILE)
+      expect(JSON.parse(fs.readFileSync(statePath, 'utf8')).files).to.have.property(SESSION_FILE)
+    })
+
     it('still requires recovery when the session step already completed', async () => {
       await stagedPlanWithSessionFile('completed')
       const result = await applyPreparation(deployment, {async run() {}}, undefined, {stage: 'aws'})

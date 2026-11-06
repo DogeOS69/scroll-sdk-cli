@@ -8,7 +8,7 @@ const ETHEREUM_EXPLORERS: Record<string, string> = {
   sepolia: 'https://sepolia.etherscan.io',
 }
 
-const PLACEHOLDER_HOST = /(?:^|\.)(?:example\.com|example|invalid|localhost|test)$/i
+const PLACEHOLDER_HOST = /(?:^|\.)(?:example\.(?:com|net|org)|example|invalid|localhost|test)$/i
 
 /** A local devnet has no public explorer, so its links stay plain text. */
 export function defaultEthereumExplorer(chain: string): string {
@@ -23,6 +23,8 @@ export function frontendExplorerUrlProblem(field: string, value: unknown): strin
   let url: URL
   try {url = new URL(value)} catch {return shape}
   if (!['http:', 'https:'].includes(url.protocol) || url.search || url.hash || value.includes('?') || value.includes('#')) return shape
+  // These values are served to every browser in the public frontend config.
+  if (url.username || url.password) return `${shape}; remove the embedded credentials`
   // Not every frontend link strips it, and `<base>//tx/<txid>` is a 404 on an explorer such as SoChain.
   if (value.endsWith('/')) return `${shape}; remove the trailing slash`
   if (PLACEHOLDER_HOST.test(url.hostname)) return `${shape}; ${url.hostname} is a placeholder host`

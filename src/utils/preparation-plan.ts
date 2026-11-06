@@ -364,13 +364,16 @@ export async function applyPreparation(rootInput: string, runner: PreparationRun
     }
 
     const missingArtifacts: string[] = []
+    const registeredFiles = Object.keys(state.files)
     for (const [file, hash] of Object.entries(state.files)) {
       const current = localPath(root, file)
       if (!fs.existsSync(current)) {
-        // Only a step that has not completed may recreate its own output. Anything
+        // Only a step that has not completed may recreate its own output, and only
+        // when none of it is left: the session step refuses partial files. Anything
         // else stays a recovery case, because completed work is never replayed.
-        const owner = Object.entries(RECREATED_BY_STEP).find(([, pattern]) => pattern.test(file))?.[0]
-        if (owner && plan.steps.some(step => step.id === owner) && state.steps[owner] !== 'completed') {
+        const [owner, pattern] = Object.entries(RECREATED_BY_STEP).find(([, candidate]) => candidate.test(file)) ?? []
+        const nothingLeft = pattern !== undefined && registeredFiles.filter(other => pattern.test(other)).every(other => !fs.existsSync(localPath(root, other)))
+        if (owner && nothingLeft && plan.steps.some(step => step.id === owner) && state.steps[owner] !== 'completed') {
           delete state.files[file]
           warn(`Registered artifact ${file} is missing; step ${owner} has not completed and will recreate it.`)
         } else {
