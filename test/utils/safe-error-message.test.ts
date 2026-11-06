@@ -27,6 +27,17 @@ describe('safeErrorMessage', () => {
     [`db admin:${MARKER}@host:5432`, 'db [redacted]@host:5432'],
     [`dial failed host=db password=${MARKER}`, 'dial failed host=db password=[redacted]'],
     [`bad api_key: ${MARKER}`, 'bad api_key: [redacted]'],
+    [`oauth client_secret=${MARKER} rejected`, 'oauth client_secret=[redacted] rejected'],
+    [`oauth access_token=${MARKER}`, 'oauth access_token=[redacted]'],
+    [`bad private_key=${MARKER}`, 'bad private_key=[redacted]'],
+    [`body {"token":"${MARKER}"}`, 'body {"token":[redacted]}'],
+    [`body {"password": "two ${MARKER} words"}`, 'body {"password": [redacted]}'],
+    [`body {"client_secret":"a\\"b ${MARKER}"}`, 'body {"client_secret":[redacted]}'],
+    [`body {\\"token\\":\\"${MARKER}\\"}`, 'body {\\"token\\":[redacted]'],
+    [`Authorization: Bearer ${MARKER}`, 'Authorization: [redacted]'],
+    [`Authorization: ${MARKER}`, 'Authorization: [redacted]'],
+    [`{"authorization":"Basic ${MARKER}"}`, '{"authorization":"[redacted]"}'],
+    [`sent bearer ${MARKER} upstream`, 'sent bearer [redacted] upstream'],
   ]) {
     it(`removes the credentials from ${input.replace(MARKER, '<marker>')}`, () => {
       expect(safeErrorMessage(new Error(input))).to.equal(expected)

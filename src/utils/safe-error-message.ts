@@ -4,7 +4,10 @@ const JSON_PARSE_FAILURE = /is not valid JSON|in JSON at position|Unexpected end
 const PARSER_ERRORS = new Set(['SyntaxError', 'TomlError', 'YAMLException'])
 const URL_WITH_DETAILS = /\b([a-z][\d+.a-z-]*:\/\/)(\S+)/gi
 const BARE_CREDENTIALS = /[^\s/:@]+:\S*@(?=\S)/g
-const NAMED_SECRET = /\b(api[_-]?key|passw(?:or)?d|pwd|secret|token)(\s*[:=]\s*)\S+/gi
+// A key may carry a prefix or suffix (client_secret, access_token) and be quoted as JSON.
+const NAMED_SECRET = /([\w-]*(?:api[_-]?key|credential|passw(?:or)?d|private[_-]?key|pwd|secret|token)[\w-]*["'\\]*\s*[:=]\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)/gi
+const AUTHORIZATION = /(authorization["'\\]*\s*[:=]\s*["'\\]*)(?:[a-z]+\s+)?[^\s"'\\]+/gi
+const BEARER_TOKEN = /\b(bearer\s+)\S+/gi
 const OPAQUE_VALUE = /[\w+./=-]{40,}/g
 
 /** A password may contain `/` or `@`, so the host is only what follows the last `@`. */
@@ -24,7 +27,9 @@ export function safeErrorMessage(error: unknown): string | undefined {
   const message = error.message
     .replaceAll(URL_WITH_DETAILS, urlWithoutDetails)
     .replaceAll(BARE_CREDENTIALS, '[redacted]@')
-    .replaceAll(NAMED_SECRET, '$1$2[redacted]')
+    .replaceAll(AUTHORIZATION, '$1[redacted]')
+    .replaceAll(BEARER_TOKEN, '$1[redacted]')
+    .replaceAll(NAMED_SECRET, '$1[redacted]')
     .replaceAll(OPAQUE_VALUE, '[redacted]')
     .replaceAll(/\s+/g, ' ')
     .trim()
