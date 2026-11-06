@@ -72,6 +72,13 @@ interface SecretProviderConfig {
 /**
  * Get secret provider configuration from spec
  */
+/** Where the generated values must read AWS Secrets: the region the upload step writes them to. */
+export function getExternalSecretTarget(spec: DeploymentSpec): SecretProviderConfig {
+  const provider = getSecretProviderConfig(spec)
+  const upload = spec.preparation?.secretUpload
+  return upload?.provider === 'aws' && upload.awsRegion ? {...provider, awsRegion: upload.awsRegion} : provider
+}
+
 export function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderConfig {
   switch (spec.infrastructure.provider) {
     case 'aws': {

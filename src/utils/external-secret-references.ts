@@ -7,28 +7,31 @@ interface SecretReferenceTarget {
   provider: string
 }
 
-/** The SDK templates ship these regions and `scroll/<name>`, `dogeos/<name>` or bare `<name>` keys. */
-const TEMPLATE_REGIONS = new Set([undefined, '<TODO>', 'us-west-2'])
-const TEMPLATE_KEY = /^(?:(?:dogeos|scroll)\/)?[^/]+$/
+const UNSET_REGIONS = new Set([undefined, '<TODO>'])
 
 /**
  * Point SDK template ExternalSecrets at this deployment's Secrets Manager path.
- * Keys and regions the operator already selected are kept; only template
- * defaults are rewritten, so applying this again changes nothing.
+ * Only values still equal to the file's SDK template are defaults. Anything else
+ * was selected for this deployment and is kept, so applying this again changes
+ * nothing. An operator who wants a template value kept pins it through helmValues.
  */
-export function reconcileExternalSecretReferences(values: any, secrets: SecretReferenceTarget): boolean {
+export function reconcileExternalSecretReferences(values: any, secrets: SecretReferenceTarget, template: any): boolean {
   if (secrets.provider !== 'aws' || !values?.externalSecrets || typeof values.externalSecrets !== 'object') return false
   let changed = false
-  for (const secret of Object.values<any>(values.externalSecrets)) {
-    if (secret?.provider !== 'aws') continue
-    if (secrets.awsRegion && secret.secretRegion !== secrets.awsRegion && TEMPLATE_REGIONS.has(secret.secretRegion)) {
+  for (const [name, secret] of Object.entries<any>(values.externalSecrets)) {
+    const templateSecret = template?.externalSecrets?.[name]
+    if (secret?.provider !== 'aws' || !templateSecret) continue
+    const templateRegion = UNSET_REGIONS.has(secret.secretRegion) || secret.secretRegion === templateSecret.secretRegion
+    if (secrets.awsRegion && secret.secretRegion !== secrets.awsRegion && templateRegion) {
       secret.secretRegion = secrets.awsRegion
       changed = true
     }
 
+    const templateData = Array.isArray(templateSecret.data) ? templateSecret.data : []
     for (const item of Array.isArray(secret.data) ? secret.data : []) {
       const key = item?.remoteRef?.key
-      if (typeof key !== 'string' || !TEMPLATE_KEY.test(key)) continue
+      const templateKey = templateData.find((entry: any) => entry?.secretKey === item?.secretKey)?.remoteRef?.key
+      if (typeof key !== 'string' || key !== templateKey) continue
       const target = `${secrets.prefix}/${key.split('/').at(-1)}`
       if (key === target) continue
       item.remoteRef.key = target
@@ -40,10 +43,11 @@ export function reconcileExternalSecretReferences(values: any, secrets: SecretRe
 }
 
 /** Apply the reconciliation to rendered values files, leaving unrelated formatting untouched. */
-export function reconcileExternalSecretFiles(files: Record<string, string>, secrets: SecretReferenceTarget): void {
+export function reconcileExternalSecretFiles(files: Record<string, string>, secrets: SecretReferenceTarget, templateFiles: Record<string, string>): void {
   for (const [name, content] of Object.entries(files)) {
-    if (!name.endsWith('.yaml') || !content.includes('externalSecrets')) continue
+    const templateContent = templateFiles[`values/${name}`]
+    if (!name.endsWith('.yaml') || !content.includes('externalSecrets') || !templateContent) continue
     const values = yaml.load(content)
-    if (reconcileExternalSecretReferences(values, secrets)) files[name] = yaml.dump(values, {lineWidth: -1, noRefs: true})
+    if (reconcileExternalSecretReferences(values, secrets, yaml.load(templateContent))) files[name] = yaml.dump(values, {lineWidth: -1, noRefs: true})
   }
 }

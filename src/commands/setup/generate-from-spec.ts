@@ -30,7 +30,7 @@ import {archiveRetiredServiceFiles} from '../../utils/retired-services.js'
 import {loadSdkTemplateFiles, mergeBootstrapValues, planSpecBootstrap} from '../../utils/spec-bootstrap.js'
 import {resolveCubesignerIdentity} from '../../utils/spec-cubesigner.js'
 import {applyHelmValues} from '../../utils/spec-helm-values.js'
-import {getSecretProviderConfig} from '../../utils/values-generator.js'
+import {getExternalSecretTarget, getSecretProviderConfig} from '../../utils/values-generator.js'
 import { type GeneratedValuesFiles, generateValuesFiles } from '../../utils/values-generator.js'
 
 function collectEnvRefs(content: string): string[] {
@@ -356,7 +356,7 @@ export default class GenerateFromSpec extends Command {
       }
 
       // Before overlays, so an explicit helmValues reference still wins.
-      reconcileExternalSecretFiles(allValues, getSecretProviderConfig(spec))
+      reconcileExternalSecretFiles(allValues, getExternalSecretTarget(spec), templateFiles)
       applyHelmValues(allValues, spec)
       preserveSharedAlbPaths(allValues, spec, existingValues)
       projectExistingAlb(allValues, spec)
