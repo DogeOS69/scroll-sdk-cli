@@ -92,6 +92,10 @@ describe('status-page generation and explicit Instatus apply', () => {
     })
   }
 
+  it('names the spec field when generation is enabled without an environment', () => {
+    expect(() => reconcileScrollMonitorStatusPage({statusPage: {enabled: true}}, {chainId: 291, environment: undefined, networkName: 'DogeOS', valuesDir: directory} as any)).to.throw('monitoring.statusPage.enabled: true')
+  })
+
   it('preserves disabled opt-in and excludes a disabled WebSocket without configured hosts', () => {
     expect(reconcileScrollMonitorStatusPage({}, {} as any)).to.deep.equal([])
     expect(reconcileScrollMonitorStatusPage({statusPage: {enabled: false}}, {} as any)).to.deep.equal([])

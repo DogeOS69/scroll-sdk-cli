@@ -76,7 +76,10 @@ describe('spec intent through configuration and values projection', () => {
     spec.metadata.environment = 'devnet'
     spec.monitoring = {slack: {enabled: true}, statusPage: {enabled: true}}
     const generated = toml.parse(generateAllConfigs(spec)['doge-config.toml']) as any
-    expect(generated.monitoring).deep.eq({environment: 'devnet', slack: {enabled: true}, statusPage: {enabled: true}})
+    // A devnet also derives its fee-wallet alert threshold from the seed amount.
+    const {alerts, ...intent} = generated.monitoring
+    expect(intent).deep.eq({environment: 'devnet', slack: {enabled: true}, statusPage: {enabled: true}})
+    expect(alerts.feeWalletMinimumDoge).to.be.greaterThan(0)
     spec.monitoring.statusPage = {enabled: 'yes' as any}
     expect(validateDeploymentSpec(spec).errors.some(error => error.path === 'monitoring.statusPage.enabled')).eq(true)
   })

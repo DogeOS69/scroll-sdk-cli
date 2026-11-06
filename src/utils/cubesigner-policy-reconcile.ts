@@ -85,11 +85,16 @@ export async function reconcileCubesignerPolicy(options: {
   const context = proofRegularFile(localPath(root, '.data/protocol_context.json'))
   requireValue(releaseInput.protocolContextSha256 === hash(context), 'Release does not match current protocol context')
   if (build.schema === EXTERNAL_POLICY_SCHEMA) requireValue(`sha256:${build.protocolContext?.sha256}` === hash(context), 'External build belongs to another protocol context')
-  const testsFile = read(releaseInput.tests, 'release.tests', 16 * 1024 * 1024)
-  const tests = json(testsFile)
-  requireValue(tests.result === 'passed' && releaseInput.tests.result === 'passed'
-    && tests.coreRevision === releaseInput.coreRevision && tests.wasmSha256 === hash(wasmFile)
-    && tests.protocolContextSha256 === hash(context), 'Test report must record passed tests bound to the source, Wasm and protocol context; build success is not test evidence')
+  // A report is optional, but one that is supplied must describe this build.
+  const testsFile = releaseInput.tests === undefined ? undefined : read(releaseInput.tests, 'release.tests', 16 * 1024 * 1024)
+  if (testsFile) {
+    const tests = json(testsFile)
+    requireValue(tests.result === 'passed' && releaseInput.tests.result === 'passed'
+      && tests.coreRevision === releaseInput.coreRevision && tests.wasmSha256 === hash(wasmFile)
+      && tests.protocolContextSha256 === hash(context), 'Test report must record passed tests bound to the source, Wasm and protocol context; build success is not test evidence')
+  }
+
+  const testEvidence = testsFile ? 'provided' : 'not-provided'
   const bridge = read(input.bridgeProgram, 'bridgeProgram')
   const vk = read(input.aggregateVerifyingKey, 'aggregateVerifyingKey')
   requireValue(releaseInput.verifierProvenance?.bridgeProgramSha256 === hash(bridge)
@@ -114,7 +119,7 @@ export async function reconcileCubesignerPolicy(options: {
     requireValue(!fs.existsSync(selectionPath) || isDeepStrictEqual(json(proofRegularFile(selectionPath)), archived), 'Expected selection changed; refusing replacement')
     requireValue(!selection.expectedPolicy || isDeepStrictEqual(selection.expectedPolicy, archived), 'Managed expected selection differs from preparation archive')
     if (!fs.existsSync(selectionPath)) writeJson(selectionPath, archived)
-    return {directory: output, liveAcceptance: 'not-verified', nextCommand: 'scrollsdk setup proof-publish', policyIdentifier: releaseInput.policyIdentifier, receiptSelection: selectionPath, status: 'configuration-inputs-prepared-activation-pending'}
+    return {directory: output, liveAcceptance: 'not-verified', nextCommand: 'scrollsdk setup proof-publish', policyIdentifier: releaseInput.policyIdentifier, receiptSelection: selectionPath, status: 'configuration-inputs-prepared-activation-pending', testEvidence}
   }
 
   requireValue(!fs.existsSync(output), 'Output already exists; use a new evidence directory')
@@ -139,17 +144,17 @@ export async function reconcileCubesignerPolicy(options: {
 
     const protocol = copy(context, 'protocol_context.json')
     const wasm = copy(wasmFile, 'policy.wasm')
-    const testsRef = copy(testsFile, 'tests.json')
+    const testsRef = testsFile ? copy(testsFile, 'tests.json') : undefined
     const buildRef = copy(buildFile, 'build-receipt.json')
     const liveRef = live ? copy(live, 'live.json') : undefined
     requireValue(protocol.sha256 === releaseInput.protocolContextSha256 && wasm.sha256 === `sha256:${build.wasm.sha256}`
-      && testsRef.sha256 === `sha256:${releaseInput.tests.sha256.replace(/^sha256:/, '')}`
+      && (!testsRef || testsRef.sha256 === `sha256:${releaseInput.tests.sha256.replace(/^sha256:/, '')}`)
       && (!liveRef || liveRef.sha256 === `sha256:${input.liveEvidence.sha256.replace(/^sha256:/, '')}`), 'Evidence changed while copying')
     const client = await options.connect()
     bindOrganization(client, input)
     const createdAt = new Date().toISOString()
     const release: ObjectValue = {...releaseInput, createdAt, schema: 'dogeos/cubesigner-policy-release/v1',
-      tests: {...testsRef, result: 'passed'}, wasm: {...wasm, sizeBytes: fs.statSync(wasmFile).size}}
+      ...(testsRef ? {tests: {...testsRef, result: 'passed'}} : {}), wasm: {...wasm, sizeBytes: fs.statSync(wasmFile).size}}
     writeJson(path.join(stage, 'release.json'), release)
     const attachment = {c2fEgressAuthority: release.proofResolverAuthority, createdAt,
       environment: input.environment, keyId: key.keyId, materialId: key.materialId,
@@ -195,7 +200,7 @@ export async function reconcileCubesignerPolicy(options: {
       fs.renameSync(stage, output)
       writeJson(selectionPath, expected)
       return {directory: output, liveAcceptance: 'not-verified', nextCommand: 'scrollsdk setup proof-publish',
-        policyIdentifier: release.policyIdentifier, receiptSelection: selectionPath, status: 'configuration-inputs-prepared-activation-pending'}
+        policyIdentifier: release.policyIdentifier, receiptSelection: selectionPath, status: 'configuration-inputs-prepared-activation-pending', testEvidence}
     }
 
     const observed = object(await client.key(key.roleId, key.keyId), 'key readback')
@@ -229,6 +234,6 @@ export async function reconcileCubesignerPolicy(options: {
     resolveCubesignerPolicy({deploymentDir: root, keys: [{keyId: key.keyId, materialId: key.materialId, roleId: key.roleId}], network: 'mainnet', selection: {mode: 'production_verifier_key_policy', policyReceipts: refs}})
     writeJson(receiptInput, refs)
     return {directory: output, liveAcceptance: live ? 'supplied-report-validated' : 'not-verified', nextCommand: 'scrollsdk setup proof-materials',
-      policyIdentifier: release.policyIdentifier, receiptSelection: receiptInput, status: 'receipts-reconciled'}
+      policyIdentifier: release.policyIdentifier, receiptSelection: receiptInput, status: 'receipts-reconciled', testEvidence}
   } finally {fs.rmSync(stage, {force: true, recursive: true})}
 }

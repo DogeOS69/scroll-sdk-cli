@@ -62,9 +62,10 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
 
   const prepare = () => {write('input.json', input); return reconcileCubesignerPolicy({connect: async () => client, directory: root, input: 'input.json', output: 'prepared-policy', prepareOnly: true})}
   const mounts = [{mountPath: '/app/protocol_context.json', name: 'context', readOnly: true, subPath: 'protocol_context.json'}, {mountPath: '/etc/cubesigner', name: 'session', readOnly: true}, {mountPath: '/app/.sessions', name: 'cache'}]
+  const signerManifest = () => yaml.dump({kind: 'Deployment', spec: {replicas: 1, template: {spec: {containers: [{env, name: 'signer', volumeMounts: mounts}], volumes: [{configMap: {name: 'protocol-context-config'}, name: 'context'}, {name: 'session', secret: {secretName: 'cubesigner-signer-session'}}, {emptyDir: {}, name: 'cache'}]}}}})
   const activate = (extra = {}) => verifyCubesignerActivation({async connect() {calls.push('provider'); return client}, directory: root, kubeContext: 'fixture-context', readConfigMap: () => ({data: {'protocol_context.json': fs.readFileSync(path.join(root, '.data/protocol_context.json'), 'utf8')}}), readSecret: name => ({data: name === 'cubesigner-signer-env' ? {DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID: Buffer.from(key.keyId).toString('base64')} : {'session.json': fs.readFileSync(path.join(root, 'secrets/cubesigner-signer-session.json')).toString('base64')}}), render() {
     calls.push('helm template')
-    return yaml.dump({kind: 'Deployment', spec: {replicas: 1, template: {spec: {containers: [{env, name: 'signer', volumeMounts: mounts}], volumes: [{configMap: {name: 'protocol-context-config'}, name: 'context'}, {name: 'session', secret: {secretName: 'cubesigner-signer-session'}}, {emptyDir: {}, name: 'cache'}]}}}})
+    return signerManifest()
   }, ...extra})
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'cubesigner-activation-test-'))
@@ -157,6 +158,44 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     await rejects(() => prepare(), 'Prepared organization differs')
   })
 
+  it('prepares with a test report that pins the build by commit, Wasm and context instead of compiled bindings', async () => {
+    fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
+    const {release} = input
+    release.tests = {...write('tests-no-bindings.json', {coreRevision: release.coreRevision, protocolContextSha256: release.protocolContextSha256, result: 'passed', wasmSha256: release.wasm.sha256}), result: 'passed'}
+    const result = await prepare()
+    expect(result.status).to.equal('configuration-inputs-prepared-activation-pending')
+  })
+
+  it('prepares without a test report and records that none was provided', async () => {
+    fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
+    delete input.release.tests
+    const result = await prepare()
+    expect(result.status).to.equal('configuration-inputs-prepared-activation-pending')
+    expect(result.testEvidence).to.equal('not-provided')
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'prepared-policy/release.json'), 'utf8'))).to.not.have.property('tests')
+    expect(fs.existsSync(path.join(root, 'prepared-policy/tests.json'))).equal(false)
+    const expectedPolicy = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), 'utf8'))
+    const {warnings} = resolveCubesignerPolicy({deploymentDir: root, keys: [expectedPolicy.key], network: 'testnet', scope: 'preparation', selection: {expectedPolicy, mode: 'production_verifier_key_policy'}})
+    expect(warnings.join('\n')).to.include('test evidence: not-provided')
+  })
+
+  it('reports a supplied test report as test evidence', async () => {
+    fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
+    expect((await prepare()).testEvidence).to.equal('provided')
+  })
+
+  it('rejects a test report without compiled bindings that exercised a different Wasm', async () => {
+    fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
+    const {release} = input
+    release.tests = {...write('tests-other-wasm.json', {coreRevision: release.coreRevision, protocolContextSha256: release.protocolContextSha256, result: 'passed', wasmSha256: `sha256:${'f'.repeat(64)}`}), result: 'passed'}
+    const error = await prepare().then(() => new Error('resolved'), (error_: Error) => error_)
+    expect(error.message).to.equal('Test report must record passed tests bound to the source, Wasm and protocol context; build success is not test evidence')
+  })
+
   it('prepares complete production pins without creating attachment receipts; strict resolution remains closed', () => {
     const selected: any = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8'))
     expect(selected.cubesigner.policyReceipts).equal(undefined)
@@ -203,6 +242,12 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     handoff.approvals = [write('approval-changed.json', approval)]; write(GOVERNANCE_INPUT, handoff)
     await rejects(() => activate(), kind === 'expired' ? 'expired' : kind === 'partial' ? 'pending' : kind === 'wrong-request' ? 'request mismatch' : 'Missing')
   })
+  it('accepts a provider approval snapshot whose request path is percent-encoded', async () => {
+    approval.request = {...request, path: request.path.replaceAll('#', '%23')}
+    handoff.approvals = [write('approval-encoded.json', approval)]; write(GOVERNANCE_INPUT, handoff)
+    expect((await activate()).activation).equal('verified')
+  })
+
   it('rejects expired, tampered and nested-key attestation mismatch', async () => {
     expect(() => verifyRoleAttestation(jwt({...claims(), exp: 1}), jwks)).throw('expired')
     const signed = jwt(claims()); expect(() => verifyRoleAttestation(signed.slice(0, -4) + 'AAAA', jwks)).throw('signature')
@@ -268,6 +313,16 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
   it('checks delivered cluster secrets rather than treating local file existence as delivery', async () => {
     await rejects(() => activate({readSecret: () => ({data: {}})}), 'Installed Secret key differs')
   })
+  it('names the supported pre-delivery step when a rendered ExternalSecret has not delivered its Secret', async () => {
+    const withExternalSecret = () => `${signerManifest()}\n---\napiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata: {name: cubesigner-signer-session}\nspec: {target: {name: cubesigner-signer-session}}\n`
+    await rejects(() => activate({readSecret() {}, render: withExternalSecret}), 'prepare-runtime-secrets')
+    fs.copyFileSync(path.join(root, 'values/cubesigner-signer-production.yaml'), path.join(root, 'values/custom-signer.yaml'))
+    await rejects(() => activate({chart: 'oci://charts.invalid/signer', chartVersion: '9.9.9', readSecret() {}, render: withExternalSecret, values: 'values/custom-signer.yaml'}),
+      '--chart oci://charts.invalid/signer --chart-version 9.9.9 --values values/custom-signer.yaml')
+  })
+  it('does not suggest pre-delivery for a Secret the chart does not reference', async () => {
+    await rejects(() => activate({readSecret() {}}), 'does not exist')
+  })
   it('checks the effective key Secret indirection', async () => {
     env.find(entry => entry.name === 'DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID').valueFrom.secretKeyRef.name = 'different-key'
     await rejects(() => activate(), 'verified Secret reference')
@@ -301,6 +356,13 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     write('invalid-input.json', input)
     await rejects(() => reconcileCubesignerPolicy({connect: async () => client, directory: root, input: 'invalid-input.json', output: 'invalid-policy', prepareOnly: true}), field === 'policyIdentifier' ? 'immutable' : field === 'programIdentityDigest' ? 'identity digest' : 'context')
     expect(fs.existsSync(path.join(root, 'invalid-policy'))).equal(false)
+  })
+
+  it('archives a Core mfa snapshot whose request path is percent-encoded as the same exact request', () => {
+    fs.writeFileSync(path.join(root, 'gov-log-encoded.jsonl'), JSON.stringify(executed) + '\n')
+    fs.writeFileSync(path.join(root, 'core-mfa-encoded.txt'), JSON.stringify({...approval, request: {...request, path: request.path.replaceAll('#', '%23')}}, null, 2) + '\nRESULT: command=mfa applied=0 needs_approval=0 mfa_ids=\n')
+    const result = createGovernanceHandoff({approval: ['core-mfa-encoded.txt'], config: 'gov.json', directory: root, kind: 'sealed-upgrade', operations: 'gov-log-encoded.jsonl', sessionLifetime: 3600, state: 'gov-state.json'})
+    expect(result.outcomes.attachmentExecution).equal('recorded-not-verified')
   })
 
   it('adapts actual Core JSONL and mfa RESULT output and preserves the exact request across resumes', () => {

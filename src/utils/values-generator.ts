@@ -2,7 +2,7 @@ import {resolveCapacityManager} from './capacity-manager.js'
 import {canonicalDogecoinNetwork} from './dogecoin-network.js'
 import {reconcileEthereumRpcSecrets} from './ethereum-rpc-secrets.js'
 import {reconcileMonitoringSlack} from './monitoring-slack.js'
-import {specAwsSecretPrefix} from './spec-secret-prefix.js'
+import {specAwsSecretPrefix, specAwsSecretRegion} from './spec-secret-prefix.js'
 /**
  * Helm Values Generator
  *
@@ -70,13 +70,15 @@ interface SecretProviderConfig {
 }
 
 /**
- * Get secret provider configuration from spec
+ * Get secret provider configuration from spec.
+ * Generated values read AWS Secrets from the region the upload step writes them to.
  */
 export function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderConfig {
+  const region = specAwsSecretRegion(spec)
   switch (spec.infrastructure.provider) {
     case 'aws': {
       return {
-        awsRegion: spec.infrastructure.aws?.region || 'us-west-2',
+        awsRegion: region || 'us-west-2',
         prefix: specAwsSecretPrefix(spec),
         provider: 'aws'
       }
@@ -92,6 +94,7 @@ export function getSecretProviderConfig(spec: DeploymentSpec): SecretProviderCon
 
     default: {
       return {
+        ...(region ? {awsRegion: region} : {}),
         prefix: specAwsSecretPrefix(spec),
         provider: spec.infrastructure.local?.useK8sSecrets === false ? 'aws' : 'kubernetes'
       }
@@ -1456,6 +1459,7 @@ function generateFrontendsConfigValues(spec: DeploymentSpec): string {
     REACT_APP_CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID,
     REACT_APP_DOGE_NETWORK: spec.dogecoin.network,
     REACT_APP_ETH_SYMBOL: spec.network.tokenSymbol,
+    REACT_APP_EXTERNAL_EXPLORER_URI_ETH: spec.frontend.externalUrls.ethExplorer,
     REACT_APP_EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
     REACT_APP_EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,

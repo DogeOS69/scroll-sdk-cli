@@ -19,6 +19,18 @@ describe('CubeSigner credential upload scope', () => {
 })
 
 describe('CubeSigner policy preparation input validation', () => {
+  it('does not require a test report on the command line', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cubesigner-policy-no-tests-cli-'))
+    try {
+      const result = spawnSync(process.execPath, [path.resolve('bin/run.js'), 'setup', 'cubesigner-policy', 'prepare-input',
+        '--dir', root, '--environment', 'gamma', '--organization', 'fixture_org',
+        '--policy', 'regtest-policy/v1', '--program-identity-digest', `sha256:${'a'.repeat(64)}`,
+        '--verifier-identity-digest', `sha256:${'b'.repeat(64)}`, '--resolver-base-url', 'https://proof.example.com',
+        '--no-requires-live-evidence', '--json'], {encoding: 'utf8'})
+      expect(JSON.parse(result.stdout).error.code, 'parsing must reach the command').equal('E747_POLICY_INPUT_INVALID')
+    } finally {fs.rmSync(root, {force: true, recursive: true})}
+  })
+
   it('reports an unsupported alias before reading deployment artifacts', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cubesigner-policy-name-cli-'))
     try {

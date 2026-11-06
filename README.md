@@ -1385,7 +1385,7 @@ Derive the expected-policy input from actual artifacts; external reviewed identi
 ```
 USAGE
   $ scrollsdk setup cubesigner-policy prepare-input --environment beta|gamma|prod --organization <value> --policy <value>
-    --program-identity-digest <value> --requires-live-evidence --resolver-base-url <value> --tests <value>
+    --program-identity-digest <value> --requires-live-evidence --resolver-base-url <value> [--tests <value>]
     --verifier-identity-digest <value> [--build-receipt <value>] [--dir <value>] [--json] [--live-evidence <value>]
     [--materials <value>] [--output <value>] [--wasm <value>]
 
@@ -1407,8 +1407,8 @@ FLAGS
   --[no-]requires-live-evidence       (required) Selected release requirement; disabling a required check is not a
                                       canary workaround
   --resolver-base-url=<value>         (required) Exact compiled proof artifact root, including path
-  --tests=<value>                     (required) Actual reviewed test report with result, source/Wasm/context and
-                                      compiled bindings
+  --tests=<value>                     Actual reviewed test report with result, source, Wasm and context. Omit it when
+                                      no report exists; the release then records none and validation warns
   --verifier-identity-digest=<value>  (required)
   --wasm=<value>                      [default: .data/cubesigner-policy/cubesigner_verifier_policy.wasm]
 

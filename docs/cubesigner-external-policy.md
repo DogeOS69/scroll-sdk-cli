@@ -212,7 +212,10 @@ add a top-level `liveEvidence: {"path": "…", "sha256": "sha256:…"}` referenc
 The existing validator checks its result, key, policy version and context.
 Without it, reconciliation explicitly reports `liveAcceptance: not-verified`.
 
-The test report must contain `result: "passed"`, the full `coreRevision`,
+`tests` is optional. Without it, the release records no report, reconciliation
+returns `testEvidence: not-provided` and later validation warns.
+
+A test report that is supplied must contain `result: "passed"`, the full `coreRevision`,
 `wasmSha256` and `protocolContextSha256` (both hashes prefixed with `sha256:`).
 Include the actual commands, scope, results and retained log references in
 that report. It is operator-supplied evidence: the CLI verifies its bindings
@@ -246,7 +249,7 @@ private; the public examples here deliberately contain no deployment identities.
 When ready to run the remaining operations in the saved plan, resume
 `scrollsdk setup proof-materials`. The policy step validates the import against
 the current context and does not rebuild or repeat governance. Later steps
-still require production release/attachment receipts and their test evidence;
+still require production release/attachment receipts;
 see [receipt requirements](proof-config-transactions.md#cubesigner-receipts-and-external-signer-evidence).
 Do not label API snapshots as these receipts or manually complete state steps.
 

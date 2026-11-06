@@ -126,6 +126,7 @@ describe('setup prep-charts generated frontend config', () => {
     const values: Record<string, string> = {
       'frontend.ADMIN_SYSTEM_DASHBOARD_URI': 'https://admin.testnet.example',
       'frontend.BRIDGE_API_URI': 'https://bridge.testnet.example/api',
+      'frontend.EXTERNAL_EXPLORER_URI_ETH': 'https://sepolia.etherscan.io',
       'frontend.EXTERNAL_EXPLORER_URI_L1': '',
       'frontend.EXTERNAL_EXPLORER_URI_L2': 'https://explorer.testnet.example',
       'frontend.EXTERNAL_RPC_URI_L1': 'https://l1.example',
@@ -136,6 +137,7 @@ describe('setup prep-charts generated frontend config', () => {
 
     expect(buildFrontendExternalUrlUpdates(key => values[key])).to.deep.equal({
       GRAFANA_URI: 'https://grafana.testnet.example',
+      REACT_APP_EXTERNAL_EXPLORER_URI_ETH: 'https://sepolia.etherscan.io',
       REACT_APP_EXTERNAL_EXPLORER_URI_L1: '',
       REACT_APP_EXTERNAL_EXPLORER_URI_L2: 'https://explorer.testnet.example',
       REACT_APP_EXTERNAL_RPC_URI_L1: 'https://l1.example',
@@ -915,6 +917,7 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
           data: {
             DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER: '0x1234567890123456789012345678901234567890',
             DOGEOS_L1_INTERFACE_NETWORK_STR: 'testnet',
+            DOGEOS_L1_INTERFACE_REPLAY_READ__P2PKH_VERSIONED_ENVELOPE_START_WITHDRAW_INDEX: '0',
           },
         },
       },
@@ -924,8 +927,10 @@ describe('setup prep-charts Ethereum DA blob source updates', () => {
 
     expect(changes.map(change => change.key)).to.deep.equal([
       'configMaps.env.data.DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER',
+      'configMaps.env.data.DOGEOS_L1_INTERFACE_REPLAY_READ__P2PKH_VERSIONED_ENVELOPE_START_WITHDRAW_INDEX',
     ])
     expect(values.configMaps.env.data).not.to.have.property('DOGEOS_L1_INTERFACE_INITIAL_SYSTEM_SIGNER')
+    expect(values.configMaps.env.data).not.to.have.property('DOGEOS_L1_INTERFACE_REPLAY_READ__P2PKH_VERSIONED_ENVELOPE_START_WITHDRAW_INDEX')
     expect(values.configMaps.env.data.DOGEOS_L1_INTERFACE_NETWORK_STR).to.equal('testnet')
   })
 

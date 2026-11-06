@@ -402,8 +402,8 @@ export default class WalletSend extends Command {
   }
 
   private getExplorerTxUrl(configNetwork: string, txid: string): string {
-    if (configNetwork === 'mainnet') return `https://sochain.com/tx/DOGE/${txid}`
-    if (configNetwork === 'testnet') return `https://sochain.com/tx/DOGETEST/${txid}`
+    if (configNetwork === 'mainnet') return `https://sochain.com/doge/tx/${txid}`
+    if (configNetwork === 'testnet') return `https://sochain.com/dogetest/tx/${txid}`
     return txid
   }
 

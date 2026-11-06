@@ -67,7 +67,7 @@ import {reconcileDeploymentIngresses} from '../../utils/public-service-ingress.j
 import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
-import {reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
+import {reconcileScrollMonitorAlerts, reconcileScrollMonitorAttestationSigner, reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
 import {validateServiceNetworkPolicy} from '../../utils/service-network-policy.js'
 import {
   getRequiredManagedSignerAddress,
@@ -173,6 +173,7 @@ export function buildFrontendExternalUrlUpdates(
 ): Record<string, unknown> {
   return {
     GRAFANA_URI: getConfigValue('frontend.GRAFANA_URI'),
+    REACT_APP_EXTERNAL_EXPLORER_URI_ETH: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_ETH'),
     REACT_APP_EXTERNAL_EXPLORER_URI_L1: getConfigValue('frontend.DOGE_EXTERNAL_EXPLORER_URI_L1') ?? getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L1'),
     REACT_APP_EXTERNAL_EXPLORER_URI_L2: getConfigValue('frontend.EXTERNAL_EXPLORER_URI_L2'),
     REACT_APP_EXTERNAL_RPC_URI_L1: getConfigValue('frontend.DOGE_EXTERNAL_RPC_URI_L1') ?? getConfigValue('frontend.EXTERNAL_RPC_URI_L1'),
@@ -1142,6 +1143,7 @@ export function scrubL1InterfaceRetiredEnv(productionYaml: any): PrepChartChange
     'DOGEOS_L1_INTERFACE_L1_MESSAGE_QUEUE_V2_ADDRESS',
     'DOGEOS_L1_INTERFACE_L2_MESSENGER_ADDRESS',
     'DOGEOS_L1_INTERFACE_L2_MOAT_CONTRACT_ADDRESS',
+    'DOGEOS_L1_INTERFACE_REPLAY_READ__P2PKH_VERSIONED_ENVELOPE_START_WITHDRAW_INDEX',
     'DOGEOS_L1_INTERFACE_SCROLL_CHAIN_ADDRESS',
     'DOGEOS_L1_INTERFACE_SCROLL_MESSENGER_ADDRESS',
     'DOGEOS_L1_INTERFACE_SYSTEM_CONFIG_ADDRESS',
@@ -2627,7 +2629,7 @@ export default class SetupPrepCharts extends Command {
         changes.push(...grafanaChanges)
         if (grafanaChanges.length > 0) updated = true
         const monitorChanges = reconcileMonitoringStatusPage(productionYaml, this.dogeConfig.monitoring)
-        monitorChanges.push(...reconcileScrollMonitorBalances(productionYaml, {
+        monitorChanges.push(...reconcileScrollMonitorAlerts(productionYaml, this.dogeConfig.monitoring?.alerts), ...reconcileScrollMonitorAttestationSigner(productionYaml, this.dogeConfig.monitoring?.attestationSigner), ...reconcileScrollMonitorBalances(productionYaml, {
           dogeConfig: this.dogeConfig,
           l2ChainId: configuredL2ChainId,
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),

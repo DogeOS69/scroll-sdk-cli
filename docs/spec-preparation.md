@@ -955,6 +955,75 @@ a local-generation mode. Install the generated private Secrets through the
 existing deployment workflow. After Helm installation, `scroll-monitor` evaluates
 health and updates Instatus continuously. See [status-page configuration](status-page.md).
 
+Rendering into a new deployment directory starts from the SDK templates, so values
+edited by hand are not carried over. To keep bindings and deadlines across renders,
+declare them in the spec. A value set here wins over the values file; anything left
+out stays with the values file:
+
+```yaml
+monitoring:
+  alerts:
+    feeWalletMinimumDoge: 50 # Devnet defaults to half of bridge.targetAmountsSats.feeWallet.
+    l2BatchStallSeconds: 14400
+  attestationSigner:
+    enabled: true
+    targets:
+      - signer-1.internal.invalid:9100
+  statusPage:
+    enabled: true
+    health:
+      batchPublicationDeadlineSeconds: 7200
+      depositDeadlineSeconds: 3600
+      wfStallSeconds: 3600
+      withdrawalDeadlineSeconds: 7200
+    instatus:
+      componentIds:
+        withdrawals: example-component-id
+      groupId: example-group-id
+      pageId: example-page-id
+```
+
+`statusPage.enabled: true` in a values file without this spec block has no
+environment to use, and render stops with a message naming these fields. A deadline
+of 0 leaves that builtin health rule unconfigured, so a long queue never degrades the
+component. `wfStallSeconds` has no such option and must be positive. Choose deadlines that match the deployment's normal processing time.
+
+`monitoring.attestationSigner` controls whether this cluster's Prometheus collects
+attestation signer metrics. Partner-run signers usually expose no metrics to the
+cluster, so leave it unset or `enabled: false` for them; the chart's signer metrics
+alerts then stay off, and TSO alerts still report signers. With `enabled: true`, render
+turns those alerts on and writes one `attestation-signer` job with these `host:port`
+targets to `additionalScrapeConfigs`, replacing any job of that name. With
+`enabled: false`, it removes that job. When the block is unset, the values file keeps
+its setting. Keep real addresses in the private deployment spec only.
+
+A devnet that is idle or running on a shadowfork usually also wants these chart
+switches, set through a `helmValues` overlay for `scroll-monitor-production.yaml`:
+
+```yaml
+businessAlerts:
+  l2BatchRequirePendingWork: true
+  proofQueueRequireNoProgress: true
+recoveryRunwayAlerts:
+  observationStaleEnabled: false # A shadowfork's getblockchaininfo reports chain "shadowfork".
+```
+
+## Frontend external URLs
+
+`frontend.externalUrls.l1Explorer` and `ethExplorer` are base URLs. The portal links
+to `<base>/tx/<txid>` and uses the base itself as a menu link. Validation rejects
+query strings, fragments, embedded credentials, a trailing slash and placeholder hosts
+such as `*.invalid`, `example.com` or `localhost`.
+
+| Field | Default |
+| --- | --- |
+| `l1Explorer` | `https://sochain.com/doge` on mainnet, `https://sochain.com/dogetest` on testnet, empty on regtest |
+| `ethExplorer` | From `ethereumDa.chain`: `https://etherscan.io`, `https://sepolia.etherscan.io`, or empty on `devnet` |
+
+An empty value shows the transaction hash as plain text. Set `l1Explorer: ""` on a
+shadowfork, because public explorers cannot see its transactions. The portal's header
+menu is built from the same value, so review that item when leaving it empty.
+
 ## Slack notifications
 
 `monitoring.slack.enabled: true` enables the spec-owned Grafana `slack-alerts`
@@ -1368,7 +1437,8 @@ A matching schema and step contract can resume across CLI builds. Other schemas
 or step layouts are rejected; the CLI never adopts a different step list into a
 saved plan or reinterprets completed funding records.
 
-The generated SDK `install-cubesigner-signer` target first invokes
+When `cubesigner-signer-env` or `cubesigner-signer-session` is missing, the
+generated SDK `install-cubesigner-signer` target first invokes
 `setup cubesigner-policy prepare-runtime-secrets`. After the cloud Secret upload,
 this renders the selected chart, applies only its two namespaced SecretStores and
 two ExternalSecrets, and waits for delivery. It refuses resources owned by another

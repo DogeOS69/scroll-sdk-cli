@@ -14,6 +14,15 @@ describe('status-page spec intent', () => {
     expect(reconcileMonitoringStatusPage(values, config)).deep.eq([])
   })
 
+  it('lets spec bindings and deadlines win, keeping every value the spec does not set', () => {
+    const values: Record<string, any> = {statusPage: {enabled: true, environment: '', instatus: {componentIds: {'public-rpc': 'kept', withdrawals: 'old'}, email: 'kept', pageId: 'old'}, publication: {health: {freshnessSeconds: 120}, incidents: 'kept'}}}
+    const config = {environment: 'devnet' as const, statusPage: {enabled: true, health: {withdrawalDeadlineSeconds: 7200}, instatus: {componentIds: {withdrawals: 'new'}, pageId: 'new'}}}
+    expect(reconcileMonitoringStatusPage(values, config)).length(1)
+    expect(values.statusPage.instatus).deep.eq({componentIds: {'public-rpc': 'kept', withdrawals: 'new'}, email: 'kept', pageId: 'new'})
+    expect(values.statusPage.publication).deep.eq({health: {freshnessSeconds: 120, withdrawalDeadlineSeconds: 7200}, incidents: 'kept'})
+    expect(reconcileMonitoringStatusPage(values, config)).deep.eq([])
+  })
+
   it('honors opt-out and leaves undeclared intent unchanged', () => {
     const values = {statusPage: {enabled: true, environment: 'mainnet'}}
     expect(reconcileMonitoringStatusPage(values)).deep.eq([])

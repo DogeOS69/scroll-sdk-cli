@@ -22,6 +22,17 @@ export function pinnedEvidence(root: string, ref: any): any {
 }
 
 const same = (a: unknown, b: unknown, label: string) => requirePolicy(isDeepStrictEqual(a, b), `${label} mismatch`)
+
+/**
+ * Provider MFA snapshots (`cs mfa get`, Core `gov mfa`) carry the request path percent-encoded
+ * (`/v0/org/Org%23…/keys/Key%23…`), while the handoff builds it from the raw identifiers. Compare the decoded form.
+ */
+export function normalizeProviderRequest(request: any): any {
+  if (!request || typeof request !== 'object' || typeof request.path !== 'string') return request
+
+  try {return {...request, path: decodeURIComponent(request.path)}} catch {return request}
+}
+
 const set = (a: unknown, b: unknown, label: string) => {
   requirePolicy(Array.isArray(a) && Array.isArray(b), `${label} must be arrays`)
   same([...a].sort(), [...b].sort(), label)
@@ -127,7 +138,7 @@ export function verifyGovernanceEvidence(options: {claims: any; environment: str
       const snapshotsForId = snapshots.filter((item: any) => item.id === id)
       requirePolicy(snapshotsForId.length === 1, 'Missing or duplicate approval evidence')
       const snapshot = snapshotsForId[0]
-      same(snapshot.request, handoff.request, 'Approval request')
+      same(normalizeProviderRequest(snapshot.request), handoff.request, 'Approval request')
       const at = Date.parse(executed.timestamp) / 1000
       requirePolicy(snapshot.expires_at > at && (!snapshot.not_valid_until || snapshot.not_valid_until <= at), 'Approval expired or not valid at execution')
       const {status} = snapshot

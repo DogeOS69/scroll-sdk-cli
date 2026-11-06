@@ -17,6 +17,7 @@ import {cubesignerSessionExpiration} from './cubesigner-session-format.js'
 import {jsonContentEqual} from './json-content.js'
 import {localPath, writeJson} from './preparation-io.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
+import {safeErrorMessage} from './safe-error-message.js'
 import {normalizeCompressedSecp256k1PublicKey} from './secp256k1-public-key.js'
 
 export const ACTIVATION_REPORT = '.scrollsdk/cubesigner-activation.json'
@@ -38,6 +39,31 @@ export function validateRuntimeSession(root: string, client: ActivationClient, k
     && remote[0].exp - remote[0].created_at <= limits.session, 'Runtime session lifetimes exceed the reviewed runbook')
   const env = fs.readFileSync(proofRegularFile(path.join(root, 'secrets/cubesigner-signer.env')), 'utf8').trim()
   requirePolicy(env === `DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID="${key.keyId}"`, 'Runtime key Secret mismatch')
+}
+
+/** Read a Secret, or undefined when it does not exist. Never quotes Secret content. */
+function readClusterSecret(name: string, kubeContext: string | undefined, namespace: string): any {
+  let text: string
+  try {
+    text = execFileSync('kubectl', [...(kubeContext ? ['--context', kubeContext] : []), '-n', namespace, 'get', 'secret', name, '--ignore-not-found', '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})
+  } catch (error) {
+    const stderr = String((error as {stderr?: unknown}).stderr ?? '').trim().split('\n').at(-1)
+    throw new Error(`Cannot read Kubernetes Secret ${name} in namespace ${namespace}: ${safeErrorMessage(new Error(stderr || 'kubectl failed'))}`)
+  }
+
+  if (!text.trim()) return undefined
+  try {return JSON.parse(text)} catch {throw new Error(`Kubernetes Secret ${name} readback is not valid JSON (contents omitted)`)}
+}
+
+/**
+ * The signer chart creates these ExternalSecrets, so a fresh cluster has no
+ * Secrets to compare until the supported pre-delivery step has run.
+ */
+function requireDeliveredSecret(name: string, secret: any, documents: any[], options: {chart?: string; chartVersion?: string; directory: string; kubeContext?: string; namespace?: string; values?: string}): any {
+  if (secret) return secret
+  const rendered = documents.some(doc => doc?.kind === 'ExternalSecret' && (doc.spec?.target?.name ?? doc.metadata?.name) === name)
+  requirePolicy(!rendered, `Kubernetes Secret ${name} is not delivered yet. Run: scrollsdk setup cubesigner-policy prepare-runtime-secrets --dir ${options.directory} --kube-context ${options.kubeContext ?? '<context>'} --namespace ${options.namespace ?? 'default'}${options.chart ? ` --chart ${options.chart}` : ''}${options.chartVersion ? ` --chart-version ${options.chartVersion}` : ''}${options.values ? ` --values ${options.values}` : ''}, then rerun verify-activation`)
+  requirePolicy(false, `Kubernetes Secret ${name} does not exist; finish Secret delivery before installation`)
 }
 
 export function validateSignerEnvironment(entries: unknown, expected: Record<string, string>): void {
@@ -150,13 +176,13 @@ export async function verifyCubesignerActivation(options: {
 
   if (!options.policyOnly) {
     validateRuntimeSession(root, client, key, handoff, await client.sessions(key.roleId))
-    const readSecret = options.readSecret ?? ((name: string) => JSON.parse(execFileSync('kubectl', [...(options.kubeContext ? ['--context', options.kubeContext] : []), '-n', options.namespace ?? 'default', 'get', 'secret', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
+    const readSecret = options.readSecret ?? ((name: string) => readClusterSecret(name, options.kubeContext, options.namespace ?? 'default'))
     const readConfigMap = options.readConfigMap ?? ((name: string) => JSON.parse(execFileSync('kubectl', [...(options.kubeContext ? ['--context', options.kubeContext] : []), '-n', options.namespace ?? 'default', 'get', 'configmap', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
     const contextBytes = fs.readFileSync(proofRegularFile(path.resolve(root, refs.protocolContext.path)), 'utf8')
     requirePolicy(jsonContentEqual(readConfigMap('protocol-context-config').data?.['protocol_context.json'], contextBytes), 'Delivered protocol context differs from prepared genesis')
     for (const document of documents.filter(doc => doc?.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(jsonContentEqual(document.data?.['protocol_context.json'], contextBytes), 'Helm would replace the verified protocol context')
-    const sessionSecret = readSecret('cubesigner-signer-session')
-    const keySecret = readSecret('cubesigner-signer-env')
+    const sessionSecret = requireDeliveredSecret('cubesigner-signer-session', readSecret('cubesigner-signer-session'), documents, options)
+    const keySecret = requireDeliveredSecret('cubesigner-signer-env', readSecret('cubesigner-signer-env'), documents, options)
     requirePolicy(Buffer.from(keySecret.data?.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID ?? '', 'base64').toString() === key.keyId, 'Installed Secret key differs; finish Secret delivery before installation')
     requirePolicy(jsonContentEqual(Buffer.from(sessionSecret.data?.['session.json'] ?? '', 'base64'), fs.readFileSync(proofRegularFile(path.join(root, 'secrets/cubesigner-signer-session.json')))), 'Installed Secret session differs; finish Secret delivery before installation')
   }
@@ -259,13 +285,13 @@ async function verifyTransportActivation(options: {
   const sessions = (await client.sessions(key.roleId)).filter(entry => entry.session_id === seed.session_info?.session_id)
   requirePolicy(sessions.length === 1 && sessions[0].exp > now, 'Runtime session is revoked, absent or expired')
   requirePolicy(Array.isArray(sessions[0].scopes) && sessions[0].scopes.length > 0 && sessions[0].scopes.every((scope: string) => ['sign:*', 'sign:btc:psbt:doge'].includes(scope)), 'Runtime session has unsupported scopes')
-  const readSecret = options.readSecret ?? (name => JSON.parse(execFileSync('kubectl', ['--context', options.kubeContext, '-n', options.namespace, 'get', 'secret', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
+  const readSecret = options.readSecret ?? (name => readClusterSecret(name, options.kubeContext, options.namespace))
   const readConfigMap = options.readConfigMap ?? (name => JSON.parse(execFileSync('kubectl', ['--context', options.kubeContext, '-n', options.namespace, 'get', 'configmap', name, '-o', 'json'], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000})))
   const context = fs.readFileSync(proofRegularFile(path.join(root, '.data/protocol_context.json')), 'utf8')
   requirePolicy(jsonContentEqual(readConfigMap('protocol-context-config').data?.['protocol_context.json'], context), 'Delivered protocol context differs from the prepared Bridge')
   for (const document of documents.filter(doc => doc?.kind === 'ConfigMap' && doc.metadata?.name === 'protocol-context-config')) requirePolicy(jsonContentEqual(document.data?.['protocol_context.json'], context), 'Helm would replace the verified protocol context')
-  requirePolicy(Buffer.from(readSecret('cubesigner-signer-env').data?.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID ?? '', 'base64').toString() === key.keyId, 'Delivered key Secret differs from the selected key')
-  requirePolicy(jsonContentEqual(Buffer.from(readSecret('cubesigner-signer-session').data?.['session.json'] ?? '', 'base64'), seedBytes), 'Delivered runtime session differs from the prepared seed')
+  requirePolicy(Buffer.from(requireDeliveredSecret('cubesigner-signer-env', readSecret('cubesigner-signer-env'), documents, options).data?.DOGEOS_CUBESIGNER_SIGNER_CS_KEY_ID ?? '', 'base64').toString() === key.keyId, 'Delivered key Secret differs from the selected key')
+  requirePolicy(jsonContentEqual(Buffer.from(requireDeliveredSecret('cubesigner-signer-session', readSecret('cubesigner-signer-session'), documents, options).data?.['session.json'] ?? '', 'base64'), seedBytes), 'Delivered runtime session differs from the prepared seed')
   requirePolicy(proofFileHash(configFile) === configHash && proofFileHash(valuesFile) === valuesHash && fs.readFileSync(seedFile).equals(seedBytes), 'Activation inputs changed during verification')
   return {activation: 'verified', checkedAt: new Date().toISOString(), installed: 'not-verified', mode: resolved.mode, proofAcceptance: 'not-checked', runtimeCache: 'not-inspected'}
 }

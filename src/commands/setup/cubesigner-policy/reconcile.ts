@@ -9,6 +9,7 @@ import {readRoleScopedPolicyKey} from '../../../utils/cubesigner-policy-readback
 import {PolicyReconciliationError, reconcileCubesignerPolicy} from '../../../utils/cubesigner-policy-reconcile.js'
 import {DEFAULT_DEPLOYMENT} from '../../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../../utils/json-output.js'
+import {safeErrorMessage} from '../../../utils/safe-error-message.js'
 
 export default class CubesignerPolicyReconcile extends Command {
   static description = 'Validate reviewed release evidence and read back an already attached policy; write preparation receipts without changing CubeSigner'
@@ -39,8 +40,8 @@ export default class CubesignerPolicyReconcile extends Command {
         }
       }, directory: flags.dir, input: flags.input, output: flags.output}))
     } catch (error) {
-      // Never expose SDK/session diagnostics or parse errors containing private input.
-      output.error('E743_POLICY_RECONCILIATION_FAILED', error instanceof PolicyReconciliationError ? error.message : 'Policy reconciliation failed; check input files, receipt validation and management-session read access. Provider output omitted.', 'CONFIGURATION', true)
+      // safeErrorMessage drops parse errors quoting private input and opaque SDK/session values.
+      output.error('E743_POLICY_RECONCILIATION_FAILED', error instanceof PolicyReconciliationError ? error.message : `Policy reconciliation failed: ${safeErrorMessage(error) ?? 'unexpected failure'}. Check input files, receipt validation and management-session read access.`, 'CONFIGURATION', true)
     }
   }
 }

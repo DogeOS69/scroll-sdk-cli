@@ -116,6 +116,19 @@ describe('independent component publication', () => {
     expect(generate).to.throw('global severity')
   })
 
+  it('keeps the external probe scrape job where it stands', () => {
+    const signer = {job_name: 'attestation-signer', static_configs: [{targets: ['signer:9100']}]}
+    values['kube-prometheus-stack'] = {prometheus: {prometheusSpec: {additionalScrapeConfigs: [signer]}}}
+    values.statusPage.publication.probes = {metricsTargets: ['probe:9111']}
+    generate()
+    const jobs = () => values['kube-prometheus-stack'].prometheus.prometheusSpec.additionalScrapeConfigs
+    jobs().reverse()
+    const order = jobs().map((job: any) => job.job_name)
+    expect(order).to.deep.equal(['status-page-external-probes', 'attestation-signer'])
+    generate()
+    expect(jobs().map((job: any) => job.job_name)).to.deep.equal(order)
+  })
+
   it('owns only the external probe scrape job and removes it when targets are disabled', () => {
     const unrelated = {job_name: 'existing', static_configs: [{targets: ['existing:9090']}]}
     values['kube-prometheus-stack'] = {prometheus: {prometheusSpec: {additionalScrapeConfigs: [unrelated]}}}

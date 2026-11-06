@@ -6,9 +6,44 @@ import {isDeepStrictEqual} from 'node:util'
 import {writeGrafanaPrivateFile} from './grafana-admin.js'
 
 export interface MonitoringConfig {
+  /** Alert thresholds projected into scroll-monitor values; values files keep their setting when omitted. */
+  alerts?: {
+    /** FeeWalletBalanceLow threshold. Coinbase outputs do not fund the fee wallet. Devnet defaults to half of its seed amount. */
+    feeWalletMinimumDoge?: number
+    /** Shared by L2BatchHeightStalled and the Withdrawals health rule. Integer seconds, at least 60. */
+    l2BatchStallSeconds?: number
+  }
+  /**
+   * Scrape attestation signers from this cluster's Prometheus and turn on their metrics
+   * alerts. Partner-run signers usually expose no metrics to the cluster, so leave this
+   * unset or disabled for them. TSO alerts report signers either way.
+   */
+  attestationSigner?: {
+    enabled: boolean
+    /** host:port metrics targets; required when enabled. */
+    targets?: string[]
+  }
   slack?: {enabled: boolean}
-  /** Generate status-page deployment inputs during render; publication policy stays in Helm values. */
-  statusPage?: {enabled: boolean}
+  /** Generate status-page deployment inputs during render. Set bindings here to survive re-rendering into a new directory. */
+  statusPage?: {
+    enabled: boolean
+    /** Component health settings in seconds; a `*DeadlineSeconds` of 0 leaves the chart's builtin rule unconfigured. */
+    health?: {
+      batchPublicationDeadlineSeconds?: number
+      depositDeadlineSeconds?: number
+      wfStallSeconds?: number
+      withdrawalDeadlineSeconds?: number
+    }
+    /** Provider identifiers only; the management API key stays in INSTATUS_API_KEY. */
+    instatus?: {
+      componentIds?: Record<string, string>
+      groupId?: string
+      pageId?: string
+      pageName?: string
+      subdomain?: string
+      workspaceSlug?: string
+    }
+  }
 }
 
 export interface MonitoringRuntimeConfig extends MonitoringConfig {
@@ -29,9 +64,39 @@ function secretReference(values: Record<string, any>): {key: string; name: strin
   return reference
 }
 
+function isMetricsTarget(target: unknown): boolean {
+  if (typeof target !== 'string') return false
+  const match = /^[\da-z](?:[\d.a-z-]*[\da-z])?:(\d{1,5})$/i.exec(target)
+  return match !== null && Number(match[1]) >= 1 && Number(match[1]) <= 65_535
+}
+
 export function validateMonitoring(config?: MonitoringConfig): void {
   if (config?.statusPage !== undefined && (config.statusPage === null || typeof config.statusPage.enabled !== 'boolean')) throw new Error('monitoring.statusPage.enabled must be a boolean')
   if (config?.slack && typeof config.slack.enabled !== 'boolean') throw new Error('monitoring.slack.enabled must be a boolean')
+  const {feeWalletMinimumDoge, l2BatchStallSeconds} = config?.alerts ?? {}
+  if (feeWalletMinimumDoge !== undefined && (typeof feeWalletMinimumDoge !== 'number' || !Number.isFinite(feeWalletMinimumDoge) || feeWalletMinimumDoge < 0)) throw new Error('monitoring.alerts.feeWalletMinimumDoge must be a nonnegative number')
+  if (l2BatchStallSeconds !== undefined && (!Number.isSafeInteger(l2BatchStallSeconds) || l2BatchStallSeconds < 60)) throw new Error('monitoring.alerts.l2BatchStallSeconds must be an integer of at least 60 seconds')
+  for (const [key, value] of Object.entries(config?.statusPage?.health ?? {})) {
+    if (key.endsWith('DeadlineSeconds')) {
+      if (!Number.isSafeInteger(value) || value < 0) throw new Error(`monitoring.statusPage.health.${key} must be a nonnegative integer`)
+    } else if (!Number.isSafeInteger(value) || value < 1) throw new Error(`monitoring.statusPage.health.${key} must be a positive integer`)
+  }
+
+  const signer = config?.attestationSigner
+  if (signer !== undefined) {
+    if (signer === null || typeof signer.enabled !== 'boolean') throw new Error('monitoring.attestationSigner.enabled must be a boolean')
+    if (signer.targets !== undefined && (!Array.isArray(signer.targets) || !signer.targets.every(target => isMetricsTarget(target)))) throw new Error('monitoring.attestationSigner.targets must list host:port addresses')
+    if (signer.enabled && !signer.targets?.length) throw new Error('monitoring.attestationSigner.targets is required when enabled')
+  }
+
+  const {componentIds, ...identifiers} = config?.statusPage?.instatus ?? {}
+  for (const [key, value] of Object.entries(identifiers)) {
+    if (typeof value !== 'string' || !value.trim()) throw new Error(`monitoring.statusPage.instatus.${key} must be a nonempty string`)
+  }
+
+  for (const [key, value] of Object.entries(componentIds ?? {})) {
+    if (typeof value !== 'string' || !value.trim()) throw new Error(`monitoring.statusPage.instatus.componentIds.${key} must be a nonempty string`)
+  }
 }
 
 /** Project only references. Never resolve the webhook while generating values. */

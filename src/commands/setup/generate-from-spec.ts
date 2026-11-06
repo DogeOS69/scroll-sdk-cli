@@ -17,6 +17,7 @@ import {
 import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {ALB_SERVICES, preserveSharedAlbPaths, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
 import {validateExistingNlbSdk} from '../../utils/existing-nlb.js'
+import {reconcileExternalSecretFiles} from '../../utils/external-secret-references.js'
 import {validateFinalValues} from '../../utils/final-values-validation.js'
 import {frontendDepositEnv, mergeFrontendConfigDocuments, readFrontendDepositIdentity, reconcileFrontendConfig, reconcileFrontendProduction} from '../../utils/frontend-deposit-config.js'
 import {GenerationTransaction} from '../../utils/generation-transaction.js'
@@ -354,6 +355,8 @@ export default class GenerateFromSpec extends Command {
         if (file && !allValues[file] && templateFiles[`values/${file}`]) allValues[file] = mergeBootstrapValues(templateFiles[`values/${file}`], '{}', existingValues(file))
       }
 
+      // Before overlays, so an explicit helmValues reference still wins.
+      reconcileExternalSecretFiles(allValues, getSecretProviderConfig(spec), templateFiles)
       applyHelmValues(allValues, spec)
       preserveSharedAlbPaths(allValues, spec, existingValues)
       projectExistingAlb(allValues, spec)

@@ -4,6 +4,7 @@ import {validateBridgeHistory} from './bridge-history.js'
 import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {validateExistingAlb} from './existing-alb.js'
 import {existingNlbEntries} from './existing-nlb.js'
+import {defaultEthereumExplorer, frontendExplorerUrlProblem} from './frontend-explorer-urls.js'
 import {validateMonitoring} from './monitoring-slack.js'
 import {validateNetworkPolicyIntent} from './network-policy-preflight.js'
 import {specDstackController} from './spec-kubernetes-target.js'
@@ -50,7 +51,7 @@ import { MANAGED_SIGNER_ROLES, buildLocalSignerConfig } from './signer-roles.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 import {resolveSpecIdentities} from './spec-identities.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
-import {specAwsSecretPrefix} from './spec-secret-prefix.js'
+import {specAwsSecretPrefix, specAwsSecretRegion} from './spec-secret-prefix.js'
 
 const ETHEREUM_DA_DEFAULTS = {
   devnet: {
@@ -432,7 +433,8 @@ function assertGeneratedDataNetworkConsistency(configs: GeneratedConfigs): void 
 }
 
 function getEthereumDaChain(rawSpec: DeploymentSpec): keyof typeof ETHEREUM_DA_DEFAULTS {
-  return rawSpec.ethereumDa?.chain || (rawSpec.metadata.environment === 'mainnet' ? 'mainnet' : 'sepolia')
+  // Controller-only specs reach normalization without metadata.
+  return rawSpec.ethereumDa?.chain || (rawSpec.metadata?.environment === 'mainnet' ? 'mainnet' : 'sepolia')
 }
 
 function getEthereumDaChainId(rawSpec: DeploymentSpec): number {
@@ -497,8 +499,10 @@ export function normalizeDeploymentSpec(spec: DeploymentSpec): DeploymentSpec {
 
   const existingExternalUrls = (frontend.externalUrls || {}) as Partial<FrontendExternalUrls>
   const externalUrls = {
+    // An explicit empty explorer is meaningful: a shadowfork's transactions are invisible to public explorers.
+    ethExplorer: existingExternalUrls.ethExplorer ?? defaultEthereumExplorer(getEthereumDaChain(spec)),
     grafana: existingExternalUrls.grafana || publicUrl(protocol, hosts.grafana),
-    l1Explorer: existingExternalUrls.l1Explorer || (spec.dogecoin?.network === 'regtest' ? '' : `https://sochain.com/${spec.dogecoin?.network === 'mainnet' ? 'DOGE' : 'DOGETEST'}`),
+    l1Explorer: existingExternalUrls.l1Explorer ?? (spec.dogecoin?.network === 'regtest' ? '' : `https://sochain.com/${spec.dogecoin?.network === 'mainnet' ? 'doge' : 'dogetest'}`),
     l1Rpc: existingExternalUrls.l1Rpc || publicUrl(protocol, hosts.rpcGateway),
     l2Explorer: existingExternalUrls.l2Explorer || publicUrl(protocol, hosts.blockscout),
     l2Rpc: existingExternalUrls.l2Rpc || publicUrl(protocol, hosts.rpcGateway),
@@ -571,6 +575,12 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   const warnings: ValidationWarning[] = []
   try {specAwsSecretPrefix(spec)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: 'preparation.secretUpload.awsPrefix'})}
   try {validateMonitoring(spec.monitoring)} catch (error) {errors.push({code: 'E601_INVALID_VALUE', message: (error as Error).message, path: (error as Error).message.split(' ')[0]})}
+  for (const key of ['ethExplorer', 'l1Explorer'] as const) {
+    const path = `frontend.externalUrls.${key}`
+    const message = frontendExplorerUrlProblem(path, spec.frontend?.externalUrls?.[key])
+    if (message) errors.push({code: 'E601_INVALID_VALUE', message, path})
+  }
+
 
   try {resolveSpecAttestationSigners(spec)} catch (error) {
     errors.push({code: 'E601_INVALID_VALUE', message: error instanceof Error ? error.message : 'Invalid attestation signer identities', path: 'bridge.attestation.signers'})
@@ -1452,6 +1462,7 @@ export function generateConfigToml(rawSpec: DeploymentSpec): string {
     BASE_CHAIN: spec.network.tokenSymbol,
     CONNECT_WALLET_PROJECT_ID: spec.frontend.walletConnectProjectId || DEFAULT_WALLET_CONNECT_PROJECT_ID,
     ETH_SYMBOL: spec.network.tokenSymbol,
+    EXTERNAL_EXPLORER_URI_ETH: spec.frontend.externalUrls.ethExplorer,
     EXTERNAL_EXPLORER_URI_L1: spec.frontend.externalUrls.l1Explorer,
     EXTERNAL_EXPLORER_URI_L2: spec.frontend.externalUrls.l2Explorer,
     EXTERNAL_RPC_URI_L1: spec.frontend.externalUrls.l1Rpc,
@@ -1570,6 +1581,12 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
 
   validateMonitoring(spec.monitoring)
   if (spec.monitoring) config.monitoring = {...structuredClone(spec.monitoring), ...(spec.monitoring.statusPage ? {environment: spec.metadata.environment} : {})}
+  // A devnet seeds far less than the 100 DOGE production floor, which would fire from the first minute.
+  const feeWalletSeedSats = spec.metadata.environment === 'devnet' && spec.bridge ? getBridgeTargetAmountsSats(spec).feeWallet : 0
+  if (feeWalletSeedSats > 0 && spec.monitoring?.alerts?.feeWalletMinimumDoge === undefined) {
+    config.monitoring = {...config.monitoring, alerts: {...config.monitoring?.alerts, feeWalletMinimumDoge: feeWalletSeedSats / 2 / 100_000_000}}
+  }
+
   validateBootnodePublicP2p(spec.bootnodePublicP2p, Array.from({length: spec.infrastructure.bootnodeCount}, (_, index) => index), spec.infrastructure.provider)
   if (spec.bootnodePublicP2p !== undefined) config.bootnodePublicP2p = structuredClone(spec.bootnodePublicP2p)
   if (spec.infrastructure.provider === 'aws') config.awsWorkloadIdentity = awsWorkloadIdentity(spec)
@@ -1594,10 +1611,12 @@ export function generateDogeConfigToml(rawSpec: DeploymentSpec): string {
   config.attestationSigner = attestation
 
 
+  const secretProvider = spec.infrastructure.provider === 'local' ? (spec.infrastructure.local?.useK8sSecrets === false ? 'aws' : 'kubernetes') : spec.infrastructure.provider
+  const secretRegion = specAwsSecretRegion(spec) || (spec.infrastructure.provider === 'aws' ? 'us-west-2' : undefined)
   config.ethereumRpcSecretStore = {
     prefix: spec.infrastructure.provider === 'gcp' ? (spec.infrastructure.gcp?.secretsProject ?? spec.infrastructure.gcp?.project ?? 'default-project') : specAwsSecretPrefix(spec),
-    provider: spec.infrastructure.provider === 'local' ? (spec.infrastructure.local?.useK8sSecrets === false ? 'aws' : 'kubernetes') : spec.infrastructure.provider,
-    ...(spec.infrastructure.provider === 'aws' ? {awsRegion: spec.infrastructure.aws?.region ?? 'us-west-2'} : {}),
+    provider: secretProvider,
+    ...(secretProvider === 'aws' && secretRegion ? {awsRegion: secretRegion} : {}),
     ...(spec.infrastructure.provider === 'gcp' ? {gcpProject: spec.infrastructure.gcp?.project} : {}),
   }
   config.feeOracle = {contractWriteMode: spec.feeOracle?.contractWriteMode ?? 'live', ethereumRpcUrl: spec.feeOracle?.ethereumRpcUrl ?? 'https://ethereum-rpc.publicnode.com'}

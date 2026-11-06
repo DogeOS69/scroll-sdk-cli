@@ -13,6 +13,7 @@ import type { DogeConfig, Network } from '../../types/doge-config.js'
 import { DEFAULT_WALLET_CONNECT_PROJECT_ID, L1_INTERFACE_RPC_ENDPOINT, L2_RPC_ENDPOINT, SETUP_DEFAULTS_TEMPLATE, YAML_DUMP_OPTIONS, getSetupDefaultsPath } from '../../config/constants.js'
 import { writeConfigs } from '../../utils/config-writer.js'
 import { dogeConfigToToml, loadDogeConfigWithSelection } from '../../utils/doge-config.js'
+import { defaultEthereumExplorer } from '../../utils/frontend-explorer-urls.js'
 import { JsonOutputContext } from '../../utils/json-output.js'
 import { resolveDogecoinKubernetesEndpoints } from '../../utils/kubernetes-endpoints.js'
 import {
@@ -454,8 +455,8 @@ export default class SetupDomains extends Command {
     const defaultDogeExternalRpcUrl = selectedDogeNetwork === 'regtest'
       ? regtestDogecoinUrl
       : selectedDogeNetwork === 'mainnet'
-        ? 'https://sochain.com/DOGE'
-        : 'https://sochain.com/DOGETEST'
+        ? 'https://sochain.com/doge'
+        : 'https://sochain.com/dogetest'
     const defaultDogeExternalExplorerUrl = selectedDogeNetwork === 'regtest'
       ? regtestDogecoinUrl
       : defaultDogeExternalRpcUrl
@@ -504,6 +505,8 @@ export default class SetupDomains extends Command {
         `${dogeConfigPath} is missing [ethereumDa] settings. Run "scrollsdk setup doge-config" before "scrollsdk setup domains".`
       )
     }
+
+    frontendConfig.EXTERNAL_EXPLORER_URI_ETH = existingConfig.frontend?.EXTERNAL_EXPLORER_URI_ETH ?? defaultEthereumExplorer(ethereumDaConfig.chain)
 
     if (ethereumDaConfig.chain === 'devnet') {
       this.ensureL1DevnetIngressConfig(ingressConfig, domainConfig, existingConfig)
