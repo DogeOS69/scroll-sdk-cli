@@ -145,9 +145,12 @@ export function resolveCubesignerPolicy(input: {
   if (wasm.sizeBytes !== fs.statSync(wasmFile).size) throw new Error('Policy Wasm size mismatch')
   if (!fs.readFileSync(wasmFile).subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) throw new Error('Policy artifact is not Wasm')
   checkCurrentProtocol(root, refs, r)
-  const tests = object(r.tests, 'policy tests')
-  if (tests.result !== 'passed') throw new Error('Policy release tests did not pass')
-  readFile(path.dirname(release.file), {path: string(tests.path, 'policy tests path'), sha256: digest(tests.sha256, 'policy tests digest')}, 16 * 1024 * 1024)
+  const tests = r.tests === undefined ? undefined : object(r.tests, 'policy tests')
+  if (tests) {
+    if (tests.result !== 'passed') throw new Error('Policy release tests did not pass')
+    readFile(path.dirname(release.file), {path: string(tests.path, 'policy tests path'), sha256: digest(tests.sha256, 'policy tests digest')}, 16 * 1024 * 1024)
+  }
+
   const bindings = {environment: string(refs.environment, 'CubeSigner environment'), organization: string(refs.organization, 'CubeSigner organization'), ...key, policyArtifactDigest: artifactDigest, policyIdentifier: identifier, proofResolverAuthority: authority, releaseSha256: `sha256:${proofFileHash(release.file)}`}
   for (const [field, expected] of Object.entries(bindings)) {
     if (attachment && attachment[field] !== expected) throw new Error(`Policy attachment ${field} does not match selected release/key`)
@@ -203,13 +206,15 @@ export function resolveCubesignerPolicy(input: {
     if (![identity.programCommitmentHash, identity.verificationKeyHash].every(value => /^(0x)?[\da-f]{64}$/.test(String(value))) || bindings.namespaceId !== parsed.namespace || bindings.bridgeKeyHash !== bridgeHash(script)
       || bindings.teePublicKey !== parsed.tee || bindings.bridgeProgramCommitment !== identity.programCommitmentHash
       || bindings.aggregateVkIdentity !== identity.verificationKeyHash) throw new Error('Policy namespace/Bridge/program commitment/VK bindings mismatch')
-    const testsReport = object(JSON.parse(fs.readFileSync(readFile(path.dirname(release.file), {path: string(tests.path, 'test report'), sha256: String(tests.sha256)}, 16 * 1024 * 1024), 'utf8')), 'tests')
-    // Compiled bindings in the report are optional: the report is already bound to the exact policy source
-    // commit, Wasm hash and protocol context above, and the Wasm hash pins the compiled inputs. When a report
-    // does carry bindings they must match the values compiled here.
-    if (testsReport.bindings !== undefined) {
-      for (const [field, value] of Object.entries(bindings)) {
-        if (object(testsReport.bindings, 'tested build bindings')[field] !== value) throw new Error('Reviewed tests do not bind compiled policy inputs')
+    // Compiled bindings in a report are optional: reconciliation already binds the report to the exact
+    // policy source commit, Wasm hash and protocol context, and the Wasm hash pins the compiled inputs.
+    // When a report does carry bindings they must match the values compiled here.
+    if (tests) {
+      const testsReport = object(JSON.parse(fs.readFileSync(readFile(path.dirname(release.file), {path: string(tests.path, 'test report'), sha256: String(tests.sha256)}, 16 * 1024 * 1024), 'utf8')), 'tests')
+      if (testsReport.bindings !== undefined) {
+        for (const [field, value] of Object.entries(bindings)) {
+          if (object(testsReport.bindings, 'tested build bindings')[field] !== value) throw new Error('Reviewed tests do not bind compiled policy inputs')
+        }
       }
     }
 
@@ -227,7 +232,10 @@ export function resolveCubesignerPolicy(input: {
       || published.policyArtifactDigest !== artifactDigest || published.environment !== refs.environment || published.organization !== refs.organization) throw new Error('Expected policy published version mismatch')
   }
 
-  return {liveEvidence, mode, policy, warnings: prepared ? ['Configuration prepared; CubeSigner activation pending. Do not install cubesigner-signer until verify-activation passes.'] : []}
+  return {liveEvidence, mode, policy, warnings: [
+    ...(prepared ? ['Configuration prepared; CubeSigner activation pending. Do not install cubesigner-signer until verify-activation passes.'] : []),
+    ...(tests ? [] : ['Policy release records no test report (test evidence: not-provided); the policy Wasm, provenance and protocol context checks still apply.']),
+  ]}
 }
 
 export function cubesignerPolicyEnvironment(resolved: ReturnType<typeof resolveCubesignerPolicy>): Record<string, string> {

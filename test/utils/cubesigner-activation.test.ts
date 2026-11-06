@@ -167,6 +167,26 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
     expect(result.status).to.equal('configuration-inputs-prepared-activation-pending')
   })
 
+  it('prepares without a test report and records that none was provided', async () => {
+    fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
+    delete input.release.tests
+    const result = await prepare()
+    expect(result.status).to.equal('configuration-inputs-prepared-activation-pending')
+    expect(result.testEvidence).to.equal('not-provided')
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'prepared-policy/release.json'), 'utf8'))).to.not.have.property('tests')
+    expect(fs.existsSync(path.join(root, 'prepared-policy/tests.json'))).equal(false)
+    const expectedPolicy = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), 'utf8'))
+    const {warnings} = resolveCubesignerPolicy({deploymentDir: root, keys: [expectedPolicy.key], network: 'testnet', scope: 'preparation', selection: {expectedPolicy, mode: 'production_verifier_key_policy'}})
+    expect(warnings.join('\n')).to.include('test evidence: not-provided')
+  })
+
+  it('reports a supplied test report as test evidence', async () => {
+    fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
+    fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
+    expect((await prepare()).testEvidence).to.equal('provided')
+  })
+
   it('rejects a test report without compiled bindings that exercised a different Wasm', async () => {
     fs.rmSync(path.join(root, 'prepared-policy'), {force: true, recursive: true})
     fs.rmSync(path.join(root, '.scrollsdk/inputs/cubesigner-policy/expected.json'), {force: true})
@@ -296,6 +316,9 @@ describe('prepare expected CubeSigner policy and guard activation', () => {
   it('names the supported pre-delivery step when a rendered ExternalSecret has not delivered its Secret', async () => {
     const withExternalSecret = () => `${signerManifest()}\n---\napiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata: {name: cubesigner-signer-session}\nspec: {target: {name: cubesigner-signer-session}}\n`
     await rejects(() => activate({readSecret() {}, render: withExternalSecret}), 'prepare-runtime-secrets')
+    fs.copyFileSync(path.join(root, 'values/cubesigner-signer-production.yaml'), path.join(root, 'values/custom-signer.yaml'))
+    await rejects(() => activate({chart: 'oci://charts.invalid/signer', chartVersion: '9.9.9', readSecret() {}, render: withExternalSecret, values: 'values/custom-signer.yaml'}),
+      '--chart oci://charts.invalid/signer --chart-version 9.9.9 --values values/custom-signer.yaml')
   })
   it('does not suggest pre-delivery for a Secret the chart does not reference', async () => {
     await rejects(() => activate({readSecret() {}}), 'does not exist')

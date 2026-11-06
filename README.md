@@ -1385,7 +1385,7 @@ Derive the expected-policy input from actual artifacts; external reviewed identi
 ```
 USAGE
   $ scrollsdk setup cubesigner-policy prepare-input --environment beta|gamma|prod --organization <value> --policy <value>
-    --program-identity-digest <value> --requires-live-evidence --resolver-base-url <value> --tests <value>
+    --program-identity-digest <value> --requires-live-evidence --resolver-base-url <value> [--tests <value>]
     --verifier-identity-digest <value> [--build-receipt <value>] [--dir <value>] [--json] [--live-evidence <value>]
     [--materials <value>] [--output <value>] [--wasm <value>]
 

@@ -59,10 +59,10 @@ function readClusterSecret(name: string, kubeContext: string | undefined, namesp
  * The signer chart creates these ExternalSecrets, so a fresh cluster has no
  * Secrets to compare until the supported pre-delivery step has run.
  */
-function requireDeliveredSecret(name: string, secret: any, documents: any[], options: {directory: string; kubeContext?: string; namespace?: string}): any {
+function requireDeliveredSecret(name: string, secret: any, documents: any[], options: {chart?: string; chartVersion?: string; directory: string; kubeContext?: string; namespace?: string; values?: string}): any {
   if (secret) return secret
   const rendered = documents.some(doc => doc?.kind === 'ExternalSecret' && (doc.spec?.target?.name ?? doc.metadata?.name) === name)
-  requirePolicy(!rendered, `Kubernetes Secret ${name} is not delivered yet. Run: scrollsdk setup cubesigner-policy prepare-runtime-secrets --dir ${options.directory} --kube-context ${options.kubeContext ?? '<context>'} --namespace ${options.namespace ?? 'default'}, then rerun verify-activation`)
+  requirePolicy(!rendered, `Kubernetes Secret ${name} is not delivered yet. Run: scrollsdk setup cubesigner-policy prepare-runtime-secrets --dir ${options.directory} --kube-context ${options.kubeContext ?? '<context>'} --namespace ${options.namespace ?? 'default'}${options.chart ? ` --chart ${options.chart}` : ''}${options.chartVersion ? ` --chart-version ${options.chartVersion}` : ''}${options.values ? ` --values ${options.values}` : ''}, then rerun verify-activation`)
   requirePolicy(false, `Kubernetes Secret ${name} does not exist; finish Secret delivery before installation`)
 }
 

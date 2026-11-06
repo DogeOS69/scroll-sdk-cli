@@ -112,11 +112,17 @@ scrollsdk setup signer-kit --dir .
 Use `--no-requires-live-evidence` **only when that is the reviewed release's
 requirement**. It is never a workaround for missing acceptance. If already
 available, supply `--live-evidence` to `prepare-input` with the reviewed report.
-The test report must contain its real `result`, `coreRevision`, `wasmSha256`,
-`protocolContextSha256` and compiled `bindings`. The latter bind the full
+`--tests` is optional. Without it, the release records no report, `prepare` returns
+`testEvidence: not-provided`, and later validation warns. The other release checks
+still apply: Wasm hash, verifier provenance, protocol context and any required live
+evidence.
+
+A report that is supplied must contain its real `result`, `coreRevision`,
+`wasmSha256` and `protocolContextSha256`, and all of them must match this build. It
+may also carry compiled `bindings`, which are then compared with the
 `proofArtifactBaseUrl`, `namespaceId`, `teePublicKey`, `bridgeKeyHash`,
-`bridgeProgramCommitment` and `aggregateVkIdentity`. Obtain this report from the
-release's real tests; neither CLI command creates passing test evidence.
+`bridgeProgramCommitment` and `aggregateVkIdentity` compiled here. Obtain a report
+from the release's real tests; neither CLI command creates passing test evidence.
 
 `prepare-input` derives the known fields from current artifacts. `prepare` checks
 all references and the remotely published immutable version and archives them

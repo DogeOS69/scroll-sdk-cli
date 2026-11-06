@@ -28,7 +28,7 @@ export default class PrepareInput extends Command {
     'program-identity-digest': Flags.string({description: 'Reviewed release program identity digest; not the VM executable file hash', required: true}),
     'requires-live-evidence': Flags.boolean({allowNo: true, description: 'Selected release requirement; disabling a required check is not a canary workaround', required: true}),
     'resolver-base-url': Flags.string({description: 'Exact compiled proof artifact root, including path', required: true}),
-    tests: Flags.string({description: 'Actual reviewed test report with result, source/Wasm/context and compiled bindings', required: true}),
+    tests: Flags.string({description: 'Actual reviewed test report with result, source, Wasm and context. Omit it when no report exists; the release then records none and validation warns'}),
     'verifier-identity-digest': Flags.string({required: true}),
     wasm: Flags.string({default: '.data/cubesigner-policy/cubesigner_verifier_policy.wasm'}),
   }
@@ -64,7 +64,7 @@ export default class PrepareInput extends Command {
             proofArtifactBaseUrl: base, teePublicKey: parsed.tee}, coreRevision: build.coreRevision, policyIdentifier: flags.policy, programIdentityDigest: flags['program-identity-digest'],
           proofResolverAuthority: new URL(base).origin, protocolContextSha256: ref('.data/protocol_context.json').sha256,
           requestContract: 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3', requiresLiveEvidence: flags['requires-live-evidence'],
-          sdkVersion: '0.4.281', tests: {...ref(flags.tests), result: read(flags.tests).result},
+          sdkVersion: '0.4.281', ...(flags.tests ? {tests: {...ref(flags.tests), result: read(flags.tests).result}} : {}),
           verifierIdentityDigest: flags['verifier-identity-digest'],
           verifierProvenance: {aggregateVerifyingKeySha256: ref(materials.software.artifacts.aggregateVerifyingKey.path).sha256, bridgeProgramSha256: ref(materials.bridge.artifacts.appExe.path).sha256},
           wasm: {...ref(flags.wasm), sizeBytes: fs.statSync(path.resolve(root, flags.wasm)).size}}}
