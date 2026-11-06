@@ -1,9 +1,17 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Inspect generated YAML values. */
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
+import fs from 'node:fs'
+import path from 'node:path'
+import {fileURLToPath} from 'node:url'
 
+import type {DeploymentSpec} from '../../src/types/deployment-spec.js'
+
+import {normalizeDeploymentSpec} from '../../src/utils/deployment-spec-generator.js'
 import {reconcileExternalSecretFiles, reconcileExternalSecretReferences} from '../../src/utils/external-secret-references.js'
-import {getExternalSecretTarget} from '../../src/utils/values-generator.js'
+import {generateValuesFiles, getSecretProviderConfig} from '../../src/utils/values-generator.js'
 
+const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const PREFIX = 'example-org/example-deployment'
 const target = {awsRegion: 'ap-southeast-2', prefix: PREFIX, provider: 'aws'}
 const secret = (key: string, secretRegion?: string) => ({data: [{remoteRef: {key, property: 'P'}, secretKey: 'P'}], provider: 'aws', ...(secretRegion && {secretRegion})})
@@ -60,11 +68,22 @@ describe('reconcileExternalSecretReferences', () => {
 
   it('uses the region the upload step writes Secrets to', () => {
     const spec: any = {infrastructure: {aws: {eksClusterName: 'cluster', region: 'ap-southeast-1', secretsPrefix: PREFIX}, provider: 'aws'}, metadata: {name: 'example'}}
-    expect(getExternalSecretTarget(spec).awsRegion).to.equal('ap-southeast-1')
+    expect(getSecretProviderConfig(spec).awsRegion).to.equal('ap-southeast-1')
     spec.preparation = {secretUpload: {awsRegion: 'ap-southeast-2', provider: 'aws'}}
-    expect(getExternalSecretTarget(spec).awsRegion).to.equal('ap-southeast-2')
+    expect(getSecretProviderConfig(spec).awsRegion).to.equal('ap-southeast-2')
     spec.preparation = {secretUpload: {provider: 'aws'}}
-    expect(getExternalSecretTarget(spec).awsRegion).to.equal('ap-southeast-1')
+    expect(getSecretProviderConfig(spec).awsRegion).to.equal('ap-southeast-1')
+  })
+
+  it('generates every values file with the upload region', () => {
+    const spec = normalizeDeploymentSpec(yaml.load(fs.readFileSync(path.join(cliRoot, 'test/fixtures/deployment-spec/minimal.yaml'), 'utf8')
+      .replaceAll('$ENV:OWNER_ADDRESS', '0x0000000000000000000000000000000000000001')
+      .replaceAll(/\$ENV:[A-Z_a-z]\w*/g, 'NONFUNCTIONAL_TEST_PLACEHOLDER')) as DeploymentSpec)
+    spec.infrastructure.aws!.region = 'ap-southeast-1'
+    ;(spec as any).preparation = {bridge: {image: 'fixture', mode: 'helper'}, secretUpload: {awsRegion: 'ap-southeast-2', provider: 'aws'}}
+    const regions = Object.values(generateValuesFiles(spec)).flatMap(content => Object.values((yaml.load(content) as any)?.externalSecrets ?? {}).map((secret: any) => secret.secretRegion))
+    expect(regions).to.include('ap-southeast-2')
+    expect(regions).to.not.include('ap-southeast-1')
   })
 
   it('leaves other providers alone', () => {
