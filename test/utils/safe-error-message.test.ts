@@ -1,9 +1,42 @@
+import * as toml from '@iarna/toml'
 import {expect} from 'chai'
+import * as yaml from 'js-yaml'
 
 import {safeErrorMessage} from '../../src/utils/safe-error-message.js'
 
 describe('safeErrorMessage', () => {
   const MARKER = 'NONFUNCTIONAL_PRIVATE_MARKER'
+
+  const parsers: Array<[string, () => unknown]> = [
+    ['TOML', () => toml.parse(`a = 1\napi_key = ${MARKER}\n`)],
+    ['YAML', () => yaml.load(`a: 1\npassword: "${MARKER}" oops\n`)],
+  ]
+  for (const [name, parse] of parsers) {
+    it(`omits the source line ${name} parse errors quote`, () => {
+      let failure: unknown
+      try {parse()} catch (error) {failure = error}
+      expect((failure as Error).message, 'the parser must quote the input for this test to mean anything').to.include(MARKER)
+      expect(safeErrorMessage(failure)).to.equal('input could not be parsed (contents omitted)')
+    })
+  }
+
+  for (const [input, expected] of [
+    [`postgres://admin:${MARKER}/abc@db.internal:5432/app`, 'postgres://db.internal:5432'],
+    [`postgres://admin:${MARKER}@pass@db.internal:5432/app`, 'postgres://db.internal:5432'],
+    [`postgres://${MARKER}@db.internal/app?sslmode=require`, 'postgres://db.internal'],
+    [`db admin:${MARKER}@host:5432`, 'db [redacted]@host:5432'],
+    [`dial failed host=db password=${MARKER}`, 'dial failed host=db password=[redacted]'],
+    [`bad api_key: ${MARKER}`, 'bad api_key: [redacted]'],
+  ]) {
+    it(`removes the credentials from ${input.replace(MARKER, '<marker>')}`, () => {
+      expect(safeErrorMessage(new Error(input))).to.equal(expected)
+    })
+  }
+
+  it('keeps Kubernetes wording that names a Secret without a value', () => {
+    const message = 'Error from server (NotFound): secrets "signer-env" not found'
+    expect(safeErrorMessage(new Error(message))).to.equal(message)
+  })
 
   it('keeps an ordinary validation message readable', () => {
     expect(safeErrorMessage(new Error('tested build bindings must be an object'))).to.equal('tested build bindings must be an object')

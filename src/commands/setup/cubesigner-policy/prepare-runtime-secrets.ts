@@ -3,6 +3,7 @@ import {Command, Flags} from '@oclif/core'
 import {prepareCubesignerRuntimeSecrets} from '../../../utils/cubesigner-runtime-secrets.js'
 import {DEFAULT_DEPLOYMENT} from '../../../utils/deployment-paths.js'
 import {JsonOutputContext} from '../../../utils/json-output.js'
+import {safeErrorMessage} from '../../../utils/safe-error-message.js'
 
 export default class PrepareRuntimeSecrets extends Command {
   static description = 'Prepare only CubeSigner SecretStore/ExternalSecret objects and wait for delivery; does not start a signer or authorize activation'
@@ -23,7 +24,7 @@ export default class PrepareRuntimeSecrets extends Command {
       output.success(await prepareCubesignerRuntimeSecrets({chart: flags.chart, chartVersion: flags['chart-version'], directory: flags.dir,
         kubeContext: flags['kube-context'], namespace: flags.namespace, values: flags.values}))
     } catch (error) {
-      output.error('E744_CUBESIGNER_ACTIVATION_PENDING', `Runtime Secret delivery failed: ${error instanceof Error ? error.message : 'unknown error'}. Activation remains unverified.`, 'VALIDATION', true)
+      output.error('E744_CUBESIGNER_ACTIVATION_PENDING', `Runtime Secret delivery failed: ${safeErrorMessage(error) ?? 'unknown error'}. Activation remains unverified.`, 'VALIDATION', true)
     }
   }
 }
