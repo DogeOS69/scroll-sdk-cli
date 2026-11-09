@@ -78,15 +78,19 @@ export function resolveSdkRevision(sdkDirectory: string, override?: string): str
 }
 
 /** Reject chart pins that silently ignore fleet initialization or endpoint binding. */
+const chartBelow = (version: RegExpMatchArray, patch: number) => Number(version[1]) === 0 && (Number(version[2]) < 1 || Number(version[2]) === 1 && Number(version[3]) < patch)
+
 export function assertCapacityChartVersions(makefile: string, spec: DeploymentSpec): void {
   if (!spec.capacityManager) return
-  const charts = ['CAPACITY_MANAGER', ...(spec.capacityManager.connection?.mode === 'existing-alb' ? ['DSTACK_CONTROLLER'] : [])]
+  const privateTls = Boolean(spec.dstackController?.privateTls)
+  const charts = ['CAPACITY_MANAGER', ...(spec.capacityManager.connection?.mode === 'existing-alb' || privateTls ? ['DSTACK_CONTROLLER'] : [])]
   for (const chart of charts) {
     const pin = makefile.match(new RegExp(`^${chart}_CHART_VERSION\\s*(?:\\?=|:=|=)\\s*([^\\s#]+)`, 'm'))?.[1]
     // Custom installation flows without Makefile pins must select compatible charts.
     if (!pin) continue
     const version = pin.match(/^(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/)
-    if (!version || Number(version[1]) === 0 && (Number(version[2]) < 1 || Number(version[2]) === 1 && Number(version[3]) < 6)) throw new Error(`${chart} requires chart >= 0.1.6 for fleet initialization/private endpoint binding; select a compatible templates.sdkRevision and chart pin`)
+    if (!version || chartBelow(version, 6)) throw new Error(`${chart} requires chart >= 0.1.6 for fleet initialization/private endpoint binding; select a compatible templates.sdkRevision and chart pin`)
+    if (privateTls && chartBelow(version, chart === 'CAPACITY_MANAGER' ? 8 : 7)) throw new Error('dstackController.privateTls requires dstack-controller chart >= 0.1.7 and capacity-manager chart >= 0.1.8; select a compatible templates.sdkRevision and chart pins')
   }
 }
 

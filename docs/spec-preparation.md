@@ -1358,6 +1358,43 @@ it and archiving its local capacity plan before preparing its replacement. This
 feature does not migrate the existing devnet proxy, install resources, modify DNS,
 or allocate workers during preparation.
 
+## In-cluster dstack HTTPS with a private CA
+
+`dstackController.privateTls` serves the controller API over HTTPS inside the
+cluster, with no ALB, public hostname or ACM certificate. It needs
+dstack-controller chart **0.1.7+**, capacity-manager chart **0.1.8+**, a manager
+image with dogeos-core #1786 (`--dstack-ca-file`), and cert-manager in the
+cluster.
+
+```yaml
+dstackController:
+  privateTls: {} # Optional: port (default 8443), clusterDomain (default cluster.local)
+```
+
+The generated controller values set the chart's `tls` block. cert-manager issues a
+private CA and a certificate for the Service names, an nginx sidecar terminates TLS,
+and dstack listens only on `127.0.0.1`. Port 3000 is no longer reachable from the
+Pod network. `privateTls` is mutually exclusive with `dstackController.ingress`,
+`dstackController.internalTls` and `capacityManager.connection`.
+
+Preparing capacity-manager sets `manager.dstack.serverUrl` to
+`https://<controller>.<namespace>.svc:<port>`. It reads `ca.crt` from the
+controller's `<controller>-tls` Secret with `infrastructure.kubeContext`, and writes
+the certificate into `manager.dstack.caBundle`, where the values file records it for
+review. Only `ca.crt` is taken from the output; the key is never written. Until
+cert-manager has issued that Secret, the capacity-manager step waits for input and
+`prep-charts` leaves the capacity-manager values unchanged with a warning, so the
+new controller values can still be installed. The order is therefore:
+
+1. Render, then install the controller with `make install-dstack-controller`.
+2. After cert-manager issues the certificate, rerun the same render command.
+3. Install capacity-manager.
+
+Switching an existing manager to or from `privateTls` changes its server URL and
+closes the controller's port 3000. Drain the manager and finish cleanup through
+the old URL first, then install the controller and manager in the same window.
+Renewals of the server certificate and the CA need no rerun: the CA keeps its key.
+
 ## TSO ALB subnet discovery
 
 Set `preparation.tsoAlbEdge.enabled: true` to reconcile the TSO edge peers during

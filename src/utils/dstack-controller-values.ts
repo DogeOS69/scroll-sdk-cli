@@ -3,6 +3,7 @@ import * as yaml from 'js-yaml'
 import type {DstackControllerConfig} from '../types/dstack-controller.js'
 
 import {dstackInternalIngress, validateDstackInternalTls} from './dstack-internal-tls.js'
+import {dstackPrivateTlsValues, validateDstackPrivateTls} from './dstack-private-tls.js'
 import {reconcileDeploymentIngresses} from './public-service-ingress.js'
 
 export const DSTACK_MONITORING_VALUES_FILE = 'scroll-monitor-dstack.yaml'
@@ -172,7 +173,7 @@ export function validateDstackControllerConfig(input: unknown): void {
   const root = 'dstackController'
   const config = mapping(input, root, [
     'enabled', 'auth', 'credentialSecrets', 'database', 'defaultCredentialsEnabled', 'awsWorkloadIdentity', 'fullnameOverride', 'image',
-    'ingress', 'internalTls', 'monitoring', 'nodeSelector', 'persistence', 'podAnnotations', 'replicaCount',
+    'ingress', 'internalTls', 'monitoring', 'nodeSelector', 'persistence', 'podAnnotations', 'privateTls', 'replicaCount',
     'resources', 'serverConfig', 'serviceAccount', 'tolerations',
   ])
   if (config.enabled !== undefined) bool(config.enabled, `${root}.enabled`)
@@ -214,6 +215,12 @@ export function validateDstackControllerConfig(input: unknown): void {
     if (config.ingress !== undefined) throw new Error('Choose internalTls or operator-managed ingress, not both')
   }
 
+  if (config.privateTls !== undefined) {
+    validateDstackPrivateTls(config.privateTls)
+    // The chart keeps dstack off the Pod network, so no ingress can reach it.
+    if (config.ingress !== undefined || config.internalTls !== undefined) throw new Error('Choose privateTls, internalTls or operator-managed ingress, not more than one')
+  }
+
   validateTolerations(config, root)
 }
 
@@ -225,6 +232,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
   delete overrides.enabled
   delete overrides.monitoring
   delete overrides.internalTls
+  delete overrides.privateTls
   delete overrides.awsWorkloadIdentity
   const values = {
     ...overrides,
@@ -255,6 +263,7 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
     },
     serverConfig: {existingSecret: 'dstack-controller-config', key: 'config.yml', ...config.serverConfig},
     serviceAccount: {automountServiceAccountToken: false, create: true, ...config.serviceAccount},
+    ...(config.privateTls ? {tls: dstackPrivateTlsValues(config.privateTls)} : {}),
   }
   reconcileDeploymentIngresses(values, 'dstack-controller', false)
   return '# Generated from dstackController; edit the source configuration, then regenerate.\n'
