@@ -41,6 +41,7 @@ decision about which keys and resources to reuse.
 | `signing-key.yaml` | One signing KMS key and alias, retained on deletion | Operator-selected alias name |
 | `application-roles.yaml` | Six application roles and Pod Identity associations (optional IRSA); fixed two-sequencer example | Five signing key ARNs, two bucket names/prefixes, EKS cluster |
 | `pod-identity-agent.yaml` | One cluster-level EKS Pod Identity Agent add-on | Existing cluster and explicitly selected compatible add-on version |
+| `vpc-cni.yaml` | The cluster's Amazon VPC CNI add-on with NetworkPolicy enforcement, retained on deletion | Existing cluster and its add-on version; usually imported, see [NetworkPolicy enforcement](#networkpolicy-enforcement) |
 | `secrets-reader-policy.yaml` | One deployment-scoped read policy attached to an existing ESO role; preserves trust/other grants | Existing role name, Secret prefix, optional Secret encryption key |
 | `secrets-reader-role.yaml` | One deployment-scoped External Secrets IRSA reader role | Secret prefix/region, OIDC provider, optional Secret encryption key |
 | `dstack-role.yaml` | One dstack controller role; **zero GPU instances** | EKS cluster, VPC, two or three eligible private worker subnets, optional worker instance profile/role |
@@ -55,7 +56,8 @@ Buckets are always supplied by the operator; their policies belong to the bucket
 owner, such as the environment's adopted storage stack. Do not give two stacks
 ownership of the same bucket policy. The templates do not create EKS, VPCs, NAT gateways, databases, certificates, OIDC
 providers, Secret values, application Kubernetes objects, or GPU workers. The
-optional Pod Identity Agent add-on runs a DaemonSet on existing cluster nodes.
+optional Pod Identity Agent add-on runs a DaemonSet on existing cluster nodes;
+`vpc-cni.yaml` manages the cluster's existing VPC CNI add-on.
 The other dependencies are existing
 platform resources or belong to later runtime stages. A dstack fleet is managed
 by dstack, not represented as a static EC2 instance in this pack.
@@ -109,6 +111,58 @@ with `aws eks describe-addon-versions` for the cluster version. It uses
 `eks-auth:AssumeRoleForPodIdentity` and connectivity to EKS Auth. See
 [AWS Agent setup](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-agent-setup.html)
 and [trust policy conditions](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-role.html).
+
+## NetworkPolicy enforcement
+
+The CLI renders Kubernetes NetworkPolicies (TSO, Withdrawal Processor and other
+services), but on EKS they are enforced only when the Amazon VPC CNI network
+policy controller and node agent are on. Without them a cluster accepts the
+policies and ignores them. `vpc-cni.yaml` owns that switch:
+`EnableNetworkPolicy=true` sets the add-on configuration
+`{"enableNetworkPolicy":"true"}`.
+
+Every EKS cluster already runs the VPC CNI. Do not create a second owner:
+
+- **Existing managed add-on** (the usual case; `aws eks describe-addon
+  --addon-name vpc-cni` succeeds): import it, then change the switch.
+  1. In a private copy of the template, remove `Outputs` (an IMPORT change set
+     may only import resources) and set `AddonVersion` to the installed version.
+     If the add-on already has `configurationValues`, add those keys to
+     `ConfigurationValues` so they are kept.
+  2. IMPORT change set with `EnableNetworkPolicy` matching the current value
+     (`false` when unset). It imports one resource and changes nothing:
+     ```bash
+     aws cloudformation create-change-set \
+       --stack-name "$INFRA_STACK" --change-set-name "$INFRA_CHANGESET" \
+       --change-set-type IMPORT --template-body "file://$INFRA_DIR/vpc-cni.yaml" \
+       --parameters "file://$INFRA_DIR/vpc-cni.json" \
+       --resources-to-import '[{"ResourceType":"AWS::EKS::Addon","LogicalResourceId":"VpcCni","ResourceIdentifier":{"ClusterName":"your-cluster","AddonName":"vpc-cni"}}]'
+     ```
+  3. UPDATE change set with the unmodified template and `EnableNetworkPolicy=true`.
+     Expect one `Modify` of `VpcCni`, no replacement. This also adds `Outputs`
+     and the tags.
+- **Self-managed VPC CNI** (no managed add-on): migrate to the managed add-on
+  first, following the AWS guide; this template uses `ResolveConflicts: NONE`
+  and does not overwrite self-managed fields.
+
+Before setting `true`:
+
+- Review every NetworkPolicy in the cluster (`kubectl get networkpolicy -A`).
+  Each one starts denying traffic it does not allow, including policies
+  installed long ago. Check that monitoring, ingress controllers, load balancer
+  health checks and DNS are allowed where a policy selects the Pod.
+- Use a supported version: VPC CNI v1.14 or later on a supported Kubernetes
+  version (see the AWS guide).
+- Pod networking permissions (`AmazonEKS_CNI_Policy`) stay where they are now,
+  normally on the node role. The template does not set a ServiceAccount role.
+
+Executing the UPDATE rolls the `aws-node` DaemonSet one node at a time and starts
+enforcement. Afterwards declare `infrastructure.networkPolicy.provider:
+aws-vpc-cni` in the deployment spec and run
+`scrollsdk check network-policy --spec <spec> --phase infrastructure` (then
+`--phase workloads` after install). Rollback: UPDATE with
+`EnableNetworkPolicy=false`. Deleting the stack retains the add-on. See
+[EKS network policies](https://docs.aws.amazon.com/eks/latest/userguide/cni-network-policy.html).
 
 ## Prepare inputs
 

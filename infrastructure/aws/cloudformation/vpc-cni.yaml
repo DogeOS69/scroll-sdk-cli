@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Amazon VPC CNI add-on with Kubernetes NetworkPolicy enforcement for an existing cluster. Import an existing vpc-cni add-on instead of creating a second owner; retained on deletion.
+Parameters:
+  Environment:
+    Type: String
+    AllowedPattern: '[a-z][a-z0-9-]{2,47}'
+  ResourceClassification:
+    Type: String
+    Default: production
+    AllowedValues: [production, nonproduction-deletable]
+  ClusterName:
+    Type: String
+    AllowedPattern: '[A-Za-z0-9][A-Za-z0-9_-]*'
+  AddonVersion:
+    Type: String
+    Description: Explicit version compatible with the existing cluster Kubernetes version; for an import, the version currently installed.
+    AllowedPattern: 'v[0-9]+\.[0-9]+\.[0-9]+-eksbuild\.[0-9]+'
+  EnableNetworkPolicy:
+    Type: String
+    Description: Starts the network policy controller and node agent, which enforce every NetworkPolicy in the cluster. Review existing policies before changing to true.
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+Resources:
+  VpcCni:
+    Type: AWS::EKS::Addon
+    # Removing the add-on would remove Pod networking from every node.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ClusterName:
+        Ref: ClusterName
+      AddonName: vpc-cni
+      AddonVersion:
+        Ref: AddonVersion
+      ResolveConflicts: NONE
+      ConfigurationValues:
+        Fn::Sub: '{"enableNetworkPolicy":"${EnableNetworkPolicy}"}'
+      Tags:
+      - Key: ManagedBy
+        Value: dogeos-cloudformation
+      - Key: Environment
+        Value:
+          Ref: Environment
+      - Key: ResourceClassification
+        Value:
+          Ref: ResourceClassification
+      - Key: Purpose
+        Value: vpc-cni
+      - Key: Name
+        Value:
+          Fn::Sub: ${Environment}-vpc-cni
+Outputs:
+  AddonArn:
+    Value:
+      Fn::GetAtt: [VpcCni, Arn]

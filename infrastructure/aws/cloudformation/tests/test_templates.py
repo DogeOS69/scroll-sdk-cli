@@ -161,6 +161,23 @@ class TemplateContracts(unittest.TestCase):
         self.assertEqual(addon["Properties"]["ResolveConflicts"], "NONE")
         self.assertNotIn("ServiceAccountRoleArn", addon["Properties"])
 
+    def test_vpc_cni_enables_network_policy_and_is_retained(self):
+        template = load("vpc-cni")
+        self.assertEqual(len(template["Resources"]), 1)
+        addon = template["Resources"]["VpcCni"]
+        self.assertEqual(addon["Type"], "AWS::EKS::Addon")
+        self.assertEqual((addon["DeletionPolicy"], addon["UpdateReplacePolicy"]), ("Retain", "Retain"))
+        props = addon["Properties"]
+        self.assertEqual(props["AddonName"], "vpc-cni")
+        self.assertEqual(props["ResolveConflicts"], "NONE")
+        self.assertNotIn("ServiceAccountRoleArn", props)
+        self.assertEqual(template["Parameters"]["EnableNetworkPolicy"]["Default"], "true")
+        for value in ("true", "false"):
+            rendered = props["ConfigurationValues"]["Fn::Sub"].replace("${EnableNetworkPolicy}", value)
+            self.assertEqual(json.loads(rendered), {"enableNetworkPolicy": value})
+        with self.assertRaises(ValueError):
+            CHECK.validate(template, filled("vpc-cni", EnableNetworkPolicy="yes"))
+
     def test_application_grants_are_key_and_prefix_scoped(self):
         template, params, conditions = resolved("application-roles")
         policies = {key: render(item["Properties"]["Policies"][0]["PolicyDocument"], params, conditions)["Statement"] for key, item in template["Resources"].items() if item["Type"] == "AWS::IAM::Role"}
