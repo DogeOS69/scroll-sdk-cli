@@ -2027,7 +2027,7 @@ describe('deployment-spec-generator', () => {
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_TRANSITIONS__ADVANCE_L2).to.equal('true');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_TRANSITIONS__ROTATE_KEY).to.equal('true');
       expect(withdrawalRuntimeEnv.DOGEOS_WITHDRAWAL_TRANSITIONS__ROTATE_SEQUENCER_SIGNER).to.equal('false');
-      expect(Object.keys(withdrawalRuntimeEnv).filter(key => /_V2$/.test(key))).to.deep.equal([]);
+      expect(Object.keys(withdrawalRuntimeEnv).filter(key => key.endsWith('_V2'))).to.deep.equal([]);
       expect(withdrawalRuntimeEnv).not.to.have.property('DOGEOS_WITHDRAWAL_COORDINATOR_POLL_INTERVAL_SECS');
       expect(Object.fromEntries(Object.entries(withdrawalRuntimeEnv).filter(([key]) => key.startsWith('DOGEOS_WITHDRAWAL_PROOF_')))).to.deep.equal({});
       expect(withdrawalValuesForRuntime.withdrawalProof.enabled).to.equal(false);
