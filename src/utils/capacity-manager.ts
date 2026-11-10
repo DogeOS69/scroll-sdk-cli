@@ -197,28 +197,40 @@ export function buildCapacityManagerValues(spec: DeploymentSpec, worker: ProverW
 /** The controller certificate does not exist yet; install dstack-controller first. */
 export class DstackCaPending extends AwaitingInput {}
 
-function dstackClusterCaBundle(spec: DeploymentSpec, name: string, namespace: string, readCa: DstackCaReader): string {
+/**
+ * Reads the controller CA from the cluster. With `recorded` (prep-charts only, same server URL), a missing
+ * Secret or an unreachable cluster keeps that CA, so the rest of the manager values are still regenerated.
+ */
+function dstackClusterCaBundle(spec: DeploymentSpec, name: string, namespace: string, readCa: DstackCaReader, recorded?: string): {bundle: string; warning?: string} {
   const {kubeContext} = specKubernetesTarget(spec)
   if (!kubeContext) throw new Error('dstackController.privateTls requires infrastructure.kubeContext to read the controller CA')
-  const pem = readCa({kubeContext, namespace, secret: `${name}-tls`})
-  if (!pem) throw new DstackCaPending({message: `Install dstack-controller with privateTls (make install-dstack-controller) and wait for cert-manager to issue the ${name}-tls Secret, then rerun the same command`})
-  return dstackCaBundle(pem)
+  const secret = `${name}-tls`
+  const keep = (bundle: string, reason: string) => ({bundle: dstackCaBundle(bundle), warning: `${reason}; kept the dstack CA already recorded in the capacity-manager values`})
+  let pem: string | undefined
+  try {pem = readCa({kubeContext, namespace, secret})} catch (error) {
+    if (error instanceof DstackCaUnavailable && recorded) return keep(recorded, error.message)
+    throw error
+  }
+
+  if (pem) return {bundle: dstackCaBundle(pem)}
+  if (recorded) return keep(recorded, `The ${secret} Secret was not found in namespace ${namespace}`)
+  throw new DstackCaPending({message: `Install dstack-controller with privateTls (make install-dstack-controller) and wait for cert-manager to issue the ${secret} Secret in namespace ${namespace}, then rerun the same command`})
 }
 
 export function prepareCapacityManager(root: string, readContract = validateProofDeploymentContract, readCa: DstackCaReader = readDstackClusterCa): {namespace: string; project: string; valuesFile: string} {
   const transaction = GenerationTransaction.begin(root, CAPACITY_MANAGER_STATE_PATHS)
   try {
-    const result = prepareCapacityManagerInDirectory(transaction.stagingRoot, readContract, readCa)
-    const valuesFile = transaction.toOriginalPath(result.valuesFile)
+    const {namespace, project, valuesFile} = prepareCapacityManagerInDirectory(transaction.stagingRoot, readContract, readCa)
+    const original = transaction.toOriginalPath(valuesFile)
     transaction.commit()
-    return {...result, valuesFile}
+    return {namespace, project, valuesFile: original}
   } catch (error) {
     transaction.rollback()
     throw error
   }
 }
 
-function prepareCapacityManagerInDirectory(root: string, readContract: typeof validateProofDeploymentContract, readCa: DstackCaReader): {namespace: string; project: string; valuesFile: string} {
+function prepareCapacityManagerInDirectory(root: string, readContract: typeof validateProofDeploymentContract, readCa: DstackCaReader, keepRecordedCa = false): {namespace: string; project: string; valuesFile: string; warning?: string} {
   const spec = capacitySpec(root)
   resolveCapacityManager(spec)
   assertSdkWorkersRetired(root)
@@ -278,7 +290,9 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   fs.writeFileSync(wpFile, yaml.dump(wp, {lineWidth: -1, noRefs: true}))
   // Read after the chart checks and the WP binding, before the manager's own files.
   // An empty bundle keeps the public roots and clears a stale CA.
-  projected.manager.dstack.caBundle = privateTls ? dstackClusterCaBundle(spec, dstackName, dstackNamespace, readCa) : ''
+  const recordedCa = keepRecordedCa && existing.manager?.dstack?.serverUrl === projected.manager.dstack.serverUrl ? existing.manager?.dstack?.caBundle || undefined : undefined
+  const ca = privateTls ? dstackClusterCaBundle(spec, dstackName, dstackNamespace, readCa, recordedCa) : {bundle: ''}
+  projected.manager.dstack.caBundle = ca.bundle
 
   const content = mergeBootstrapValues(template, yaml.dump(projected))
   const values = yaml.load(content) as any
@@ -309,14 +323,15 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
     return {path: relative}
   })
   writeJson(planFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace, serverUrl: projected.manager.dstack.serverUrl}, fleets: {action: fleetIntent.action, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', privateDns, project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, ...(spec.capacityManager!.fallback ? {fallbackProvider: spec.capacityManager!.fallback.provider} : {}), provider: spec.capacityManager!.provider, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerCredentialMaster: projected.workerCredentialMaster})
-  return {namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, valuesFile: file}
+  return {namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, valuesFile: file, warning: ca.warning}
 }
 
 /**
  * Called inside prep-charts' filesystem transaction, after proof reconciliation. Returns a warning when
  * the private dstack CA is not issued or cannot be read: failing here would roll back the controller
- * values that have to be installed first. WP is still bound to the manager; the manager's files are
- * kept, and the separate capacity-manager step still requires the CA.
+ * values that have to be installed first. A CA already recorded for the same server URL is kept and the
+ * rest is regenerated. Without one, only WP is bound and the manager's files are kept. The separate
+ * capacity-manager step always reads the CA from the cluster.
  */
 export function prepareCapacityManagerIfSelected(root: string, readCa: DstackCaReader = readDstackClusterCa, readContract = validateProofDeploymentContract): string | undefined {
   const intent = localPath(root, '.scrollsdk/intent.json')
@@ -326,7 +341,10 @@ export function prepareCapacityManagerIfSelected(root: string, readCa: DstackCaR
   // Initial proof rendering precedes publication. Final rendering must prepare it.
   if (!fs.existsSync(localPath(root, DEFAULT_PROOF_DEPLOYMENT_CONTRACT))) return
   if (!readProofDeploymentContract(root).contract.inputs?.publication) return
-  try {prepareCapacityManagerInDirectory(root, readContract, readCa)} catch (error) {
+  try {
+    const {warning} = prepareCapacityManagerInDirectory(root, readContract, readCa, true)
+    if (warning) return `capacity-manager values were regenerated: ${warning}`
+  } catch (error) {
     if (error instanceof DstackCaPending || error instanceof DstackCaUnavailable) return `capacity-manager values were not updated: ${error.message}`
     throw error
   }

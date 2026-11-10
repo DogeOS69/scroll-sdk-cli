@@ -41,11 +41,12 @@ export type DstackCaReader = (target: DstackCaTarget) => string | undefined
 /** Kubernetes could not be asked, as opposed to a Secret that does not exist yet. */
 export class DstackCaUnavailable extends Error {}
 
-/** Read only ca.crt from the controller's certificate Secret. The output never includes the key. */
+/** Read ca.crt from the controller's certificate Secret. kubectl fetches the Secret but prints only ca.crt; the key is never returned or written. */
 export const readDstackClusterCa: DstackCaReader = ({kubeContext, namespace, secret}) => {
   let encoded: string
   try {
-    encoded = capacityExec(['--context', kubeContext, '--namespace', namespace, '--request-timeout', '30s', 'get', 'secret', secret, '--ignore-not-found', '--output', 'jsonpath={.data.ca\\.crt}']).trim()
+    // --request-timeout bounds API calls; the process timeout also bounds credential plugins.
+    encoded = capacityExec(['--context', kubeContext, '--namespace', namespace, '--request-timeout', '30s', 'get', 'secret', secret, '--ignore-not-found', '--output', 'jsonpath={.data.ca\\.crt}'], undefined, 60_000).trim()
   } catch {
     throw new DstackCaUnavailable('Cannot read the dstack controller CA from Kubernetes; check the kube context and Secret access (remote details omitted)')
   }

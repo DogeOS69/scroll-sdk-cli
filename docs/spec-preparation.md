@@ -1381,13 +1381,15 @@ Preparing capacity-manager sets `manager.dstack.serverUrl` to
 `https://<controller>.<namespace>.svc:<port>`. It reads `ca.crt` from the
 controller's `<controller>-tls` Secret with `infrastructure.kubeContext`, and writes
 the certificate into `manager.dstack.caBundle`, where the values file records it for
-review. Only `ca.crt` is taken from the output; the key is never written. Until
-cert-manager has issued that Secret, the capacity-manager step waits for input.
-`prep-charts` then, and also when Kubernetes cannot be reached, keeps the
-capacity-manager values with a warning and still admits the manager in the WP
-NetworkPolicy, so the new controller values can be installed. The
-capacity-manager step itself fails while Kubernetes cannot be reached. The order
-is therefore:
+review. kubectl fetches that Secret but only `ca.crt` is printed; the key is never
+written. The capacity-manager step always reads the CA from the cluster: it waits
+for input until cert-manager has issued the Secret, and fails while Kubernetes
+cannot be reached. `prep-charts` does not fail in either case. If the values
+already record a CA for the same server URL, it keeps that CA, regenerates the
+rest of the capacity-manager values and warns. Otherwise it keeps the
+capacity-manager values unchanged with a warning, but still admits the manager in
+the WP NetworkPolicy, so the new controller values can be installed. The order is
+therefore:
 
 1. Render, then install the controller with `make install-dstack-controller`.
 2. After cert-manager issues the certificate, rerun the same render command.
@@ -1398,10 +1400,14 @@ closes the controller's port 3000. Drain the manager and finish cleanup through
 the old URL first, then install the controller and manager in the same window.
 Removing `privateTls` requires selecting `capacityManager.connection` or
 `internalTls`; preparation refuses to keep the closed Service URL.
-Server certificate renewals need no rerun. The CA keeps its key when cert-manager
-renews it (after about two thirds of 10 years), but rerun the render before the
-original CA certificate expires: OpenSSL-based clients, such as the
-initialization Job, reject an expired CA.
+Certificates are issued once per controller installation and then renewed by
+cert-manager. Server certificate renewals need no rerun. The CA keeps its key when
+cert-manager renews it (after about two thirds of 10 years), but rerun the render
+before the original CA certificate expires: OpenSSL-based clients, such as the
+initialization Job, reject an expired CA. Replacing the CA, for example by
+deleting the controller's `<controller>-ca` Secret, makes cert-manager issue a new
+CA and server certificate at once. The manager fails TLS until you rerun the
+render and reinstall it, so plan a short maintenance window.
 
 ## TSO ALB subnet discovery
 

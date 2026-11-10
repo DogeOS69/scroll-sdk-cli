@@ -27,7 +27,10 @@ function certificates(): {ca: string; leaf: string} {
 }
 
 describe('dstack in-cluster HTTPS with a private CA', () => {
-  const {ca, leaf} = certificates()
+  // In a hook, so a missing openssl fails only this suite instead of loading the whole run.
+  let ca: string
+  let leaf: string
+  before(() => {({ca, leaf} = certificates())})
 
   it('generates chart TLS values that keep dstack off ingress', () => {
     const values = yaml.load(generateDstackControllerValues({privateTls: {}})!) as any
@@ -113,7 +116,7 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       save('capacity-manager', {fullnameOverride: 'capacity-manager', manager: {dstack: {serverUrl: 'https://dstack.example.invalid'}}})
       save('proof-coordinator', {persistence: {secrets: {name: 'deployment-proof-secrets'}}})
       save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}, privateTls: {}})!))
-      // As in the SDK template: the manager is admitted only when it is prepared.
+      // As in the SDK template, which leaves the manager peer empty until capacity-manager preparation binds it.
       const peer = (name: string) => [{podSelector: {matchLabels: {'app.kubernetes.io/name': name}}}]
       save('withdrawal-processor', {networkPolicy: {allowFrom: {capacityManager: [], proofCoordinator: peer('proof-coordinator'), tso: peer('tso-service')}, enabled: true}, service: {main: {ports: {'proof-work': {enabled: true}}}}})
       const wpPath = path.join(root, 'values/withdrawal-processor-production.yaml')
@@ -128,7 +131,7 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       let pending: unknown
       try {prepareCapacityManager(root, () => contract, (target): string | undefined => {reads.push(target); return undefined})} catch (error) {pending = error}
       expect(pending).to.be.instanceOf(DstackCaPending).and.instanceOf(AwaitingInput)
-      expect((pending as Error).message).to.include('make install-dstack-controller')
+      expect((pending as Error).message).to.include('make install-dstack-controller').and.include('in namespace chain')
       expect(fs.readFileSync(managerPath, 'utf8')).to.equal(original)
       expect(finalWp).to.throw('networkPolicy.allowFrom.capacityManager')
       expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
@@ -153,6 +156,24 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       const plan = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8'))
       expect(plan.dstack.serverUrl).to.equal('https://dstack-controller.chain.svc:8443')
       expect(plan.privateDns).to.equal(true)
+
+      // Once a CA is recorded, prep-charts keeps it when the cluster cannot confirm it, and still regenerates
+      // everything else. The capacity-manager step itself keeps requiring a fresh read.
+      const stale = yaml.load(fs.readFileSync(managerPath, 'utf8')) as any
+      const {workerImage} = stale.manager
+      fs.writeFileSync(managerPath, yaml.dump({...stale, manager: {...stale.manager, workerImage: 'example.invalid/stale@sha256:0'}}))
+      expect(prepareCapacityManagerIfSelected(root, unreachable, () => contract)).to.include('regenerated').and.include('kept the dstack CA already recorded')
+      const regenerated = yaml.load(fs.readFileSync(managerPath, 'utf8')) as any
+      expect(regenerated.manager.workerImage).to.equal(workerImage)
+      expect(regenerated.manager.dstack.caBundle).to.equal(ca.trim() + '\n')
+      expect(prepareCapacityManagerIfSelected(root, (): string | undefined => undefined, () => contract)).to.include('was not found in namespace chain')
+      expect(() => prepareCapacityManager(root, () => contract, unreachable)).to.throw(DstackCaUnavailable)
+      // A recorded CA belongs to its server URL; another port defers instead of reusing it.
+      writeJson(path.join(root, '.scrollsdk/intent.json'), {...input.spec, dstackController: {enabled: true, privateTls: {port: 9443}}})
+      save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}, privateTls: {port: 9443}})!))
+      expect(prepareCapacityManagerIfSelected(root, unreachable, () => contract)).to.include('were not updated')
+      writeJson(path.join(root, '.scrollsdk/intent.json'), input.spec)
+      save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}, privateTls: {}})!))
 
       expect(() => prepareCapacityManager(root, () => contract, () => leaf)).to.throw('must contain CA certificates')
       save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}})!))
