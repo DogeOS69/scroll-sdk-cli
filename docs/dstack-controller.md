@@ -451,6 +451,11 @@ set `replicaCount: 0` while keeping generation enabled.
 
 ## Ingress, multiple providers and images
 
+For capacity-manager in the same cluster, prefer `privateTls: {}` over an
+ingress: the controller then serves HTTPS on its Service through a private CA (see
+[Spec preparation](spec-preparation.md#in-cluster-dstack-https-with-a-private-ca)).
+It cannot be combined with `ingress` or `internalTls`.
+
 Optional input examples:
 
 ```yaml

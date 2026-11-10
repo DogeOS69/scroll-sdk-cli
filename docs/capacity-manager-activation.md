@@ -87,6 +87,9 @@ existing issued ACM certificate covering the hostname in the same account and
 region. The supplied VPC must have DNS support and hostnames enabled. Disable the
 controller Ingress; do not also select the older `dstackController.internalTls`
 Ingress-based owner. The endpoint need not use any particular domain suffix.
+For a controller in the same cluster, `dstackController.privateTls` is the third
+option: in-cluster HTTPS with a cert-manager private CA, without an ALB. See
+[Spec preparation](spec-preparation.md#in-cluster-dstack-https-with-a-private-ca).
 
 Prepare the private ALB, HTTPS listener, HTTP3000/IP target group, security groups
 and DNS through the infrastructure owner, for example using the CLI repository's
@@ -230,7 +233,10 @@ capacity API, then deletes that Pod. It neither changes fleets nor starts Worker
 The CLI does not read Secret values or display raw provider/probe responses. The
 probe has a bounded lifetime and no service-account token. After an interrupted
 CLI process, remove only its `cm-preflight-*` Pod if one remains. The Python TLS
-probe does not establish that the Core binary has the same trust store.
+probe does not establish that the Core binary has the same trust store. With
+`dstackController.privateTls`, the probe trusts only `manager.dstack.caBundle`
+from the values for dstack, as the manager does, and checks that the selected
+manager binary accepts `--dstack-ca-file`.
 
 Status is read-only. It reports Deployment replicas and bounded recent reconcile
 log observations, omitting raw logs. Unknown log formats or insufficient samples

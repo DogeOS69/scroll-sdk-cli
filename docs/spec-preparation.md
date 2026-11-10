@@ -1358,6 +1358,64 @@ it and archiving its local capacity plan before preparing its replacement. This
 feature does not migrate the existing devnet proxy, install resources, modify DNS,
 or allocate workers during preparation.
 
+## In-cluster dstack HTTPS with a private CA
+
+`dstackController.privateTls` serves the controller API over HTTPS inside the
+cluster, with no ALB, public hostname or ACM certificate. It needs
+dstack-controller chart **0.1.7+**, capacity-manager chart **0.1.8+**, a manager
+image with dogeos-core #1786 (`--dstack-ca-file`), and cert-manager in the
+cluster.
+
+```yaml
+dstackController:
+  privateTls: {} # Optional: port (default 8443), clusterDomain (default cluster.local)
+```
+
+The generated controller values set the chart's `tls` block. cert-manager issues a
+private CA and a certificate for the Service names, an nginx sidecar terminates TLS,
+and dstack listens only on `127.0.0.1`. Port 3000 is no longer reachable from the
+Pod network. `privateTls` is mutually exclusive with `dstackController.ingress`,
+`dstackController.internalTls` and `capacityManager.connection`.
+
+Preparing capacity-manager sets `manager.dstack.serverUrl` to
+`https://<controller>.<namespace>.svc:<port>`. It reads `ca.crt` from the
+controller's `<controller>-tls` Secret with `infrastructure.kubeContext`, and writes
+the certificate into `manager.dstack.caBundle`, where the values file records it for
+review. kubectl fetches that Secret but only `ca.crt` is printed; the key is never
+written. The capacity-manager step always reads the CA from the cluster: it waits
+for input until cert-manager has issued the Secret, and fails while Kubernetes
+cannot be reached. `prep-charts` does not fail in either case. If the values
+already record a CA for the same server URL and kube context, it keeps that CA,
+regenerates the rest of the capacity-manager values and warns. Otherwise it keeps
+the capacity-manager values from the earlier generation, marks them unprepared so
+that the chart refuses to install them, and warns. It still admits the manager in
+the WP NetworkPolicy, so the new controller values can be installed. A `ca.crt`
+that is not a CA certificate still fails. The order is therefore:
+
+1. Render, then install the controller with `make install-dstack-controller`.
+   In staged preparation the render stage waits here. cert-manager issues the
+   certificate even while the controller Pod waits for Secrets that the later
+   upload stage provides, so install without `--wait`.
+2. After cert-manager issues the certificate, rerun the same render command.
+3. Install capacity-manager.
+
+Switching an existing manager to or from `privateTls` changes its server URL and
+closes the controller's port 3000. Drain the manager and finish cleanup through
+the old URL first, then install the controller and manager in the same window.
+Removing `privateTls` requires selecting `capacityManager.connection` or
+`internalTls`; preparation refuses to keep the closed Service URL.
+Certificates are issued once per controller installation and then renewed by
+cert-manager. Server certificate renewals need no rerun. The CA keeps its key when
+cert-manager renews it (after about two thirds of 10 years), but rerun the render
+before the original CA certificate expires: OpenSSL-based clients, such as the
+initialization Job, reject an expired CA. Replacing the CA, for example by
+deleting the controller's `<controller>-ca` Secret, issues a new CA, but
+cert-manager does not reissue the server certificate when its CA changes. Force
+that with `cmctl renew <controller>-tls` (or delete the `<controller>-tls`
+Secret); its `ca.crt` then holds the new CA. Then rerun the render and reinstall
+capacity-manager. The manager fails TLS between the reissue and its reinstall, so
+plan a short maintenance window.
+
 ## TSO ALB subnet discovery
 
 Set `preparation.tsoAlbEdge.enabled: true` to reconcile the TSO edge peers during

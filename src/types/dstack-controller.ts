@@ -55,6 +55,11 @@ export interface DstackControllerConfig {
     storageClass?: string
   }
   podAnnotations?: Record<string, string>
+  /**
+   * In-cluster HTTPS: the chart's cert-manager private CA and TLS sidecar, with dstack on loopback.
+   * Requires dstack-controller chart >= 0.1.7 and capacity-manager chart >= 0.1.8.
+   */
+  privateTls?: {clusterDomain?: string; port?: number}
   replicaCount?: 0 | 1
   resources?: {limits?: Record<string, string>; requests?: Record<string, string>}
   serverConfig?: {existingSecret?: string; key?: string}

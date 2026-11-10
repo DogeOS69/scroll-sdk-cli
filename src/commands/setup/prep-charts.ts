@@ -1445,7 +1445,11 @@ export default class SetupPrepCharts extends Command {
       generation = await this.generateCharts(stagedValuesDir)
       if (this.albSpec) projectExistingAlbDirectory(stagedValuesDir, this.albSpec, !this.flags['proof-preparation'])
       if (this.albSpec) projectDiscoveredAwsValues(process.cwd(), stagedValuesDir, this.albSpec)
-      if (!this.flags['proof-preparation']) prepareCapacityManagerIfSelected(transaction.stagingRoot)
+      if (!this.flags['proof-preparation']) {
+        const deferred = prepareCapacityManagerIfSelected(transaction.stagingRoot)
+        if (deferred) this.jsonCtx.addWarning(deferred)
+      }
+
       writeHelmValues(transaction.stagingRoot, this.albSpec ?? {dogecoin: {network: this.dogeConfig.network} as any}, {deferIngressValidation: this.flags['proof-preparation']}, path.relative(transaction.stagingRoot, stagedValuesDir))
       process.chdir(deploymentRoot)
       changedFiles = transaction.commit().changedFiles
@@ -2101,7 +2105,7 @@ export default class SetupPrepCharts extends Command {
       if (name === DSTACK_CONTROLLER_VALUES_FILE) {
         const values = yaml.load(content) as any
         const existing = fs.existsSync(target) ? yaml.load(fs.readFileSync(target, 'utf8')) as any : undefined
-        if (existing?.ingress && !this.dstackController?.internalTls) {
+        if (existing?.ingress && !this.dstackController?.internalTls && !this.dstackController?.privateTls) {
           values.ingress.annotations = {...values.ingress.annotations, ...existing.ingress.annotations}
           values.ingress.className = existing.ingress.className ?? values.ingress.className
         }
