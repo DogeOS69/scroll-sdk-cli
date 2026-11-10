@@ -113,7 +113,7 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       writeJson(path.join(root, '.data/proof-worker-image-check-v1.json'), input.imageCheck)
       fs.mkdirSync(path.join(root, 'values'))
       const save = (service: string, value: any) => fs.writeFileSync(path.join(root, `values/${service}-production.yaml`), yaml.dump(value))
-      save('capacity-manager', {fullnameOverride: 'capacity-manager', manager: {dstack: {serverUrl: 'https://dstack.example.invalid'}}})
+      save('capacity-manager', {fullnameOverride: 'capacity-manager', manager: {dstack: {serverUrl: 'https://dstack.example.invalid'}}, prepared: true})
       save('proof-coordinator', {persistence: {secrets: {name: 'deployment-proof-secrets'}}})
       save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}, privateTls: {}})!))
       // As in the SDK template, which leaves the manager peer empty until capacity-manager preparation binds it.
@@ -137,25 +137,29 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
       expect(reads).to.deep.equal([{kubeContext: 'saved-cluster-context', namespace: 'chain', secret: 'dstack-controller-tls'}])
 
-      // Inside prep-charts, a pending or unreadable CA keeps the manager's files but still admits it in WP,
-      // so the final values validate and the controller values can be installed.
+      // Inside prep-charts, a pending or unreadable CA keeps the manager's values from an earlier generation but
+      // marks them unprepared, so the chart refuses to install them. WP still admits the manager, so the final
+      // values validate and the controller values can be installed.
       writeJson(path.join(root, '.data/proof-deployment.json'), {inputs: {publication: {path: '.data/publication.json'}}, schemaVersion: 8})
-      expect(prepareCapacityManagerIfSelected(root, (): string | undefined => undefined, () => contract)).to.include('make install-dstack-controller')
-      expect(fs.readFileSync(managerPath, 'utf8')).to.equal(original)
+      expect(prepareCapacityManagerIfSelected(root, (): string | undefined => undefined, () => contract)).to.include('make install-dstack-controller').and.include('unprepared')
+      const unprepared = {...(yaml.load(original) as any), prepared: false}
+      expect(yaml.load(fs.readFileSync(managerPath, 'utf8'))).to.deep.equal(unprepared)
       expect(finalWp).not.to.throw()
       const unreachable = () => {throw new DstackCaUnavailable('Cannot read the dstack controller CA from Kubernetes')}
       expect(prepareCapacityManagerIfSelected(root, unreachable, () => contract)).to.include('Cannot read the dstack controller CA')
       expect(() => prepareCapacityManager(root, () => contract, unreachable)).to.throw(DstackCaUnavailable)
-      expect(fs.readFileSync(managerPath, 'utf8')).to.equal(original)
+      expect(yaml.load(fs.readFileSync(managerPath, 'utf8'))).to.deep.equal(unprepared)
 
       const result = prepareCapacityManager(root, () => contract, () => ca)
       const values = yaml.load(fs.readFileSync(result.valuesFile, 'utf8')) as any
       expect(values.manager.dstack.serverUrl).to.equal('https://dstack-controller.chain.svc:8443')
       expect(values.manager.dstack.caBundle).to.equal(ca.trim() + '\n')
-      expect(values.initialization.privateDns).to.equal(true)
+      expect(values.prepared).to.equal(true)
+      // The .svc name is cluster-internal; Service ranges need not be RFC 1918.
+      expect(values.initialization.privateDns).to.equal(false)
       const plan = JSON.parse(fs.readFileSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'), 'utf8'))
       expect(plan.dstack.serverUrl).to.equal('https://dstack-controller.chain.svc:8443')
-      expect(plan.privateDns).to.equal(true)
+      expect(plan.privateDns).to.equal(false)
 
       // Once a CA is recorded, prep-charts keeps it when the cluster cannot confirm it, and still regenerates
       // everything else. The capacity-manager step itself keeps requiring a fresh read.
@@ -174,14 +178,22 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       expect(prepareCapacityManagerIfSelected(root, unreachable, () => contract)).to.include('were not updated')
       writeJson(path.join(root, '.scrollsdk/intent.json'), input.spec)
       save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}, privateTls: {}})!))
+      // Nor from another kube context: the Service URL is the same in every cluster.
+      writeJson(path.join(root, '.scrollsdk/intent.json'), {...input.spec, infrastructure: {...input.spec.infrastructure, kubeContext: 'other-cluster-context'}})
+      expect(prepareCapacityManagerIfSelected(root, unreachable, () => contract)).to.include('were not updated')
+      expect((yaml.load(fs.readFileSync(managerPath, 'utf8')) as any).prepared).to.equal(false)
+      writeJson(path.join(root, '.scrollsdk/intent.json'), input.spec)
 
       expect(() => prepareCapacityManager(root, () => contract, () => leaf)).to.throw('must contain CA certificates')
       save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}})!))
       expect(() => prepareCapacityManager(root, () => contract, () => ca)).to.throw('differ from privateTls')
 
-      // Without a new endpoint owner, the saved Service URL would point at a closed port.
+      // Without a new endpoint owner, the saved Service URL would point at a closed port, with or without a CA.
       writeJson(path.join(root, '.scrollsdk/intent.json'), {...input.spec, dstackController: {enabled: true}})
-      expect(() => prepareCapacityManager(root, () => contract, () => ca)).to.throw('privateTls was removed')
+      expect(() => prepareCapacityManager(root, () => contract, () => ca)).to.throw('still use the privateTls Service URL')
+      const saved = yaml.load(fs.readFileSync(managerPath, 'utf8')) as any
+      fs.writeFileSync(managerPath, yaml.dump({...saved, manager: {...saved.manager, dstack: {...saved.manager.dstack, caBundle: ''}}}))
+      expect(() => prepareCapacityManager(root, () => contract, () => ca)).to.throw('still use the privateTls Service URL')
 
       const connection = {mode: 'existing-https', serverUrl: 'https://dstack.example.invalid'} as const
       writeJson(path.join(root, '.scrollsdk/intent.json'), {...input.spec, capacityManager: {...input.spec.capacityManager, connection}})
@@ -192,6 +204,9 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       const publicValues = yaml.load(fs.readFileSync(prepareCapacityManager(root, () => contract, () => ca).valuesFile, 'utf8')) as any
       expect(publicValues.manager.dstack.serverUrl).to.equal('https://dstack.example.invalid')
       expect(publicValues.manager.dstack.caBundle).to.equal('')
+      // An operator-maintained serverUrl (no endpoint owner) is kept once it no longer names the Service.
+      writeJson(path.join(root, '.scrollsdk/intent.json'), {...input.spec, dstackController: {enabled: true}})
+      expect((yaml.load(fs.readFileSync(prepareCapacityManager(root, () => contract, () => ca).valuesFile, 'utf8')) as any).manager.dstack.serverUrl).to.equal('https://dstack.example.invalid')
 
       writeJson(path.join(root, '.scrollsdk/intent.json'), {...input.spec, infrastructure: {namespace: 'chain'}})
       save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}, privateTls: {}})!))

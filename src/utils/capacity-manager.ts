@@ -197,6 +197,19 @@ export function buildCapacityManagerValues(spec: DeploymentSpec, worker: ProverW
 /** The controller certificate does not exist yet; install dstack-controller first. */
 export class DstackCaPending extends AwaitingInput {}
 
+/** The HTTPS URL of the controller Service, on any port: the shape privateTls generates. */
+function isPrivateTlsServiceUrl(value: unknown, name: string, namespace: string): boolean {
+  try {
+    const url = new URL(String(value))
+    return url.protocol === 'https:' && url.hostname === `${name}.${namespace}.svc`
+  } catch {return false}
+}
+
+/** The kube context the last completed preparation read the recorded CA from. */
+function recordedKubeContext(root: string): string | undefined {
+  try {return JSON.parse(fs.readFileSync(localPath(root, CAPACITY_MANAGER_PLAN), 'utf8')).kubeContext} catch {return undefined}
+}
+
 /**
  * Reads the controller CA from the cluster. With `recorded` (prep-charts only, same server URL), a missing
  * Secret or an unreachable cluster keeps that CA, so the rest of the manager values are still regenerated.
@@ -263,12 +276,13 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   if (internalTls) assertDstackInternalIngress(controller, internalTls)
   if (privateTls) assertDstackPrivateTlsValues(controller, privateTls)
   // The privateTls Service URL closes with it; falling back to the saved URL would leave the manager on a closed port.
-  if (!privateTls && !internalTls && !spec.capacityManager?.connection && existing.manager?.dstack?.caBundle) {
-    throw new Error('dstackController.privateTls was removed: select capacityManager.connection or dstackController.internalTls for the dstack endpoint. Changing the URL is a migration: drain the managed workers through the old URL first')
+  if (!privateTls && !internalTls && !spec.capacityManager?.connection && isPrivateTlsServiceUrl(existing.manager?.dstack?.serverUrl, dstackName, dstackNamespace)) {
+    throw new Error('The capacity-manager values still use the privateTls Service URL: select capacityManager.connection or dstackController.internalTls, or set manager.dstack.serverUrl to the new endpoint. Changing the URL is a migration: drain the managed workers through the old URL first')
   }
 
   projected.manager.dstack.serverUrl = capacityManagerDstackUrl(privateTls ? dstackPrivateTlsUrl(dstackName, dstackNamespace, privateTls) : internalTls ? `https://${internalTls.hostname}` : capacityConnectionUrl(root, spec.capacityManager?.connection) ?? existing.manager?.dstack?.serverUrl)
-  const privateDns = spec.capacityManager?.connection?.mode === 'existing-alb' || Boolean(internalTls) || Boolean(privateTls)
+  // A .svc name resolves only inside the cluster, and Service ranges need not be RFC 1918.
+  const privateDns = spec.capacityManager?.connection?.mode === 'existing-alb' || Boolean(internalTls)
   projected.dstackAuth = controller.auth
   if (!controller.auth?.existingSecret || !controller.auth?.key) throw new Error('Dstack auth Secret reference is required')
   projected.wpAuth = {existingSecret: coordinator.persistence.secrets.name, key: 'proof-work-token'}
@@ -290,7 +304,9 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   fs.writeFileSync(wpFile, yaml.dump(wp, {lineWidth: -1, noRefs: true}))
   // Read after the chart checks and the WP binding, before the manager's own files.
   // An empty bundle keeps the public roots and clears a stale CA.
-  const recordedCa = keepRecordedCa && existing.manager?.dstack?.serverUrl === projected.manager.dstack.serverUrl ? existing.manager?.dstack?.caBundle || undefined : undefined
+  // The Service URL is the same in every cluster, so the recorded CA must also come from this kube context.
+  const sameEndpoint = existing.manager?.dstack?.serverUrl === projected.manager.dstack.serverUrl && recordedKubeContext(root) === specKubernetesTarget(spec).kubeContext
+  const recordedCa = keepRecordedCa && sameEndpoint ? existing.manager?.dstack?.caBundle || undefined : undefined
   const ca = privateTls ? dstackClusterCaBundle(spec, dstackName, dstackNamespace, readCa, recordedCa) : {bundle: ''}
   projected.manager.dstack.caBundle = ca.bundle
 
@@ -345,7 +361,14 @@ export function prepareCapacityManagerIfSelected(root: string, readCa: DstackCaR
     const {warning} = prepareCapacityManagerInDirectory(root, readContract, readCa, true)
     if (warning) return `capacity-manager values were regenerated: ${warning}`
   } catch (error) {
-    if (error instanceof DstackCaPending || error instanceof DstackCaUnavailable) return `capacity-manager values were not updated: ${error.message}`
+    if (error instanceof DstackCaPending || error instanceof DstackCaUnavailable) {
+      // These values belong to an earlier generation. The chart refuses to install unprepared values.
+      const file = localPath(root, CAPACITY_MANAGER_VALUES)
+      const values = fs.existsSync(file) ? yaml.load(fs.readFileSync(file, 'utf8')) as any : undefined
+      if (values?.prepared) fs.writeFileSync(file, yaml.dump({...values, prepared: false}, {lineWidth: -1, noRefs: true}))
+      return `capacity-manager values were not updated and stay unprepared until the dstack CA can be read: ${error.message}`
+    }
+
     throw error
   }
 }

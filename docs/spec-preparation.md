@@ -1385,13 +1385,17 @@ review. kubectl fetches that Secret but only `ca.crt` is printed; the key is nev
 written. The capacity-manager step always reads the CA from the cluster: it waits
 for input until cert-manager has issued the Secret, and fails while Kubernetes
 cannot be reached. `prep-charts` does not fail in either case. If the values
-already record a CA for the same server URL, it keeps that CA, regenerates the
-rest of the capacity-manager values and warns. Otherwise it keeps the
-capacity-manager values unchanged with a warning, but still admits the manager in
-the WP NetworkPolicy, so the new controller values can be installed. The order is
-therefore:
+already record a CA for the same server URL and kube context, it keeps that CA,
+regenerates the rest of the capacity-manager values and warns. Otherwise it keeps
+the capacity-manager values from the earlier generation, marks them unprepared so
+that the chart refuses to install them, and warns. It still admits the manager in
+the WP NetworkPolicy, so the new controller values can be installed. A `ca.crt`
+that is not a CA certificate still fails. The order is therefore:
 
 1. Render, then install the controller with `make install-dstack-controller`.
+   In staged preparation the render stage waits here. cert-manager issues the
+   certificate even while the controller Pod waits for Secrets that the later
+   upload stage provides, so install without `--wait`.
 2. After cert-manager issues the certificate, rerun the same render command.
 3. Install capacity-manager.
 
@@ -1405,9 +1409,12 @@ cert-manager. Server certificate renewals need no rerun. The CA keeps its key wh
 cert-manager renews it (after about two thirds of 10 years), but rerun the render
 before the original CA certificate expires: OpenSSL-based clients, such as the
 initialization Job, reject an expired CA. Replacing the CA, for example by
-deleting the controller's `<controller>-ca` Secret, makes cert-manager issue a new
-CA and server certificate at once. The manager fails TLS until you rerun the
-render and reinstall it, so plan a short maintenance window.
+deleting the controller's `<controller>-ca` Secret, issues a new CA, but
+cert-manager does not reissue the server certificate when its CA changes. Force
+that with `cmctl renew <controller>-tls` (or delete the `<controller>-tls`
+Secret); its `ca.crt` then holds the new CA. Then rerun the render and reinstall
+capacity-manager. The manager fails TLS between the reissue and its reinstall, so
+plan a short maintenance window.
 
 ## TSO ALB subnet discovery
 
