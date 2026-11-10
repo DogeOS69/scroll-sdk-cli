@@ -151,7 +151,7 @@ bridge:
   confirmationsRequired: 1
   fees:
     depositFeeSats: '100000000'
-    withdrawalFeeWei: '100000000000000000'
+    withdrawalFeeWei: '1000000000000000000'
     minWithdrawalAmountWei: '1000000000000000000'
   feeRecipient: '0x0000000000000000000000000000000000000000'
 

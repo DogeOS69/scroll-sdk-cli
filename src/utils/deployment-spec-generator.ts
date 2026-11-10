@@ -309,6 +309,9 @@ function getBridgeTargetAmountsSats(spec: DeploymentSpec): { bridge: number; fee
 /** The contracts template default; it also matches the 1 DOGE protocol minimum deposit. */
 const DEFAULT_DEPOSIT_FEE_SATS = '100000000'
 
+/** 1 DOGE in L2 wei; matches the contracts template default (dogeos-core#1821). */
+const DEFAULT_WITHDRAWAL_FEE_WEI = '1000000000000000000'
+
 function getBridgeFees(spec: DeploymentSpec): { depositFeeWei: string; minWithdrawalAmountWei: string; withdrawalFeeWei: string } {
   const {fees} = spec.bridge
   // The legacy deposit field was copied directly into contracts.DEPOSIT_FEE (wei).
@@ -327,7 +330,7 @@ function getBridgeFees(spec: DeploymentSpec): { depositFeeWei: string; minWithdr
   return {
     depositFeeWei: depositFeeWei.toString(),
     minWithdrawalAmountWei: fees.minWithdrawalAmountWei ?? fees.minWithdrawalAmount ?? '0',
-    withdrawalFeeWei: fees.withdrawalFeeWei ?? fees.withdrawal ?? '0',
+    withdrawalFeeWei: fees.withdrawalFeeWei ?? fees.withdrawal ?? DEFAULT_WITHDRAWAL_FEE_WEI,
   }
 }
 

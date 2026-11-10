@@ -939,10 +939,10 @@ describe('deployment-spec-generator', () => {
 
     it('converts deposit satoshis to contract wei without changing withdrawal amounts', () => {
       const spec = createMinimalSpec();
-      spec.bridge.fees = {depositFeeSats: '100000000', minWithdrawalAmountWei: '1000000000000000000', withdrawalFeeWei: '100000000000000000'};
+      spec.bridge.fees = {depositFeeSats: '100000000', minWithdrawalAmountWei: '1000000000000000000', withdrawalFeeWei: '1000000000000000000'};
       const config = toml.parse(generateConfigToml(spec)) as any;
       expect(config.contracts.DEPOSIT_FEE).to.equal('1000000000000000000');
-      expect(config.contracts.WITHDRAWAL_FEE).to.equal('100000000000000000');
+      expect(config.contracts.WITHDRAWAL_FEE).to.equal('1000000000000000000');
       expect(config.contracts.MIN_WITHDRAWAL_AMOUNT).to.equal('1000000000000000000');
     });
 
@@ -961,6 +961,15 @@ describe('deployment-spec-generator', () => {
       expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal('1000000000000000000');
       spec.bridge.fees.depositFeeSats = '1';
       expect((toml.parse(generateConfigToml(spec)) as any).contracts.DEPOSIT_FEE).to.equal('10000000000');
+    });
+
+    it('defaults an omitted withdrawal fee to 1 DOGE and keeps an explicit zero', () => {
+      const spec = createMinimalSpec();
+      delete spec.bridge.fees.withdrawalFeeWei;
+      delete spec.bridge.fees.withdrawal;
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.WITHDRAWAL_FEE).to.equal('1000000000000000000');
+      spec.bridge.fees.withdrawalFeeWei = '0';
+      expect((toml.parse(generateConfigToml(spec)) as any).contracts.WITHDRAWAL_FEE).to.equal('0');
     });
 
     it('defaults an omitted deposit fee to 1 DOGE', () => {
