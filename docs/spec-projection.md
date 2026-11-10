@@ -90,14 +90,15 @@ validation, independently of `REACT_APP_CHAIN_ID_L2`.
 ## Bridge fee units
 
 The examples select a 1 DOGE deposit fee (`depositFeeSats: "100000000"`),
-a 0.1 DOGE withdrawal fee (`withdrawalFeeWei: "100000000000000000"`) and
+a 1 DOGE withdrawal fee (`withdrawalFeeWei: "1000000000000000000"`) and
 a 1 DOGE minimum withdrawal (`minWithdrawalAmountWei: "1000000000000000000"`).
 The generator multiplies deposit satoshis by 10^10 when writing
 `contracts.DEPOSIT_FEE`, which uses L2 wei. Zero and integer precision are
 preserved. The deprecated `fees.deposit` field retains its historical direct
 wei meaning; converting to `depositFeeSats` requires dividing by 10^10.
 An omitted deposit fee defaults to 1 DOGE, the contracts template default and
-the protocol minimum deposit. Omitted withdrawal fields still default to 0.
+the protocol minimum deposit. An omitted withdrawal fee also defaults to 1 DOGE
+(dogeos-core#1821); an omitted minimum withdrawal still defaults to 0.
 
 ## Preserved service intent
 
@@ -390,7 +391,7 @@ configuration does not grant bucket access. A custom S3-compatible write endpoin
 is not necessarily its public read origin; provide the read URL explicitly there.
 
 The example specs match the SDK's `config.toml.example` withdrawal policy:
-`withdrawalFeeWei: "100000000000000000"` is 0.1 DOGE and
+`withdrawalFeeWei: "1000000000000000000"` is 1 DOGE and
 `minWithdrawalAmountWei: "1000000000000000000"` is 1 DOGE. L2 native amounts use
 18 decimals, independently of Dogecoin L1's satoshi denomination.
 
