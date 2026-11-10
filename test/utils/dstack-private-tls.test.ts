@@ -6,9 +6,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import {DstackCaPending, prepareCapacityManager} from '../../src/utils/capacity-manager.js'
+import {DstackCaPending, prepareCapacityManager, prepareCapacityManagerIfSelected} from '../../src/utils/capacity-manager.js'
 import {generateDstackControllerValues} from '../../src/utils/dstack-controller-values.js'
-import {type DstackCaTarget, assertDstackPrivateTlsValues, dstackCaBundle, dstackPrivateTlsUrl, readDstackClusterCa, validateDstackPrivateTls} from '../../src/utils/dstack-private-tls.js'
+import {type DstackCaTarget, DstackCaUnavailable, assertDstackPrivateTlsValues, dstackCaBundle, dstackPrivateTlsUrl, readDstackClusterCa, validateDstackPrivateTls} from '../../src/utils/dstack-private-tls.js'
+import {validateFinalValues} from '../../src/utils/final-values-validation.js'
 import {AwaitingInput, writeJson} from '../../src/utils/preparation-io.js'
 import {assertCapacityChartVersions} from '../../src/utils/spec-bootstrap.js'
 import {capacityWorkerFixture} from '../helpers/capacity-manager-worker.js'
@@ -72,11 +73,11 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       const target = {kubeContext: 'saved-cluster-context', namespace: 'chain', secret: 'dstack-controller-tls'}
       install(`printf '%s' '${Buffer.from(ca).toString('base64')}'`)
       expect(readDstackClusterCa(target)).to.equal(ca)
-      expect(fs.readFileSync(log, 'utf8').trim().split('\n')).to.deep.equal(['--context', 'saved-cluster-context', '--namespace', 'chain', 'get', 'secret', 'dstack-controller-tls', '--ignore-not-found', '--output', String.raw`jsonpath={.data.ca\.crt}`])
+      expect(fs.readFileSync(log, 'utf8').trim().split('\n')).to.deep.equal(['--context', 'saved-cluster-context', '--namespace', 'chain', '--request-timeout', '30s', 'get', 'secret', 'dstack-controller-tls', '--ignore-not-found', '--output', String.raw`jsonpath={.data.ca\.crt}`])
       install('exit 0')
       expect(readDstackClusterCa(target)).to.equal(undefined)
       install("echo 'remote detail NONFUNCTIONAL_MARKER' >&2; exit 1")
-      expect(() => readDstackClusterCa(target)).to.throw('remote details omitted').with.property('message').that.does.not.include('NONFUNCTIONAL_MARKER')
+      expect(() => readDstackClusterCa(target)).to.throw(DstackCaUnavailable, 'remote details omitted').with.property('message').that.does.not.include('NONFUNCTIONAL_MARKER')
     } finally {
       process.env.PATH = originalPath
       fs.rmSync(bin, {force: true, recursive: true})
@@ -112,7 +113,12 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       save('capacity-manager', {fullnameOverride: 'capacity-manager', manager: {dstack: {serverUrl: 'https://dstack.example.invalid'}}})
       save('proof-coordinator', {persistence: {secrets: {name: 'deployment-proof-secrets'}}})
       save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}, privateTls: {}})!))
-      save('withdrawal-processor', {networkPolicy: {allowFrom: {}, enabled: true}})
+      // As in the SDK template: the manager is admitted only when it is prepared.
+      const peer = (name: string) => [{podSelector: {matchLabels: {'app.kubernetes.io/name': name}}}]
+      save('withdrawal-processor', {networkPolicy: {allowFrom: {capacityManager: [], proofCoordinator: peer('proof-coordinator'), tso: peer('tso-service')}, enabled: true}, service: {main: {ports: {'proof-work': {enabled: true}}}}})
+      const wpPath = path.join(root, 'values/withdrawal-processor-production.yaml')
+      const finalWp = () => validateFinalValues({'withdrawal-processor-production.yaml': fs.readFileSync(wpPath, 'utf8')}, input.spec)
+      expect(finalWp).to.throw('networkPolicy.allowFrom.capacityManager')
       const contract: any = {components: {proofCoordinator: {valuesFile: 'values/proof-coordinator-production.yaml'}, withdrawalProcessor: {valuesFile: 'values/withdrawal-processor-production.yaml'}}, generation: 'real', generationId: 'test-generation', inputs: {publication: {path: '.data/publication.json'}}, mode: 'active', worker: {contractFile: '.data/worker.json'}}
       const managerPath = path.join(root, 'values/capacity-manager-production.yaml')
       const original = fs.readFileSync(managerPath, 'utf8')
@@ -120,12 +126,24 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
 
       // Before cert-manager issues the certificate, nothing is written.
       let pending: unknown
-      try {prepareCapacityManager(root, () => contract, target => {reads.push(target); return undefined})} catch (error) {pending = error}
+      try {prepareCapacityManager(root, () => contract, (target): string | undefined => {reads.push(target); return undefined})} catch (error) {pending = error}
       expect(pending).to.be.instanceOf(DstackCaPending).and.instanceOf(AwaitingInput)
       expect((pending as Error).message).to.include('make install-dstack-controller')
       expect(fs.readFileSync(managerPath, 'utf8')).to.equal(original)
+      expect(finalWp).to.throw('networkPolicy.allowFrom.capacityManager')
       expect(fs.existsSync(path.join(root, '.scrollsdk/capacity-manager/plan.json'))).to.equal(false)
       expect(reads).to.deep.equal([{kubeContext: 'saved-cluster-context', namespace: 'chain', secret: 'dstack-controller-tls'}])
+
+      // Inside prep-charts, a pending or unreadable CA keeps the manager's files but still admits it in WP,
+      // so the final values validate and the controller values can be installed.
+      writeJson(path.join(root, '.data/proof-deployment.json'), {inputs: {publication: {path: '.data/publication.json'}}, schemaVersion: 8})
+      expect(prepareCapacityManagerIfSelected(root, (): string | undefined => undefined, () => contract)).to.include('make install-dstack-controller')
+      expect(fs.readFileSync(managerPath, 'utf8')).to.equal(original)
+      expect(finalWp).not.to.throw()
+      const unreachable = () => {throw new DstackCaUnavailable('Cannot read the dstack controller CA from Kubernetes')}
+      expect(prepareCapacityManagerIfSelected(root, unreachable, () => contract)).to.include('Cannot read the dstack controller CA')
+      expect(() => prepareCapacityManager(root, () => contract, unreachable)).to.throw(DstackCaUnavailable)
+      expect(fs.readFileSync(managerPath, 'utf8')).to.equal(original)
 
       const result = prepareCapacityManager(root, () => contract, () => ca)
       const values = yaml.load(fs.readFileSync(result.valuesFile, 'utf8')) as any
@@ -139,6 +157,10 @@ describe('dstack in-cluster HTTPS with a private CA', () => {
       expect(() => prepareCapacityManager(root, () => contract, () => leaf)).to.throw('must contain CA certificates')
       save('dstack-controller', yaml.load(generateDstackControllerValues({auth: {existingSecret: 'controller-auth', key: 'admin-token'}})!))
       expect(() => prepareCapacityManager(root, () => contract, () => ca)).to.throw('differ from privateTls')
+
+      // Without a new endpoint owner, the saved Service URL would point at a closed port.
+      writeJson(path.join(root, '.scrollsdk/intent.json'), {...input.spec, dstackController: {enabled: true}})
+      expect(() => prepareCapacityManager(root, () => contract, () => ca)).to.throw('privateTls was removed')
 
       const connection = {mode: 'existing-https', serverUrl: 'https://dstack.example.invalid'} as const
       writeJson(path.join(root, '.scrollsdk/intent.json'), {...input.spec, capacityManager: {...input.spec.capacityManager, connection}})

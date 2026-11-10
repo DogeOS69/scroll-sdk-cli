@@ -77,9 +77,9 @@ export function resolveSdkRevision(sdkDirectory: string, override?: string): str
   } catch {throw new Error('Cannot resolve SDK commit in --sdk-dir')}
 }
 
-/** Reject chart pins that silently ignore fleet initialization or endpoint binding. */
 const chartBelow = (version: RegExpMatchArray, patch: number) => Number(version[1]) === 0 && (Number(version[2]) < 1 || Number(version[2]) === 1 && Number(version[3]) < patch)
 
+/** Reject chart pins that silently ignore fleet initialization or endpoint binding. */
 export function assertCapacityChartVersions(makefile: string, spec: DeploymentSpec): void {
   if (!spec.capacityManager) return
   const privateTls = Boolean(spec.dstackController?.privateTls)

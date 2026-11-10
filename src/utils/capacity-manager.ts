@@ -16,7 +16,7 @@ import {workerLaunch} from './capacity-manager-worker.js'
 import {DSTACK_CONTROLLER_IMAGE} from './dstack-controller-values.js'
 import {validateDstackAwsBackend} from './dstack-credentials.js'
 import {assertDstackInternalIngress} from './dstack-internal-tls.js'
-import {type DstackCaReader, assertDstackPrivateTlsValues, dstackCaBundle, dstackPrivateTlsUrl, readDstackClusterCa} from './dstack-private-tls.js'
+import {type DstackCaReader, DstackCaUnavailable, assertDstackPrivateTlsValues, dstackCaBundle, dstackPrivateTlsUrl, readDstackClusterCa} from './dstack-private-tls.js'
 import {GenerationTransaction} from './generation-transaction.js'
 import {dstackAwsIntent, withPreparedDstackAws} from './preparation-dstack-aws.js'
 import {AwaitingInput, digest, localPath, writeJson} from './preparation-io.js'
@@ -250,6 +250,11 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   if (spec.capacityManager?.connection?.mode === 'existing-alb' && controller.ingress?.enabled) throw new Error('Disable dstack Ingress before selecting the separately managed internal ALB')
   if (internalTls) assertDstackInternalIngress(controller, internalTls)
   if (privateTls) assertDstackPrivateTlsValues(controller, privateTls)
+  // The privateTls Service URL closes with it; falling back to the saved URL would leave the manager on a closed port.
+  if (!privateTls && !internalTls && !spec.capacityManager?.connection && existing.manager?.dstack?.caBundle) {
+    throw new Error('dstackController.privateTls was removed: select capacityManager.connection or dstackController.internalTls for the dstack endpoint. Changing the URL is a migration: drain the managed workers through the old URL first')
+  }
+
   projected.manager.dstack.serverUrl = capacityManagerDstackUrl(privateTls ? dstackPrivateTlsUrl(dstackName, dstackNamespace, privateTls) : internalTls ? `https://${internalTls.hostname}` : capacityConnectionUrl(root, spec.capacityManager?.connection) ?? existing.manager?.dstack?.serverUrl)
   const privateDns = spec.capacityManager?.connection?.mode === 'existing-alb' || Boolean(internalTls) || Boolean(privateTls)
   projected.dstackAuth = controller.auth
@@ -264,7 +269,15 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   projected.manager.workerTokenSecret = ''
   const makefile = localPath(root, 'Makefile')
   if (fs.existsSync(makefile)) assertCapacityChartVersions(fs.readFileSync(makefile, 'utf8'), spec)
-  // Read after the chart checks; an empty bundle keeps the public roots and clears a stale CA.
+  // Final values require WP to admit the manager even while the manager waits for the dstack CA.
+  const wpFile = localPath(root, contract.components.withdrawalProcessor.valuesFile)
+  const wp = readValues(contract.components.withdrawalProcessor.valuesFile)
+  if (!wp.networkPolicy?.enabled) throw new Error('Enable WP NetworkPolicy before preparing capacity-manager')
+  wp.networkPolicy.allowFrom ??= {}
+  wp.networkPolicy.allowFrom.capacityManager = [{podSelector: {matchLabels: {'app.kubernetes.io/name': 'capacity-manager'}}}]
+  fs.writeFileSync(wpFile, yaml.dump(wp, {lineWidth: -1, noRefs: true}))
+  // Read after the chart checks and the WP binding, before the manager's own files.
+  // An empty bundle keeps the public roots and clears a stale CA.
   projected.manager.dstack.caBundle = privateTls ? dstackClusterCaBundle(spec, dstackName, dstackNamespace, readCa) : ''
 
   const content = mergeBootstrapValues(template, yaml.dump(projected))
@@ -286,12 +299,6 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
     fs.writeFileSync(localPath(root, 'values/dstack-controller-production.yaml'), yaml.dump(controller, {lineWidth: -1, noRefs: true}))
   }
 
-  const wpFile = localPath(root, contract.components.withdrawalProcessor.valuesFile)
-  const wp = readValues(contract.components.withdrawalProcessor.valuesFile)
-  if (!wp.networkPolicy?.enabled) throw new Error('Enable WP NetworkPolicy before preparing capacity-manager')
-  wp.networkPolicy.allowFrom ??= {}
-  wp.networkPolicy.allowFrom.capacityManager = [{podSelector: {matchLabels: {'app.kubernetes.io/name': 'capacity-manager'}}}]
-  fs.writeFileSync(wpFile, yaml.dump(wp, {lineWidth: -1, noRefs: true}))
   fs.writeFileSync(file, yaml.dump(values, {lineWidth: -1, noRefs: true}))
   if (fs.existsSync(makefile)) fs.writeFileSync(makefile, bindMakefileTarget(fs.readFileSync(makefile, 'utf8'), spec))
   const fleetFiles = fleetIntent.configurations.map(configuration => {
@@ -307,10 +314,11 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
 
 /**
  * Called inside prep-charts' filesystem transaction, after proof reconciliation. Returns a warning when
- * preparation must wait for the private dstack CA: failing here would roll back the controller values
- * that have to be installed first.
+ * the private dstack CA is not issued or cannot be read: failing here would roll back the controller
+ * values that have to be installed first. WP is still bound to the manager; the manager's files are
+ * kept, and the separate capacity-manager step still requires the CA.
  */
-export function prepareCapacityManagerIfSelected(root: string, readCa: DstackCaReader = readDstackClusterCa): string | undefined {
+export function prepareCapacityManagerIfSelected(root: string, readCa: DstackCaReader = readDstackClusterCa, readContract = validateProofDeploymentContract): string | undefined {
   const intent = localPath(root, '.scrollsdk/intent.json')
   if (!fs.existsSync(intent)) return
   const spec = capacitySpec(root)
@@ -318,8 +326,8 @@ export function prepareCapacityManagerIfSelected(root: string, readCa: DstackCaR
   // Initial proof rendering precedes publication. Final rendering must prepare it.
   if (!fs.existsSync(localPath(root, DEFAULT_PROOF_DEPLOYMENT_CONTRACT))) return
   if (!readProofDeploymentContract(root).contract.inputs?.publication) return
-  try {prepareCapacityManagerInDirectory(root, validateProofDeploymentContract, readCa)} catch (error) {
-    if (error instanceof DstackCaPending) return `capacity-manager values were not updated: ${error.message}`
+  try {prepareCapacityManagerInDirectory(root, readContract, readCa)} catch (error) {
+    if (error instanceof DstackCaPending || error instanceof DstackCaUnavailable) return `capacity-manager values were not updated: ${error.message}`
     throw error
   }
 }

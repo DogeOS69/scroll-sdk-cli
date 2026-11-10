@@ -9,6 +9,7 @@ import json
 import os
 import socket
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 
@@ -40,6 +41,13 @@ def main():
         if not os.environ[key].strip():
             raise RuntimeError('An empty Secret key was provided')
     CHECK = 'dstack-tls-auth-project-backend'
+    ca_bundle = os.environ.get('DSTACK_CA_BUNDLE')
+    if ca_bundle:
+        # privateTls: requests reads REQUESTS_CA_BUNDLE on each request and then trusts only it.
+        descriptor, ca_file = tempfile.mkstemp(suffix='.crt')
+        with os.fdopen(descriptor, 'w') as handle:
+            handle.write(ca_bundle)
+        os.environ['REQUESTS_CA_BUNDLE'] = ca_file
     client = APIClient(base_url=p['url'], token=os.environ['DSTACK_TOKEN'])
     project = client.projects.get(p['project'])
     required = {p['provider']}

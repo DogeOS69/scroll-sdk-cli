@@ -32,6 +32,19 @@ describe('capacity-manager activation preflight', () => {
     expect(calls.some(c => c.includes('secret') || c.includes('exec') || c.includes('apply'))).to.equal(false)
   })
 
+  it('gives the probe the private dstack CA and checks the manager accepts --dstack-ca-file', () => {
+    const ca = '-----BEGIN CERTIFICATE-----\nTUlJQmZha2U=\n-----END CERTIFICATE-----\n'
+    let pod: any
+    capacityPreflight(plan, {...values, image: {digest: `sha256:${'a'.repeat(64)}`, repository: 'example.invalid/manager'}, manager: {...values.manager, dstack: {...values.manager.dstack, caBundle: ca}}}, (args, input) => {
+      if (args[0] === 'get') return JSON.stringify({metadata: {uid: '00000000-0000-0000-0000-000000000000'}, spec: {template: {spec: {containers: [{image: 'example.invalid/controller:nonfunctional', name: 'controller'}]}}}})
+      if (args[0] === 'create') pod = JSON.parse(input!)
+      if (args[0] === 'logs') return JSON.stringify({dns: 'passed', dstackTlsAuthProjectBackend: 'passed', privateDns: true, secretReferences: 'passed', wpCapacityApi: 'passed'})
+      return ''
+    })
+    expect(pod.spec.containers[0].env.find((e: any) => e.name === 'DSTACK_CA_BUNDLE').value).to.equal(ca)
+    expect(pod.spec.initContainers.map((c: any) => [c.name, c.image, c.args])).to.deep.equal([['manager-dstack-ca-capability', `example.invalid/manager@sha256:${'a'.repeat(64)}`, ['--dstack-ca-file', '/etc/dstack-ca/ca.crt', '--help']]])
+  })
+
   it('cleans up on probe failure and does not interpret malformed/private output as success', () => {
     for (const fail of ['wait', 'logs']) {
       const calls: string[][] = []

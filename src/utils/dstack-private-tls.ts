@@ -1,7 +1,8 @@
-import {spawnSync} from 'node:child_process'
 import {X509Certificate} from 'node:crypto'
 
 import type {DstackControllerConfig} from '../types/dstack-controller.js'
+
+import {capacityExec} from './capacity-manager-exec.js'
 
 type Input = NonNullable<DstackControllerConfig['privateTls']>
 const DEFAULT_PORT = 8443
@@ -37,13 +38,18 @@ export function assertDstackPrivateTlsValues(values: {ingress?: {enabled?: boole
 export interface DstackCaTarget {kubeContext: string; namespace: string; secret: string}
 /** Returns undefined until cert-manager has issued the controller certificate. */
 export type DstackCaReader = (target: DstackCaTarget) => string | undefined
+/** Kubernetes could not be asked, as opposed to a Secret that does not exist yet. */
+export class DstackCaUnavailable extends Error {}
 
 /** Read only ca.crt from the controller's certificate Secret. The output never includes the key. */
 export const readDstackClusterCa: DstackCaReader = ({kubeContext, namespace, secret}) => {
-  const result = spawnSync('kubectl', ['--context', kubeContext, '--namespace', namespace, 'get', 'secret', secret, '--ignore-not-found', '--output', 'jsonpath={.data.ca\\.crt}'], {encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 60_000})
-  // kubectl errors can quote cluster configuration; report only the failed operation.
-  if (result.error || result.status !== 0) throw new Error('Cannot read the dstack controller CA from Kubernetes; check the kube context and Secret access (remote details omitted)')
-  const encoded = result.stdout.trim()
+  let encoded: string
+  try {
+    encoded = capacityExec(['--context', kubeContext, '--namespace', namespace, '--request-timeout', '30s', 'get', 'secret', secret, '--ignore-not-found', '--output', 'jsonpath={.data.ca\\.crt}']).trim()
+  } catch {
+    throw new DstackCaUnavailable('Cannot read the dstack controller CA from Kubernetes; check the kube context and Secret access (remote details omitted)')
+  }
+
   return encoded ? Buffer.from(encoded, 'base64').toString('utf8') : undefined
 }
 

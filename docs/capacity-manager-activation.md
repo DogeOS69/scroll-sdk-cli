@@ -233,7 +233,10 @@ capacity API, then deletes that Pod. It neither changes fleets nor starts Worker
 The CLI does not read Secret values or display raw provider/probe responses. The
 probe has a bounded lifetime and no service-account token. After an interrupted
 CLI process, remove only its `cm-preflight-*` Pod if one remains. The Python TLS
-probe does not establish that the Core binary has the same trust store.
+probe does not establish that the Core binary has the same trust store. With
+`dstackController.privateTls`, the probe trusts only `manager.dstack.caBundle`
+from the values for dstack, as the manager does, and checks that the selected
+manager binary accepts `--dstack-ca-file`.
 
 Status is read-only. It reports Deployment replicas and bounded recent reconcile
 log observations, omitting raw logs. Unknown log formats or insufficient samples
