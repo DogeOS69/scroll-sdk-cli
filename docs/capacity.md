@@ -113,7 +113,9 @@ render. It changes nothing in the cluster.
 Provider credentials come from the deployment environment file: the file saved
 by `setup plan`, `./deployment.env`, or `--env-file`. `setup render` and
 `setup prep-charts` read `capacity.yaml` too, so they do not revert a change.
-`setup dstack-config` refuses once `capacity.yaml` exists.
+`setup dstack-config` refuses once `capacity.yaml` exists, and `secrets sync`
+does not deploy dstack provider keys: it points to `capacity deploy` when the
+environment holds a different Vast.ai key.
 
 ## `capacity.yaml`
 

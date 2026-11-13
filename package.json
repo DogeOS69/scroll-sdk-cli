@@ -117,6 +117,9 @@
       },
       "capacity": {
         "description": "Change the GPU capacity of a prepared deployment: edit capacity.yaml, then capacity deploy"
+      },
+      "secrets": {
+        "description": "Change secret values of a prepared deployment"
       }
     }
   },

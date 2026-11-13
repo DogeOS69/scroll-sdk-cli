@@ -31,6 +31,7 @@ stages reported `prepared`, and how to make each one.
 | Chart values: resources, replicas, alert timing, flags | `values/<component>-production.yaml` | `make install-<component>` | That component, if the rendered workload changed |
 | GPU capacity: providers, fleets, prices, worker limits, runtime estimates | `capacity.yaml` (an AWS provider also needs the controller identity in `values/dstack-controller-production.yaml`) | `scrollsdk capacity deploy`. See [capacity](capacity.md) | The dstack controller when its providers or keys change; the manager |
 | A dstack provider key (Vast.ai) | The private environment file (`deployment.env`) | `scrollsdk capacity deploy` | The dstack controller |
+| Another secret value: RPC URL, API key, password | The private environment file (`deployment.env`) | `scrollsdk secrets sync --apply`, then the restarts it prints. See [secrets sync](secrets-sync.md) | The workloads reading the changed Secrets, restarted by the operator |
 | CubeSigner session | — | `scrollsdk cubesigner refresh-session`; see [CubeSigner preparation](cubesigner-preparation.md) | The signer, as documented there |
 | Attestation signer set | — | `scrollsdk bridge rotation register`, `send`, `online` | None; an on-chain rotation |
 | Status page bindings | — | `scrollsdk monitoring status-page --plan` and `--apply`; see [status page](status-page.md) | None |
@@ -50,6 +51,6 @@ stages reported `prepared`, and how to make each one.
 
 - Chain identity: chain IDs, genesis, contracts, the Bridge seed, recovery
   keys, sequencer and node identities. These need re-genesis.
-- Signing and node keys.
+- Signing and node keys. `secrets sync` refuses to change them.
 - The dstack controller encryption key. It protects the dstack database and is
   never regenerated; restore it from backup if it is lost.
