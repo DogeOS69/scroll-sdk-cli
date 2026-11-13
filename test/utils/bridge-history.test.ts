@@ -31,7 +31,7 @@ function fixture(): DeploymentSpec {
   const spec = normalizeDeploymentSpec(yaml.load(source) as DeploymentSpec)
   spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, bitcore.Networks.testnet).toAddress().toString()
   spec.bridgeHistory = {enabled: true}
-  spec.images = {services: {dogeosBridgeHistory: {tag: 'test-history-release'}, frontends: {tag: 'test-activity-release'}}}
+  spec.images = {services: {dogeosBridgeHistory: {tag: 'test-history-release'}, frontends: {tag: 'test-activity-release'}, withdrawalProcessor: {tag: 'test-transitions'}}}
   spec.infrastructure.aws!.sharedAlb = {certificateArn, groupName: 'history-test', services: [HISTORY_SERVICE, 'frontends']}
   spec.dogecoin.indexerStartHeight = 123
   spec.helmValues = {'tso-service-production.yaml': yaml.dump({

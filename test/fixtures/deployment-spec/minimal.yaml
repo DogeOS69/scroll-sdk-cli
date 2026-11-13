@@ -137,3 +137,7 @@ genesis:
 monitoring:
   slack:
     enabled: false
+
+images:
+  services:
+    withdrawalProcessor: {repository: dogeos69/withdrawal-processor, tag: test-transitions}
