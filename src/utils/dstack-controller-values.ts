@@ -8,6 +8,8 @@ import {reconcileDeploymentIngresses} from './public-service-ingress.js'
 
 export const DSTACK_MONITORING_VALUES_FILE = 'scroll-monitor-dstack.yaml'
 export const DSTACK_CONTROLLER_VALUES_FILE = 'dstack-controller-production.yaml'
+/** Pod annotation holding the digest of the uploaded config.yml; a change restarts the controller. */
+export const DSTACK_SERVER_CONFIG_CHECKSUM_ANNOTATION = 'checksum/server-config'
 export const DSTACK_CONTROLLER_IMAGE = {
   digest: 'sha256:a502b38014dc9730ad712f60c067b84a00a4cf091982b81f9982fdc60ac6852b',
   pullPolicy: 'IfNotPresent',
@@ -202,6 +204,10 @@ export function validateDstackControllerConfig(input: unknown): void {
   validateCredentialSecrets(config, root)
 
   for (const field of ['nodeSelector', 'podAnnotations']) if (config[field] !== undefined) strings(config[field], `${root}.${field}`)
+  if (config.podAnnotations !== undefined && Object.hasOwn(config.podAnnotations as Mapping, DSTACK_SERVER_CONFIG_CHECKSUM_ANNOTATION)) {
+    throw new Error(`${root}.podAnnotations must not set ${DSTACK_SERVER_CONFIG_CHECKSUM_ANNOTATION}; the CLI derives it from the controller config`)
+  }
+
   validateServiceAccount(config, root)
 
   if (config.resources !== undefined) {
@@ -224,8 +230,12 @@ export function validateDstackControllerConfig(input: unknown): void {
   validateTolerations(config, root)
 }
 
-/** Complete production overrides; independent of the cluster's cloud provider. */
-export function generateDstackControllerValues(config?: DstackControllerConfig): string | undefined {
+/**
+ * Complete production overrides; independent of the cluster's cloud provider.
+ * `serverConfigChecksum` is the digest of the config.yml that will be uploaded;
+ * omit it only before the controller credentials exist.
+ */
+export function generateDstackControllerValues(config?: DstackControllerConfig, options: {serverConfigChecksum?: string} = {}): string | undefined {
   validateDstackControllerConfig(config)
   if (!config || config.enabled === false) return undefined
   const overrides = {...config}
@@ -256,6 +266,9 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
       scrapeTimeout: config.monitoring?.scrapeTimeout ?? '10s',
     },
     persistence: {retain: true, size: '20Gi', ...config.persistence},
+    // dstack reads config.yml only at startup and the chart cannot checksum an
+    // external Secret, so the digest makes helm upgrade restart the controller.
+    ...(options.serverConfigChecksum ? {podAnnotations: {...config.podAnnotations, [DSTACK_SERVER_CONFIG_CHECKSUM_ANNOTATION]: options.serverConfigChecksum}} : {}),
     replicaCount: config.replicaCount ?? 1,
     resources: {
       limits: {memory: '4Gi', ...config.resources?.limits},
@@ -266,6 +279,11 @@ export function generateDstackControllerValues(config?: DstackControllerConfig):
     ...(config.privateTls ? {tls: dstackPrivateTlsValues(config.privateTls)} : {}),
   }
   reconcileDeploymentIngresses(values, 'dstack-controller', false)
+  return dumpDstackControllerValues(values)
+}
+
+/** The controller values file as prep-charts writes it; capacity render rewrites it the same way to set the checksum. */
+export function dumpDstackControllerValues(values: unknown): string {
   return '# Generated from dstackController; edit the source configuration, then regenerate.\n'
     + '# Independent Helm release; Secret contents and GPU fleet/task submission are managed separately.\n'
     + yaml.dump(values, {lineWidth: -1, noRefs: true, sortKeys: true})

@@ -114,6 +114,9 @@
       },
       "rpc": {
         "description": "Export deployment configuration for external RPC nodes"
+      },
+      "capacity": {
+        "description": "Change the GPU capacity of a prepared deployment: edit capacity.yaml, then capacity deploy"
       }
     }
   },

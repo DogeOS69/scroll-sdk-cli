@@ -11,6 +11,7 @@ import type {ProofProgramPublicationV1} from '../types/proof-program-publication
 import type {ProofWorkerImageCheckV1} from '../types/proof-worker-image-check.js'
 import type {ProverWorkerContractV1} from './proof-topology-compiler.js'
 
+import {applyCapacityDocument, readCapacityDocument} from './capacity-document.js'
 import {capacityConnectionUrl, validateCapacityConnection} from './capacity-manager-network.js'
 import {workerLaunch} from './capacity-manager-worker.js'
 import {DSTACK_CONTROLLER_IMAGE} from './dstack-controller-values.js'
@@ -41,12 +42,35 @@ function readCapacitySpec(file: string, label: string, parse: (content: string) 
   return parseCapacityInput(fs.readFileSync(file, 'utf8'), label, parse) as DeploymentSpec
 }
 
-export function capacitySpec(root: string): DeploymentSpec {
+/** The frozen intent as prepared, ignoring a runtime capacity.yaml. */
+export function capacityIntentSpec(root: string): DeploymentSpec {
   if (fs.existsSync(localPath(root, CAPACITY_MANAGER_CONFIG))) throw new Error('Separate capacity-manager config is no longer supported; restore the saved deployment intent and use setup render')
   return withPreparedDstackAws(root, readCapacitySpec(localPath(root, '.scrollsdk/intent.json'), 'frozen intent (.scrollsdk/intent.json)', JSON.parse))
 }
 
+/** The intent with capacity taken from capacity.yaml once it exists (see `scrollsdk capacity deploy`). */
+export function capacitySpec(root: string): DeploymentSpec {
+  const spec = capacityIntentSpec(root)
+  const document = readCapacityDocument(root)
+  return document ? applyCapacityDocument(spec, document) : spec
+}
+
 const architectures = {A10G: '86', A100: '80', A6000: '86', L4: '89', L40S: '89', RTX3090: '86', RTX4090: '89'}
+/** Usable VRAM per GPU as matched by dstack offers. */
+const VRAM_GIB = {A10G: 22, A100: 40, A6000: 48, L4: 22, L40S: 44, RTX3090: 24, RTX4090: 24}
+/** The families' `min_vram_gib`; Core requires `pool.vram_gib` to cover it. */
+const FAMILY_MIN_VRAM_GIB = 16
+type CapacityGpu = CapacityManagerConfig['gpu']
+
+/**
+ * Core puts `pool.vram_gib` into every run's GPU memory request, fallback runs
+ * included, so it must be a floor that every selected GPU meets. Primary runs
+ * still name their GPU, so a lower floor does not widen their selection.
+ */
+function poolVramGib(primary: CapacityGpu, fallback?: CapacityGpu): number {
+  const policy = ['A10G', 'L4'].includes(primary) ? 22 : primary === 'L40S' ? 44 : 24
+  return Math.min(policy, ...(fallback ? [VRAM_GIB[fallback]] : []))
+}
 
 /** Match Core's transport boundary and preserve the operator's TLS endpoint. */
 export function capacityManagerDstackUrl(value: unknown): string {
@@ -70,7 +94,10 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
   const runtimeEstimates = {bridgeStateSeconds: 1800, l2RangeAggregationSeconds: 1800, scrollBatchSeconds: 300, scrollChunkSeconds: 60, ...input.runtimeEstimates}
   for (const value of Object.values(runtimeEstimates)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('capacityManager.runtimeEstimates must contain positive integer seconds')
   const fleet = {action: input.fleet?.action ?? 'create', cpus: input.fleet?.cpus ?? 16, diskSizeGiB: input.fleet?.diskSizeGiB ?? 200, idleDurationSeconds: input.fleet?.idleDurationSeconds ?? 600, memoryGiB: input.fleet?.memoryGiB ?? (input.gpu === 'L40S' ? 128 : 64)}
-  const config = {...input, fleet, instanceTypes: input.instanceTypes ?? [], maxHourlyCostUsd: input.maxHourlyCostUsd ?? (input.provider === 'aws' ? 3 : 1.6), maxPricePerHourUsd: input.maxPricePerHourUsd ?? (input.provider === 'aws' ? 1.5 : 0.8), maxWorkers: input.maxWorkers ?? 2, minReliability: input.minReliability ?? 0.95, minWorkers: input.minWorkers ?? 1, runtimeEstimates, scaleDownTtlSeconds: input.scaleDownTtlSeconds ?? 300, targetDrainSeconds: input.targetDrainSeconds ?? 600, workerIdPrefix: input.workerIdPrefix ?? `cm-${digest(spec.metadata.name).slice(0, 16)}`}
+  const maxPricePerHourUsd = input.maxPricePerHourUsd ?? (input.provider === 'aws' ? 1.5 : 0.8)
+  // The estimate must cover every fleet a worker can run in; see the check below.
+  const workerBudgetUsdPerHour = input.workerBudgetUsdPerHour ?? Math.max(maxPricePerHourUsd, input.fallback?.maxPricePerHourUsd ?? 0)
+  const config = {...input, fleet, instanceTypes: input.instanceTypes ?? [], maxHourlyCostUsd: input.maxHourlyCostUsd ?? (input.provider === 'aws' ? 3 : 1.6), maxPricePerHourUsd, maxWorkers: input.maxWorkers ?? 2, minReliability: input.minReliability ?? 0.95, minWorkers: input.minWorkers ?? 1, runtimeEstimates, scaleDownTtlSeconds: input.scaleDownTtlSeconds ?? 300, steadyStateFloor: input.steadyStateFloor ?? 1, targetDrainSeconds: input.targetDrainSeconds ?? 600, workerBudgetUsdPerHour, workerIdPrefix: input.workerIdPrefix ?? `cm-${digest(spec.metadata.name).slice(0, 16)}`}
   if (!['aws', 'vastai'].includes(config.provider) || !Object.hasOwn(architectures, config.gpu)) throw new Error('Unsupported capacityManager provider/GPU')
   if (!config.image?.repository || !/^[\w./:-]+$/.test(config.image.repository) || !/^sha256:[\da-f]{64}$/.test(config.image.digest)) throw new Error('capacityManager.image must select a published immutable capacity-manager binary image')
   if (!/^[a-z][\da-z-]{0,29}$/.test(config.workerIdPrefix)) throw new Error('capacityManager.workerIdPrefix must be a lowercase resource prefix, at most 30 characters')
@@ -93,34 +120,38 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
     }
   }
 
-  for (const key of ['maxWorkers', 'minWorkers', 'scaleDownTtlSeconds', 'targetDrainSeconds'] as const) {
-    if (!Number.isSafeInteger(config[key]) || config[key] < (key === 'minWorkers' || key === 'scaleDownTtlSeconds' ? 0 : 1)) throw new Error(`capacityManager.${key} has an invalid integer value`)
+  for (const key of ['maxWorkers', 'minWorkers', 'scaleDownTtlSeconds', 'steadyStateFloor', 'targetDrainSeconds'] as const) {
+    if (!Number.isSafeInteger(config[key]) || config[key] < (key === 'minWorkers' || key === 'scaleDownTtlSeconds' || key === 'steadyStateFloor' ? 0 : 1)) throw new Error(`capacityManager.${key} has an invalid integer value`)
   }
 
   if (!Number.isFinite(config.minReliability) || config.minReliability < 0.95 || config.minReliability > 1) throw new Error('capacityManager.minReliability must be between 0.95 and 1')
 
   // Core's dstack adapter reserves eight extra slots and caps the inventory at 1024.
-  if (config.maxWorkers > 1016 || config.minWorkers > config.maxWorkers) throw new Error('capacityManager worker bounds exceed Core capacity or minWorkers exceeds maxWorkers')
-  for (const key of ['maxPricePerHourUsd', 'maxHourlyCostUsd'] as const) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`capacityManager.${key} must be positive and finite`)
-  if (config.maxHourlyCostUsd < config.maxPricePerHourUsd * config.minWorkers) throw new Error('capacityManager hourly budget cannot fund its minimum workers at the selected price ceiling')
+  if (config.maxWorkers > 1016) throw new Error('capacityManager.maxWorkers must be at most 1016 (Core capacity)')
+  if (config.minWorkers > config.maxWorkers) throw new Error('capacityManager.minWorkers must not exceed maxWorkers')
+  if (config.steadyStateFloor > config.maxWorkers) throw new Error('capacityManager.steadyStateFloor must not exceed maxWorkers')
+  for (const key of ['maxPricePerHourUsd', 'maxHourlyCostUsd', 'workerBudgetUsdPerHour'] as const) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`capacityManager.${key} must be positive and finite`)
+  if (config.workerBudgetUsdPerHour < config.maxPricePerHourUsd) throw new Error('capacityManager.workerBudgetUsdPerHour must cover the primary maxPricePerHourUsd')
+  if (config.maxHourlyCostUsd < config.workerBudgetUsdPerHour * config.minWorkers) throw new Error('capacityManager hourly budget cannot fund its minimum workers at the per-worker budget estimate')
   if (config.fallback) {
     const {fallback} = config
-    if (config.provider !== 'aws' || fallback.provider !== 'vastai') throw new Error('capacityManager.fallback requires AWS primary and Vast fallback')
+    if (!['aws', 'vastai'].includes(fallback.provider)) throw new Error('capacityManager.fallback.provider must be aws or vastai')
     if (config.fleets.includes(fallback.fleet)) throw new Error('Fallback fleet must be distinct from primary fleets')
-    if (!Number.isFinite(fallback.maxPricePerHourUsd) || fallback.maxPricePerHourUsd <= 0 || fallback.maxPricePerHourUsd > config.maxPricePerHourUsd) throw new Error('Fallback price must be positive and no greater than the primary per-worker budget estimate')
-    resolveCapacityManager(fallbackSpec(spec))
-    const vram = {A10G: 22, A100: 40, A6000: 48, L4: 22, L40S: 44, RTX3090: 24, RTX4090: 24}
-    const required = ['A10G', 'L4'].includes(config.gpu) ? 22 : config.gpu === 'L40S' ? 44 : 24
-    if (vram[fallback.gpu] < required) throw new Error('Fallback GPU does not meet the primary policy VRAM requirement')
+    if (!Number.isFinite(fallback.maxPricePerHourUsd) || fallback.maxPricePerHourUsd <= 0) throw new Error('capacityManager.fallback.maxPricePerHourUsd must be positive and finite')
+    // Core keeps one per-worker cost estimate for both fleets.
+    if (config.workerBudgetUsdPerHour < fallback.maxPricePerHourUsd) throw new Error('capacityManager.workerBudgetUsdPerHour must cover the fallback maxPricePerHourUsd')
+    // Every supported GPU has at least the families' FAMILY_MIN_VRAM_GIB, so any pair keeps poolVramGib above it.
+    resolveCapacityManager(fallbackSpec(spec, config))
   }
 
   return config
 }
 
-function fallbackSpec(spec: DeploymentSpec): DeploymentSpec {
-  const primary = spec.capacityManager!
-  const fallback = primary.fallback!
-  return {...spec, capacityManager: {...primary, fallback: undefined, fleet: {...primary.fleet, memoryGiB: primary.fleet?.memoryGiB ?? (primary.gpu === 'L40S' ? 128 : 64)}, fleets: [fallback.fleet], gpu: fallback.gpu, instanceTypes: [], maxHourlyCostUsd: primary.maxHourlyCostUsd ?? 3, maxPricePerHourUsd: fallback.maxPricePerHourUsd, minReliability: fallback.minReliability ?? primary.minReliability, provider: fallback.provider, regions: fallback.regions}}
+/** The fallback as a primary-shaped selection, inheriting the resolved primary's resources and budgets. */
+function fallbackSpec(spec: DeploymentSpec, primary: Pick<CapacityManagerConfig, 'fleet' | 'maxHourlyCostUsd' | 'minReliability' | 'workerBudgetUsdPerHour'>): DeploymentSpec {
+  const input = spec.capacityManager!
+  const fallback = input.fallback!
+  return {...spec, capacityManager: {...input, fallback: undefined, fleet: primary.fleet, fleets: [fallback.fleet], gpu: fallback.gpu, instanceTypes: fallback.instanceTypes ?? [], maxHourlyCostUsd: primary.maxHourlyCostUsd, maxPricePerHourUsd: fallback.maxPricePerHourUsd, minReliability: fallback.minReliability ?? primary.minReliability, provider: fallback.provider, regions: fallback.regions, workerBudgetUsdPerHour: primary.workerBudgetUsdPerHour}}
 }
 
 /** Reviewable dstack 0.21.5 fleet intent; preparation never requests initial instances. */
@@ -139,8 +170,26 @@ export function capacityManagerFleets(spec: DeploymentSpec): {action: 'create' |
     spot_policy: 'on-demand',
     type: 'fleet',
   }))
-  if (config.fallback) configurations.push(...capacityManagerFleets(fallbackSpec(spec)).configurations as typeof configurations)
+  if (config.fallback) configurations.push(...capacityManagerFleets(fallbackSpec(spec, config)).configurations as typeof configurations)
   return {action: config.fleet.action, configurations}
+}
+
+/** capacity.yaml field for each spec capacityManager field, for messages about a capacity.yaml change. */
+const DOCUMENT_FIELDS: Record<string, string> = {
+  'fleet.cpus': 'resources.cpus', 'fleet.diskSizeGiB': 'resources.diskGiB', 'fleet.idleDurationSeconds': 'resources.idleSeconds', 'fleet.memoryGiB': 'resources.memoryGiB',
+  fleets: 'primary.fleet', gpu: 'primary.gpu', instanceTypes: 'primary.instanceTypes', maxHourlyCostUsd: 'scaling.maxHourlyCostUsd', maxPricePerHourUsd: 'primary.maxPricePerHourUsd',
+  maxWorkers: 'scaling.maxWorkers', minReliability: 'primary.minReliability', minWorkers: 'scaling.minWorkers', project: 'project', provider: 'primary.provider', regions: 'primary.regions',
+  runtimeEstimates: 'runtimeEstimates', scaleDownTtlSeconds: 'scaling.scaleDownTtlSeconds', steadyStateFloor: 'scaling.steadyStateFloor', targetDrainSeconds: 'scaling.targetDrainSeconds',
+  workerBudgetUsdPerHour: 'scaling.workerBudgetUsdPerHour',
+}
+
+/** A spec capacityManager message in capacity.yaml terms; fields only the frozen intent holds keep their spec names. */
+export function inCapacityDocumentTerms(message: string): string {
+  return message
+    .replace('Unsupported capacityManager provider/GPU', `Unsupported primary.gpu; use one of ${Object.keys(architectures).join(', ')}`)
+    .replaceAll(/capacityManager\.fallback\.(\w+)/g, 'fallback.$1')
+    .replaceAll(/capacityManager\.(fleet\.\w+|\w+)/g, (match, key: string) => DOCUMENT_FIELDS[key] ?? match)
+    .replaceAll(/capacityManager(?!\.)/g, 'capacity.yaml')
 }
 
 export function assertSdkWorkersRetired(root: string): void {
@@ -162,10 +211,10 @@ export function preserveCapacityTuning(spec: DeploymentSpec, values: any, existi
     }
   }
 
-  for (const [field, key] of [['targetDrainSeconds', 'target_drain_seconds'], ['scaleDownTtlSeconds', 'scale_down_ttl_seconds']] as const) {
+  for (const [field, key] of [['targetDrainSeconds', 'target_drain_seconds'], ['scaleDownTtlSeconds', 'scale_down_ttl_seconds'], ['steadyStateFloor', 'steady_state_floor']] as const) {
     const value = oldPolicy.global?.[key]
     if (intent[field] === undefined && value !== undefined) {
-      if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Capacity drain/scale-down tuning must be positive seconds')
+      if (!Number.isSafeInteger(value) || value < (key === 'steady_state_floor' ? 0 : 1)) throw new Error('Capacity drain/scale-down tuning must be positive seconds, and the steady-state floor a nonnegative integer')
       policy.global[key] = value
     }
   }
@@ -186,8 +235,8 @@ export function buildCapacityManagerValues(spec: DeploymentSpec, worker: ProverW
   const config = resolveCapacityManager(spec)
   if (!/^sha256:[\da-f]{64}$/.test(worker.image.digest) || worker.required_build_class !== 'production' || !isDeepStrictEqual(worker.image, imageCheck.image) || !imageCheck.cudaArchitectures.includes(architectures[config.gpu])) throw new Error('capacityManager GPU/image does not match the checked production Worker')
   if (publication.verification.anonymousHttpReadback !== 'passed' || publication.verification.authenticatedS3Readback !== 'passed') throw new Error('Publish and verify Worker artifacts before preparing capacity-manager')
-  const families = Object.fromEntries([['scroll_chunk', config.runtimeEstimates.scrollChunkSeconds], ['scroll_batch', config.runtimeEstimates.scrollBatchSeconds], ['l2_range_aggregation', config.runtimeEstimates.l2RangeAggregationSeconds], ['bridge_state', config.runtimeEstimates.bridgeStateSeconds]].map(([name, seconds]) => [name, {max_workers: config.maxWorkers, min_vram_gib: 16, min_workers: 0, runtime_seconds: seconds}]))
-  const policy = {families, global: {liveness_floor: config.minWorkers, max_workers: config.maxWorkers, scale_down_ttl_seconds: config.scaleDownTtlSeconds, steady_state_floor: 1, target_drain_seconds: config.targetDrainSeconds}, pool: {gpu_class: config.gpu, hourly_cost_usd_per_worker: config.maxPricePerHourUsd, max_hourly_cost_usd: config.maxHourlyCostUsd, max_workers: config.maxWorkers, provider: config.provider, provider_diversity_min: 1, vram_gib: ['A10G', 'L4'].includes(config.gpu) ? 22 : config.gpu === 'L40S' ? 44 : 24}}
+  const families = Object.fromEntries([['scroll_chunk', config.runtimeEstimates.scrollChunkSeconds], ['scroll_batch', config.runtimeEstimates.scrollBatchSeconds], ['l2_range_aggregation', config.runtimeEstimates.l2RangeAggregationSeconds], ['bridge_state', config.runtimeEstimates.bridgeStateSeconds]].map(([name, seconds]) => [name, {max_workers: config.maxWorkers, min_vram_gib: FAMILY_MIN_VRAM_GIB, min_workers: 0, runtime_seconds: seconds}]))
+  const policy = {families, global: {liveness_floor: config.minWorkers, max_workers: config.maxWorkers, scale_down_ttl_seconds: config.scaleDownTtlSeconds, steady_state_floor: config.steadyStateFloor, target_drain_seconds: config.targetDrainSeconds}, pool: {gpu_class: config.gpu, hourly_cost_usd_per_worker: config.workerBudgetUsdPerHour, max_hourly_cost_usd: config.maxHourlyCostUsd, max_workers: config.maxWorkers, provider: config.provider, provider_diversity_min: 1, vram_gib: poolVramGib(config.gpu, config.fallback?.gpu)}}
   const selectedArchitectures = [architectures[config.gpu], ...(config.fallback ? [architectures[config.fallback.gpu]] : [])]
   if (selectedArchitectures.some(architecture => !imageCheck.cudaArchitectures.includes(architecture))) throw new Error('Fallback GPU/image does not match the checked production Worker')
   const launch = workerLaunch(worker, publication, '{worker_id}', selectedArchitectures)
@@ -230,10 +279,16 @@ function dstackClusterCaBundle(spec: DeploymentSpec, name: string, namespace: st
   throw new DstackCaPending({message: `Install dstack-controller with privateTls (make install-dstack-controller) and wait for cert-manager to issue the ${secret} Secret in namespace ${namespace}, then rerun the same command`})
 }
 
-export function prepareCapacityManager(root: string, readContract = validateProofDeploymentContract, readCa: DstackCaReader = readDstackClusterCa): {namespace: string; project: string; valuesFile: string} {
+/**
+ * `fleetUpdate` is set by the capacity commands only: their chart initialization updates existing fleets in place.
+ * Preparation keeps the intent's create/reuse, so the first activation keeps its meaning.
+ */
+export interface CapacityPreparationOptions {fleetUpdate?: boolean}
+
+export function prepareCapacityManager(root: string, readContract = validateProofDeploymentContract, readCa: DstackCaReader = readDstackClusterCa, options: CapacityPreparationOptions = {}): {namespace: string; project: string; valuesFile: string} {
   const transaction = GenerationTransaction.begin(root, CAPACITY_MANAGER_STATE_PATHS)
   try {
-    const {namespace, project, valuesFile} = prepareCapacityManagerInDirectory(transaction.stagingRoot, readContract, readCa)
+    const {namespace, project, valuesFile} = prepareCapacityManagerInDirectory(transaction.stagingRoot, readContract, readCa, false, options)
     const original = transaction.toOriginalPath(valuesFile)
     transaction.commit()
     return {namespace, project, valuesFile: original}
@@ -243,7 +298,13 @@ export function prepareCapacityManager(root: string, readContract = validateProo
   }
 }
 
-function prepareCapacityManagerInDirectory(root: string, readContract: typeof validateProofDeploymentContract, readCa: DstackCaReader, keepRecordedCa = false): {namespace: string; project: string; valuesFile: string; warning?: string} {
+/** Writes a values file only when its content changes, so an unchanged operator file keeps its comments and layout. */
+function writeValues(file: string, values: unknown): void {
+  if (fs.existsSync(file) && isDeepStrictEqual(yaml.load(fs.readFileSync(file, 'utf8')), values)) return
+  fs.writeFileSync(file, yaml.dump(values, {lineWidth: -1, noRefs: true}))
+}
+
+function prepareCapacityManagerInDirectory(root: string, readContract: typeof validateProofDeploymentContract, readCa: DstackCaReader, keepRecordedCa = false, {fleetUpdate = false}: CapacityPreparationOptions = {}): {namespace: string; project: string; valuesFile: string; warning?: string} {
   const spec = capacitySpec(root)
   resolveCapacityManager(spec)
   assertSdkWorkersRetired(root)
@@ -294,14 +355,14 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   // refuses both modes at once.
   projected.manager.workerTokenSecret = ''
   const makefile = localPath(root, 'Makefile')
-  if (fs.existsSync(makefile)) assertCapacityChartVersions(fs.readFileSync(makefile, 'utf8'), spec)
+  if (fs.existsSync(makefile)) assertCapacityChartVersions(fs.readFileSync(makefile, 'utf8'), spec, {fleetUpdate})
   // Final values require WP to admit the manager even while the manager waits for the dstack CA.
   const wpFile = localPath(root, contract.components.withdrawalProcessor.valuesFile)
   const wp = readValues(contract.components.withdrawalProcessor.valuesFile)
   if (!wp.networkPolicy?.enabled) throw new Error('Enable WP NetworkPolicy before preparing capacity-manager')
   wp.networkPolicy.allowFrom ??= {}
   wp.networkPolicy.allowFrom.capacityManager = [{podSelector: {matchLabels: {'app.kubernetes.io/name': 'capacity-manager'}}}]
-  fs.writeFileSync(wpFile, yaml.dump(wp, {lineWidth: -1, noRefs: true}))
+  writeValues(wpFile, wp)
   // Read after the chart checks and the WP binding, before the manager's own files.
   // An empty bundle keeps the public roots and clears a stale CA.
   // The Service URL is the same in every cluster, so the recorded CA must also come from this kube context.
@@ -310,27 +371,36 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
   const ca = privateTls ? dstackClusterCaBundle(spec, dstackName, dstackNamespace, readCa, recordedCa) : {bundle: ''}
   projected.manager.dstack.caBundle = ca.bundle
 
+  // The manager image is a component image: after preparation the operator upgrades it in the values file.
+  if (readCapacityDocument(root) && existing.image?.digest) projected.image = existing.image
   const content = mergeBootstrapValues(template, yaml.dump(projected))
   const values = yaml.load(content) as any
   // Fixed, separately named manager: deployment/selector and Secret destination are a shared contract.
   if (values.fullnameOverride !== 'capacity-manager') throw new Error('Keep capacity-manager fullnameOverride at its template name')
   const planFile = localPath(root, CAPACITY_MANAGER_PLAN)
   const fleetIntent = capacityManagerFleets(spec)
+  const fleetAction = fleetUpdate ? 'update' : fleetIntent.action
+  // The chart's pre-install/pre-upgrade hook checks the backends and creates missing fleets.
   values.initialization = {
-    enabled: true, fleetAction: fleetIntent.action, fleets: fleetIntent.configurations,
+    enabled: true, fleetAction, fleets: fleetIntent.configurations,
     image: DSTACK_CONTROLLER_IMAGE, provider: spec.capacityManager!.provider,
     ...(spec.capacityManager!.fallback ? {fallbackProvider: spec.capacityManager!.fallback.provider} : {}),
     privateDns,
   }
-  preserveCapacityTuning(spec, values, existing)
+  // capacity.yaml is the whole source once it exists: no tuning is carried over from the previous values.
+  if (!readCapacityDocument(root)) preserveCapacityTuning(spec, values, existing)
   if (spec.capacityManager?.connection?.mode === 'existing-alb') {
     const binding = read('.scrollsdk/capacity-manager/dstack-targetgroupbinding.json')
     controller.targetGroupBinding = binding.spec
-    fs.writeFileSync(localPath(root, 'values/dstack-controller-production.yaml'), yaml.dump(controller, {lineWidth: -1, noRefs: true}))
+    writeValues(localPath(root, 'values/dstack-controller-production.yaml'), controller)
   }
 
-  fs.writeFileSync(file, yaml.dump(values, {lineWidth: -1, noRefs: true}))
+  writeValues(file, values)
   if (fs.existsSync(makefile)) fs.writeFileSync(makefile, bindMakefileTarget(fs.readFileSync(makefile, 'utf8'), spec))
+  // A fleet no longer declared keeps no file here; dstack keeps the fleet itself until it is deleted there.
+  const fleetDirectory = localPath(root, '.scrollsdk/capacity-manager/fleets')
+  const declared = new Set(fleetIntent.configurations.map(configuration => `${configuration.name}.yaml`))
+  if (fs.existsSync(fleetDirectory)) for (const entry of fs.readdirSync(fleetDirectory)) if (entry.endsWith('.yaml') && !declared.has(entry)) fs.rmSync(path.join(fleetDirectory, entry))
   const fleetFiles = fleetIntent.configurations.map(configuration => {
     const relative = `.scrollsdk/capacity-manager/fleets/${configuration.name}.yaml`
     const content = yaml.dump(configuration, {lineWidth: -1, noRefs: true})
@@ -338,7 +408,7 @@ function prepareCapacityManagerInDirectory(root: string, readContract: typeof va
     fs.writeFileSync(localPath(root, relative), content)
     return {path: relative}
   })
-  writeJson(planFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace, serverUrl: projected.manager.dstack.serverUrl}, fleets: {action: fleetIntent.action, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', privateDns, project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, ...(spec.capacityManager!.fallback ? {fallbackProvider: spec.capacityManager!.fallback.provider} : {}), provider: spec.capacityManager!.provider, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerCredentialMaster: projected.workerCredentialMaster})
+  writeJson(planFile, {...specKubernetesTarget(spec), dstack: {auth: controller.auth, deployment: dstackName, namespace: dstackNamespace, serverUrl: projected.manager.dstack.serverUrl}, fleets: {action: fleetAction, files: fleetFiles}, generationId: contract.generationId, namespace: spec.infrastructure.namespace ?? 'default', privateDns, project: projected.manager.dstack.project, proofSecret: coordinator.persistence.secrets.name, ...(spec.capacityManager!.fallback ? {fallbackProvider: spec.capacityManager!.fallback.provider} : {}), provider: spec.capacityManager!.provider, schema: 'scrollsdk/capacity-manager/v1', valuesFile: CAPACITY_MANAGER_VALUES, workerCredentialMaster: projected.workerCredentialMaster})
   return {namespace: spec.infrastructure.namespace ?? 'default', project: projected.manager.dstack.project, valuesFile: file, warning: ca.warning}
 }
 

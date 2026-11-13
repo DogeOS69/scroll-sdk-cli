@@ -97,6 +97,7 @@ bin/run.js --help
 
 - [CubeSigner preparation and activation](docs/cubesigner-preparation.md) — expected configuration before approval, exact governance handoff, credential deferral and guarded installation.
 - [Staged spec preparation](docs/spec-preparation.md) — plan plus twelve resumable stages, local genesis, funding handoffs and explicit Secret upload.
+- [Changing a prepared deployment](docs/changing-a-prepared-deployment.md) — day-2 changes: images, chart values and GPU capacity, without a new plan.
 - [CLI setup order](docs/setup-order.md) — configuration prerequisites, native Reth genesis, `scrollsdk setup bridge-init`, service configuration and deployment handoff. Start here for command order.
 - [Existing ALBs](docs/existing-alb.md) — select ALB/listener/target-group references in spec, verify them, and retain AWS edges when uninstalling Helm releases.
 - [Configuration cleanup](docs/config-cleanup.md) — supported template fields, matching contracts images and updating an existing deployment.

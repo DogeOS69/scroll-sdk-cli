@@ -8,6 +8,7 @@ import * as path from 'node:path'
 import type {DstackControllerConfig} from '../../types/dstack-controller.js'
 import type {DstackAwsBackend, DstackProvider} from '../../utils/dstack-credentials.js'
 
+import {CAPACITY_DOCUMENT} from '../../utils/capacity-document.js'
 import {
   DSTACK_CREDENTIALS_FILE, checkPrivatePath, configureDstackCredentialRefs, newDstackCredentials,
   parsePrivateJson, readDstackCredentials, renderDstackSecrets, validateDstackCredentials, validateGcpServiceAccount, writePrivateFile,
@@ -52,6 +53,8 @@ export default class DstackConfig extends Command {
     const {flags} = await this.parse(DstackConfig)
     const output = new JsonOutputContext('setup dstack-config', flags.json)
     try {
+      // One day-2 path: once capacity.yaml exists, providers and keys change there (scrollsdk capacity deploy).
+      if (fs.existsSync(CAPACITY_DOCUMENT)) throw new Error(`${CAPACITY_DOCUMENT} manages this deployment's providers; edit it and run scrollsdk capacity deploy`)
       const file = path.resolve(flags.spec ?? flags['doge-config'] ?? '.data/doge-config.toml')
       checkPrivatePath(file)
       let document: Record<string, unknown> = {}

@@ -26,6 +26,13 @@ describe('dstack controller production values', () => {
     expect(generateValuesFiles(dstackSpec({enabled: false}))).to.deep.equal(generateValuesFiles(dstackSpec()))
   })
 
+  it('keeps the restart checksum when generate-from-spec runs after the credentials exist', () => {
+    const checksum = 'a'.repeat(64)
+    const values = yaml.load(generateValuesFiles(dstackSpec({enabled: true}), undefined, {dstackServerConfigChecksum: checksum})[DSTACK_CONTROLLER_VALUES_FILE]) as any
+    expect(values.podAnnotations).to.deep.equal({'checksum/server-config': checksum})
+    expect(yaml.load(generateValuesFiles(dstackSpec({enabled: true}))[DSTACK_CONTROLLER_VALUES_FILE])).not.to.have.property('podAnnotations')
+  })
+
   it('generates standalone PostgreSQL production values with immutable image and Secret references', () => {
     const source = generateValuesFiles(dstackSpec({enabled: true}))[DSTACK_CONTROLLER_VALUES_FILE]
     const values = yaml.load(source) as any

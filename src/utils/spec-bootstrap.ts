@@ -80,7 +80,11 @@ export function resolveSdkRevision(sdkDirectory: string, override?: string): str
 const chartBelow = (version: RegExpMatchArray, patch: number) => Number(version[1]) === 0 && (Number(version[2]) < 1 || Number(version[2]) === 1 && Number(version[3]) < patch)
 
 /** Reject chart pins that silently ignore fleet initialization or endpoint binding. */
-export function assertCapacityChartVersions(makefile: string, spec: DeploymentSpec): void {
+/**
+ * `fleetUpdate`: the initialization Job updates existing fleets in place
+ * (`fleetAction: update`, set by the capacity commands), which needs capacity-manager chart 0.1.9.
+ */
+export function assertCapacityChartVersions(makefile: string, spec: DeploymentSpec, options: {fleetUpdate?: boolean} = {}): void {
   if (!spec.capacityManager) return
   const privateTls = Boolean(spec.dstackController?.privateTls)
   const charts = ['CAPACITY_MANAGER', ...(spec.capacityManager.connection?.mode === 'existing-alb' || privateTls ? ['DSTACK_CONTROLLER'] : [])]
@@ -91,6 +95,10 @@ export function assertCapacityChartVersions(makefile: string, spec: DeploymentSp
     const version = pin.match(/^(\d+)\.(\d+)\.(\d+)(?:\+[\w.-]+)?$/)
     if (!version || chartBelow(version, 6)) throw new Error(`${chart} requires chart >= 0.1.6 for fleet initialization/private endpoint binding; select a compatible templates.sdkRevision and chart pin`)
     if (privateTls && chartBelow(version, chart === 'CAPACITY_MANAGER' ? 8 : 7)) throw new Error('dstackController.privateTls requires dstack-controller chart >= 0.1.7 and capacity-manager chart >= 0.1.8; select a compatible templates.sdkRevision and chart pins')
+    if (chart === 'CAPACITY_MANAGER' && chartBelow(version, 9)) {
+      if (options.fleetUpdate) throw new Error('scrollsdk capacity deploy and render require capacity-manager chart >= 0.1.9, which updates existing fleets in place; set CAPACITY_MANAGER_CHART_VERSION in the Makefile')
+      if (spec.capacityManager.fallback?.provider === 'aws') throw new Error('An AWS fallback requires capacity-manager chart >= 0.1.9; set CAPACITY_MANAGER_CHART_VERSION in the Makefile')
+    }
   }
 }
 
