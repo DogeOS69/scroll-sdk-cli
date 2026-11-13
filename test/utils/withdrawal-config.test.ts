@@ -137,7 +137,7 @@ enabled = true
     expect((facts as any).ethereum_da.blob_source.aws_s3.timeout_ms).to.equal(undefined)
     expect((facts as any).ethereum_da.blob_source.aws_s3.treat_forbidden_as_missing).to.equal(undefined)
     expect((facts as any).l2_bootstrap_next_starting_block_height).to.equal(99)
-    expect((facts as any).rotate_sequencer_signer_v2).to.equal(undefined)
+    expect((facts as any).transitions).to.equal(undefined)
     expect((facts as any).wf_withdrawal_parity_v1).to.equal(undefined)
   })
 
@@ -209,8 +209,13 @@ mode = "active"
     const tuned = `${WITHDRAWAL_DEPLOYMENT_BEGIN}
 operator_custom_flag = true
 fee_rate_sat_per_kvb = 2000000
-rotate_sequencer_signer_v2 = false
 wf_withdrawal_parity_v1 = false
+
+[transitions]
+advance_l1 = true
+advance_l2 = true
+rotate_key = false
+rotate_sequencer_signer = false
 
 [dogeos_indexer]
 rpc_url = "http://operator-edited:8545"
@@ -224,11 +229,36 @@ ${WITHDRAWAL_DEPLOYMENT_END}
     const parsed = toml.parse(remerged) as any
     expect(parsed.operator_custom_flag).to.equal(true)
     expect(parsed.fee_rate_sat_per_kvb).to.equal(2_000_000)
-    expect(parsed.rotate_sequencer_signer_v2).to.equal(false)
+    expect(parsed.transitions).to.deep.equal({advance_l1: true, advance_l2: true, rotate_key: false, rotate_sequencer_signer: false})
     expect(parsed.wf_withdrawal_parity_v1).to.equal(false)
     expect(parsed.utxo_manager_intermediate.bridge_strategy.max_inputs).to.equal(42)
     // The fact key is re-asserted by the merge.
     expect(parsed.dogeos_indexer.rpc_url).to.equal('http://l2-rpc:8545')
+  })
+
+  it('migrates legacy transition switches and keeps explicit transition settings on re-render', () => {
+    const legacy = `advance_l1_builder_v2 = true
+advance_l2_builder_v2 = true
+rotate_sequencer_signer_v2 = true
+`
+    const options = {migrateTransitions: true}
+    const sources = [
+      legacy + '\n[transitions]\nadvance_l2 = false\n',
+      `${WITHDRAWAL_DEPLOYMENT_BEGIN}\n${legacy}${WITHDRAWAL_DEPLOYMENT_END}\n[transitions]\nadvance_l2 = false\n`,
+    ]
+
+    for (const source of sources) {
+      const merged = mergeWithdrawalManagedDeploymentBlock(source, {}, options)
+      expect(toml.parse(merged)).to.deep.equal({
+        transitions: {
+          advance_l1: true,
+          advance_l2: false,
+          rotate_key: false,
+          rotate_sequencer_signer: true,
+        },
+      })
+      expect(mergeWithdrawalManagedDeploymentBlock(merged, {}, options)).to.equal(merged)
+    }
   })
 
   it('removes a stale aws_s3 provider via deletePaths', () => {

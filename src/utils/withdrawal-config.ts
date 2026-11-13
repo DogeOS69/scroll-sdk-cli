@@ -76,6 +76,29 @@ function deleteTomlPath(root: Record<string, any>, segments: string[]): void {
 export interface MergeWithdrawalDeploymentOptions {
   /** Table/key paths to remove after the merge (e.g. a retired blob provider). */
   deletePaths?: string[][]
+  migrateTransitions?: boolean
+}
+
+const RETIRED_TRANSITION_KEYS = {
+  advance_l1: 'advance_l1_builder_v2',
+  advance_l2: 'advance_l2_builder_v2',
+  rotate_key: 'rotate_key_v2',
+  rotate_sequencer_signer: 'rotate_sequencer_signer_v2',
+} as const
+
+function migrateWithdrawalTransitions(config: Record<string, any>): void {
+  const transitions = config.transitions ?? {}
+  if (!isPlainObject(transitions)) {
+    throw new Error('WithdrawalProcessor TOML: transitions must be a table')
+  }
+
+  for (const [key, retiredKey] of Object.entries(RETIRED_TRANSITION_KEYS)) {
+    // Missing switches defaulted to false before Core #1828.
+    transitions[key] ??= config[retiredKey] ?? false
+    delete config[retiredKey]
+  }
+
+  config.transitions = transitions
 }
 
 /**
@@ -96,6 +119,8 @@ export function mergeWithdrawalManagedDeploymentBlock(
   options: MergeWithdrawalDeploymentOptions = {}
 ): string {
   parseToml(source, 'existing config')
+  const ownsTable = (key: string): boolean =>
+    isPlainObject(facts[key]) || (options.migrateTransitions === true && key === 'transitions')
   const beginCount = markerCount(source, WITHDRAWAL_DEPLOYMENT_BEGIN)
   const endCount = markerCount(source, WITHDRAWAL_DEPLOYMENT_END)
   if (beginCount !== endCount || beginCount > 1) {
@@ -123,7 +148,7 @@ export function mergeWithdrawalManagedDeploymentBlock(
     // Markers are TOML comments, not table boundaries. Parse the tail together
     // with the block so fields after END retain their original table ownership.
     const remainder = toml.parse(`${inner}${tail}`) as Record<string, any>
-    const adopted = Object.keys(facts).filter(key => isPlainObject(facts[key]) && key in remainder && !(key in existing))
+    const adopted = Object.keys(remainder).filter(key => ownsTable(key) && !(key in existing))
     const extended = Object.entries(remainder).some(([key, value]) =>
       (!isPlainObject(value) || key in existing) && !isDeepStrictEqual(existing[key], value))
     if (adopted.length > 0 || extended) {
@@ -144,7 +169,7 @@ export function mergeWithdrawalManagedDeploymentBlock(
     // each fact-owned top-level table into the reconstructed managed block.
     const remainder = toml.parse(source) as Record<string, any>
     for (const [key, value] of Object.entries(remainder)) {
-      if (!isPlainObject(value) || key in facts) {
+      if (!isPlainObject(value) || key in facts || ownsTable(key)) {
         existing[key] = value
         delete remainder[key]
       }
@@ -155,6 +180,7 @@ export function mergeWithdrawalManagedDeploymentBlock(
   }
 
   const merged = deepMergeToml(existing, stripUndefinedDeep(facts)) as Record<string, any>
+  if (options.migrateTransitions) migrateWithdrawalTransitions(merged)
   for (const segments of options.deletePaths || []) deleteTomlPath(merged, segments)
 
   const block = `${WITHDRAWAL_DEPLOYMENT_BEGIN}\n${toml.stringify(merged as toml.JsonMap).trimEnd()}\n${WITHDRAWAL_DEPLOYMENT_END}`
