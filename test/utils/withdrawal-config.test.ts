@@ -236,6 +236,31 @@ ${WITHDRAWAL_DEPLOYMENT_END}
     expect(parsed.dogeos_indexer.rpc_url).to.equal('http://l2-rpc:8545')
   })
 
+  it('migrates legacy transition switches and keeps explicit transition settings on re-render', () => {
+    const legacy = `advance_l1_builder_v2 = true
+advance_l2_builder_v2 = true
+rotate_sequencer_signer_v2 = true
+`
+    const options = {migrateTransitions: true}
+    const sources = [
+      legacy + '\n[transitions]\nadvance_l2 = false\n',
+      `${WITHDRAWAL_DEPLOYMENT_BEGIN}\n${legacy}${WITHDRAWAL_DEPLOYMENT_END}\n[transitions]\nadvance_l2 = false\n`,
+    ]
+
+    for (const source of sources) {
+      const merged = mergeWithdrawalManagedDeploymentBlock(source, {}, options)
+      expect(toml.parse(merged)).to.deep.equal({
+        transitions: {
+          advance_l1: true,
+          advance_l2: false,
+          rotate_key: false,
+          rotate_sequencer_signer: true,
+        },
+      })
+      expect(mergeWithdrawalManagedDeploymentBlock(merged, {}, options)).to.equal(merged)
+    }
+  })
+
   it('removes a stale aws_s3 provider via deletePaths', () => {
     const initial = buildWithdrawalDeploymentFacts(FACTS_INPUT)
     const seeded = mergeWithdrawalManagedDeploymentBlock('', initial.facts)

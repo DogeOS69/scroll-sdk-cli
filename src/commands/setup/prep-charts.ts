@@ -2980,7 +2980,10 @@ export default class SetupPrepCharts extends Command {
           }
         } else deletePaths.push(['sequencer_signer_kms'])
         if (reconcileWithdrawalSignerValues(productionYaml, this.withdrawalProcessorConfig)) updated = true
-        const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, {deletePaths})
+        const mergedSource = mergeWithdrawalManagedDeploymentBlock(previousSource, facts, {
+          deletePaths,
+          migrateTransitions: true,
+        })
         if (mergedSource !== previousSource) {
           fs.writeFileSync(nativeConfigPath, mergedSource)
           this.jsonCtx.info(`withdrawal-processor: updated ${nativeConfigPath}`)
