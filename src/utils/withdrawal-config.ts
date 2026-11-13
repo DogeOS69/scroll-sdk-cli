@@ -97,6 +97,7 @@ function migrateWithdrawalTransitions(config: Record<string, any>): void {
     transitions[key] ??= config[retiredKey] ?? false
     delete config[retiredKey]
   }
+
   config.transitions = transitions
 }
 
