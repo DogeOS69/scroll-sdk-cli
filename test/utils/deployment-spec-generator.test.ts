@@ -104,6 +104,7 @@ function createMinimalSpec(overrides?: Partial<DeploymentSpec>): DeploymentSpec 
       deployerInitialBalanceWei: '1000000000000000000',
       maxEthSupplyWei: '100000000000000000000000000',
     },
+    images: {services: {withdrawalProcessor: {tag: 'test-transitions'}}},
     infrastructure: { bootnodeCount: 1, provider: 'local', sequencerCount: 1 },
     metadata: { environment: 'testnet', name: 'test-deployment' },
     network: {
@@ -1808,9 +1809,22 @@ describe('deployment-spec-generator', () => {
       ]);
     });
 
+    it('requires an explicit WP image through validation and values generation', () => {
+      for (const tag of [undefined, '', '   ']) {
+        const spec = createMinimalSpec({images: {services: {withdrawalProcessor: {tag}}}})
+        expect(validateDeploymentSpec(spec).errors.some(error =>
+          error.path === 'images.services.withdrawalProcessor.tag')).to.equal(true)
+        expect(() => generateValuesFiles(spec)).to.throw('images.services.withdrawalProcessor.tag')
+      }
+
+      const spec = createMinimalSpec()
+      const values = yaml.load(generateValuesFiles(spec)['withdrawal-processor-production.yaml']) as any
+      expect(values.image.tag).to.equal('test-transitions')
+    })
+
     it('preserves an explicit TSO image override', () => {
       const image = {pullPolicy: 'IfNotPresent' as const, repository: 'registry.example.com/tso-service', tag: 'v0.3.0-beta.6-custom'};
-      const files = generateValuesFiles(createMinimalSpec({images: {services: {tsoService: image}}}));
+      const files = generateValuesFiles(createMinimalSpec({images: {services: {tsoService: image, withdrawalProcessor: {tag: 'test-transitions'}}}}));
       const tso = yaml.load(files['tso-service-production.yaml']) as any;
 
       expect(tso.image).to.deep.equal(image);
@@ -2131,6 +2145,7 @@ describe('deployment-spec-generator', () => {
             repository: 'ghcr.io/dogeos/proof-coordinator',
             tag: 'v1.2.3',
           },
+          withdrawalProcessor: {tag: 'test-transitions'},
         },
       };
 

@@ -268,6 +268,10 @@ scrollsdk setup gen-keystore --plan --json
 scrollsdk setup gen-keystore -N --json
 ```
 
+The spec must explicitly set `images.services.withdrawalProcessor.tag` to a
+Core image supporting the required `[transitions]` configuration. The WP image
+version has no default. The repository defaults to `dogeos69/withdrawal-processor`.
+
 The spec may override `templates.sdkRevision` with a full 40-character SDK commit.
 Otherwise `--sdk-dir` committed HEAD is selected and locked by plan. The spec requires
 `identities`, `proofTopology`, and explicit Reth image tags for RPC and each

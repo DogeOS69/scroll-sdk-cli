@@ -877,6 +877,7 @@ export interface ImagesConfig {
     rollupRelayer?: ImageConfig
     tsoService?: ImageConfig
 
+    /** An explicit tag compatible with the WP configuration schema is required. */
     withdrawalProcessor?: ImageConfig
   }
 }

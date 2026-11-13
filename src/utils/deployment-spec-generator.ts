@@ -71,6 +71,16 @@ const ETHEREUM_DA_DEFAULTS = {
   },
 } as const
 
+/** The WP schema changes with Core releases, so callers must select its version. */
+export function requireWithdrawalProcessorImageTag(spec: DeploymentSpec): string {
+  const tag = spec.images?.services?.withdrawalProcessor?.tag
+  if (typeof tag !== 'string' || tag.trim() === '') {
+    throw new Error('images.services.withdrawalProcessor.tag must explicitly select a WP image compatible with [transitions]')
+  }
+
+  return tag
+}
+
 /**
  * Load and parse a DeploymentSpec from a YAML file
  */
@@ -1323,6 +1333,16 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
   }
 
   // Images validation
+  try {
+    requireWithdrawalProcessorImageTag(spec)
+  } catch (error) {
+    errors.push({
+      code: 'E006_INVALID_IMAGE_CONFIG',
+      message: error instanceof Error ? error.message : String(error),
+      path: 'images.services.withdrawalProcessor.tag',
+    })
+  }
+
   if (spec.images) {
     const validPullPolicies = ['Always', 'IfNotPresent', 'Never']
 

@@ -36,6 +36,7 @@ import {
   getDogecoinIndexerStartHeight,
   getL1GenesisBlock,
   normalizeDeploymentSpec,
+  requireWithdrawalProcessorImageTag,
   resolveDogecoinChainId,
 } from './deployment-spec-generator.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from './dstack-controller-values.js'
@@ -904,7 +905,7 @@ export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string 
   const image = resolveImage(spec, 'withdrawalProcessor', {
     pullPolicy: 'Always',
     repository: 'dogeos69/withdrawal-processor',
-    tag: CORE_DOCKER_DEFAULT_TAG
+    tag: requireWithdrawalProcessorImageTag(spec)
   })
 
   const values: Record<string, any> = {
