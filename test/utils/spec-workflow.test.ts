@@ -203,7 +203,7 @@ describe('spec identity and template workflow', () => {
     const spec = fixture()
     spec.templates = {sdkRevision: git('rev-parse', 'HEAD')}
     spec.proofTopology = {mode: 'disabled'} as any
-    spec.images = {services: Object.fromEntries(['l2Rpc', 'l2Sequencer', 'l2Bootnode'].map(key => [key, {tag: 'explicit-test-release'}]))}
+    spec.images = {services: Object.fromEntries(['l2Rpc', 'l2Sequencer', 'l2Bootnode', 'withdrawalProcessor'].map(key => [key, {tag: 'explicit-test-release'}]))}
     fs.writeFileSync(path.join(sdk, 'examples/values/scroll-monitor-production.yaml'), '# dirty file must not be used\n')
     const explicit = planSpecBootstrap(spec, sdk)
     const revision = spec.templates.sdkRevision
