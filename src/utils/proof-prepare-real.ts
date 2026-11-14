@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {captureProofReleasePreparation} from './proof-release-preparation.js'
-import {proofFileHash, proofRegularFile, readProofSoftwareRelease} from './proof-software-release.js'
+import {proofFileHash, proofImageRevisionWarning, proofRegularFile, readProofSoftwareRelease} from './proof-software-release.js'
 
 export interface PrepareRealOptions {
   deploymentDir: string
@@ -12,6 +12,7 @@ export interface PrepareRealOptions {
   release: string
   releaseSha256: string
   run?: (args: string[]) => string
+  warn?: (message: string) => void
 }
 
 function docker(args: string[]): string {
@@ -36,6 +37,7 @@ export function prepareRealProofRelease(options: PrepareRealOptions): {outputDir
   const candidate = path.join(stage, 'output/artifacts')
   const run = options.run ?? docker
   const {revision} = selected.manifest
+  const warn = options.warn ?? console.warn
   const image = selected.manifest.images['proof-preparation-producer']
   const cid = path.join(stage, 'container.id')
   try {
@@ -45,7 +47,8 @@ export function prepareRealProofRelease(options: PrepareRealOptions): {outputDir
     fs.copyFileSync(context, path.join(stage, 'input/protocol_context.json'))
     run(['pull', image])
     const imageRevision = run(['image', 'inspect', image, '--format', '{{ index .Config.Labels "org.opencontainers.image.revision" }}']).trim()
-    if (imageRevision !== revision) throw new Error('Producer OCI revision differs from release')
+    const producerWarning = proofImageRevisionWarning('proof-preparation-producer image', imageRevision, revision)
+    if (producerWarning) warn(producerWarning)
     // The producer's own invocation: offline, writing a new directory it chowns to the mount's owner.
     run([
       'run', '--rm', '--cidfile', cid, '--network', 'none',
@@ -65,6 +68,7 @@ export function prepareRealProofRelease(options: PrepareRealOptions): {outputDir
     walk(candidate)
     if (proofFileHash(path.join(candidate, 'protocol_context.json')) !== contextHash) throw new Error('Baked protocol context differs from selected input')
     const preparation = captureProofReleasePreparation({artifactRoot: candidate, expectedCoreRevision: revision, output: path.join(candidate, 'proof-release-preparation-v1.json')})
+    if (preparation.receipt.bakeRevision) warn(`Bridge bake revision ${preparation.receipt.bakeRevision} differs from proof release revision ${revision}`)
     const rebase = (value: unknown): unknown => {
       if (typeof value === 'string' && value.startsWith(candidate + path.sep)) return target + value.slice(candidate.length)
       if (Array.isArray(value)) return value.map(item => rebase(item))

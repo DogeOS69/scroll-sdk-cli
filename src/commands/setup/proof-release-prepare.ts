@@ -40,6 +40,7 @@ export default class ProofReleasePrepare extends Command {
         protocolContext: flags['protocol-context'],
       })
       output.logSuccess(`Captured proof preparation ${result.receiptPath}`)
+      if (result.receipt.bakeRevision) output.addWarning(`Bridge bake revision ${result.receipt.bakeRevision} differs from expected ${result.receipt.coreRevision}`)
       output.addWarning('This receipt validates a native preparation handoff; it does not build a CUDA image, upload artifacts, start a Worker, or activate a topology')
       output.success({coreRevision: result.receipt.coreRevision, receipt: result.receiptPath, schema: result.receipt.schema})
     } catch (error) {

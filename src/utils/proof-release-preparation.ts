@@ -129,11 +129,8 @@ export function captureProofReleasePreparation(
   const bridge = path.join(root, 'bridge')
   const workerIdentityBundle = fingerprint(path.join(bridge, 'worker-identity-bundle.json'), 'Worker identity bundle')
   const actualRevision = bakeCoreRevision(workerIdentityBundle.path)
-  if (actualRevision !== options.expectedCoreRevision) {
-    throw new Error(`Bridge bake core revision ${actualRevision} does not match expected ${options.expectedCoreRevision}`)
-  }
-
   const receipt: ProofReleasePreparationV1 = {
+    ...(actualRevision === options.expectedCoreRevision ? {} : {bakeRevision: actualRevision}),
     coreRevision: options.expectedCoreRevision,
     files: {
       bridge: {
@@ -178,10 +175,13 @@ export function validateProofReleasePreparation(raw: unknown, label: string): Pr
 
   const coreRevision = requiredString(root.coreRevision, `${label}.coreRevision`)
   if (!CORE_REVISION.test(coreRevision)) throw new Error(`${label}.coreRevision must be a full lowercase Git SHA`)
+  const bakeRevision = root.bakeRevision === undefined ? undefined : requiredString(root.bakeRevision, `${label}.bakeRevision`)
+  if (bakeRevision !== undefined && !CORE_REVISION.test(bakeRevision)) throw new Error(`${label}.bakeRevision must be a full lowercase Git SHA`)
   const files = mapping(root.files, `${label}.files`)
   const bridge = mapping(files.bridge, `${label}.files.bridge`)
   const scroll = mapping(files.scroll, `${label}.files.scroll`)
   const receipt: ProofReleasePreparationV1 = {
+    ...(bakeRevision ? {bakeRevision} : {}),
     coreRevision,
     files: {
       bridge: {
@@ -207,8 +207,8 @@ export function validateProofReleasePreparation(raw: unknown, label: string): Pr
     schemaVersion: 1,
   }
   parseProofIdentityEnv(fs.readFileSync(receipt.files.identityEnv.path, 'utf8'))
-  if (bakeCoreRevision(receipt.files.bridge.workerIdentityBundle.path) !== receipt.coreRevision) {
-    throw new Error(`${label} Bridge bake revision does not match coreRevision`)
+  if (bakeCoreRevision(receipt.files.bridge.workerIdentityBundle.path) !== (receipt.bakeRevision ?? receipt.coreRevision)) {
+    throw new Error(`${label} Bridge bake revision does not match the receipt`)
   }
 
   return receipt

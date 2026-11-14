@@ -74,6 +74,7 @@ export default class ProofBundlePublish extends Command {
         ...common,
         awsProfile: flags['aws-profile'],
         output: flags.output,
+        warn: message => output.addWarning(message),
       })
       output.logSuccess(`Published and publicly verified proof program bundle ${result.receipt.bundleId}`)
       output.success({

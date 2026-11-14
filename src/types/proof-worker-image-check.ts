@@ -10,6 +10,8 @@ export interface ProofWorkerImageCheckV1 {
     batchProgramCommitmentRaw: string
   }
   image: ProofTopologyImageReference
+  /** The image's own revision label; present only when it differs from coreRevision. */
+  imageRevision?: string
   inspectedAt: string
   schema: typeof PROOF_WORKER_IMAGE_CHECK_SCHEMA
   schemaVersion: 1
