@@ -48,8 +48,9 @@ the moment.
 - If an upload fails, the previous files are restored, so rerunning the command
   finds and uploads the same changes again. Uploads are idempotent.
 - It refuses any change to a signing or node key (keys named like
-  `*PRIVATE_KEY*` or `*NODEKEY*`, for example the sequencer signer, node keys and
-  service account keys). These are never rotated on a running deployment.
+  `*PRIVATE_KEY*`, `*SIGNER_KEY*` or `*NODEKEY*`, for example the sequencer
+  signer, the withdrawal fee and sequencer signers, node keys and service
+  account keys). These are never rotated on a running deployment.
 - Kubernetes manifests in `secrets/` are not uploaded by this command. A
   changed dstack controller Secret is reported with its
   `setup push-secrets --dstack-only` command, and the Slack Secret with

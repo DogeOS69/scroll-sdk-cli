@@ -17,8 +17,11 @@ import {specAwsSecretPrefix} from './spec-secret-prefix.js'
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../bin/run.js')
 const SECRETS = 'secrets'
 const BACKUP = '.scrollsdk/secrets-sync-backup'
-/** Signing and node keys are pinned: a running deployment never changes them through a sync. */
-const PINNED_KEY = /private_key|nodekey|^priv_key$|^private-key$/i
+/**
+ * Signing and node keys are pinned: a running deployment never changes them through a sync.
+ * `signer_key` covers the withdrawal processor's fee and sequencer signer keys.
+ */
+const PINNED_KEY = /private_key|signer_key|nodekey|^priv_key$|^private-key$/i
 const ES_RESOURCE = 'externalsecrets.external-secrets.io'
 
 export interface SecretDestination {awsPrefix?: string; awsRegion?: string; provider: 'aws' | 'vault'}
