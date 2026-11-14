@@ -347,7 +347,7 @@ function resolveImage(
  * Project DeploymentSpec inputs; callers merge these into committed SDK values
  * with mergeBootstrapValues to retain runtime policy and operator overrides.
  */
-export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string, options: {bootstrap?: boolean} = {}): GeneratedValuesFiles {
+export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: string, options: {bootstrap?: boolean; dstackServerConfigChecksum?: string} = {}): GeneratedValuesFiles {
   const normalizedSpec = normalizeDeploymentSpec(spec)
   if (normalizedSpec.capacityManager) resolveCapacityManager(normalizedSpec)
   if (normalizedSpec.bridge.freshGenesisInit !== undefined && typeof normalizedSpec.bridge.freshGenesisInit !== 'boolean') {
@@ -373,7 +373,7 @@ export function generateValuesFiles(spec: DeploymentSpec, monitoringTemplate?: s
     files['scroll-monitor-production.yaml'] = yaml.dump(monitor, {lineWidth: -1, noRefs: true})
   }
 
-  const dstackValues = generateDstackControllerValues(normalizedSpec.dstackController)
+  const dstackValues = generateDstackControllerValues(normalizedSpec.dstackController, {serverConfigChecksum: options.dstackServerConfigChecksum})
   if (dstackValues !== undefined) files[DSTACK_CONTROLLER_VALUES_FILE] = dstackValues
 
   const dstackMonitoring = generateDstackMonitoringValues(normalizedSpec.dstackController)

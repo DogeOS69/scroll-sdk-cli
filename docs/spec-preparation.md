@@ -14,6 +14,9 @@ commands from the private working directory containing your spec and environment
 file. A stage checks its prerequisites and never executes another stage for you.
 They do not install Helm releases or claim that a running chain has passed acceptance.
 
+`setup plan` creates a new chain. To change a deployment that is already
+prepared, see [Changing a prepared deployment](changing-a-prepared-deployment.md).
+
 The initial plan is written in a temporary sibling directory and published only
 after all plan records are saved. If writing fails, rerun `setup plan` with the
 same output directory. Bootstrap stages its generated files before publishing
@@ -1216,11 +1219,13 @@ Namespace changes require regenerating values because service DNS and Secret
 references are namespace-bound. Pausing/uninstalling the manager alone does not
 prove remote billing has stopped; follow the SDK drain/retirement instructions.
 
-### Optional AWS-to-Vast fallback
+### Optional fallback fleet
 
-`capacityManager.fallback` configures a separate Vast fleet while retaining
-`capacityManager.provider: aws` for primary runs. See
-[the fallback configuration and migration procedure](capacity-manager-activation.md#optional-aws-to-vast-fallback)
+`capacityManager.fallback` configures a separate fallback fleet on any provider,
+for example a Vast primary with an AWS fallback or the reverse. Its price is its
+own fleet `max_price`; the planner's per-worker estimate is
+`capacityManager.workerBudgetUsdPerHour`, which must cover both prices. See
+[the fallback configuration and migration procedure](capacity-manager-activation.md#optional-fallback-fleet)
 for the complete example, required Core image/chart versions, price/VRAM/CUDA
 checks, backend preparation and failure triggers. Both fleet definitions are
 prepared with zero initial instances; installation remains the allocation step.

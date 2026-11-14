@@ -232,9 +232,15 @@ export function resolveProofReceiptSelection(
   }
 }
 
+/**
+ * `componentValues: false` skips the proof-managed values digests of the deployed components. Day-2 capacity
+ * changes use it: after preparation those values belong to the operator (image tags, for example), and the
+ * capacity manager depends only on the contract, the Worker contract and the selected inputs checked here.
+ */
 export function validateProofDeploymentContract(
   deploymentDir = '.',
   contractPath = DEFAULT_PROOF_DEPLOYMENT_CONTRACT,
+  {componentValues = true}: {componentValues?: boolean} = {},
 ): ProofDeploymentContract {
   const root = path.resolve(deploymentDir)
   const {contract} = readProofDeploymentContract(root, contractPath)
@@ -250,7 +256,7 @@ export function validateProofDeploymentContract(
   for (const [name, item] of Object.entries(contract.components)) {
     const values = resolveContractFile(root, item.valuesFile)
     if (!fs.existsSync(values)) problems.push(`${name}: values file is missing`)
-    else if (proofManagedValuesDigest(values, name) !== item.managedSha256) problems.push(`${name}: proof-managed values changed; rerun prep-charts`)
+    else if (componentValues && proofManagedValuesDigest(values, name) !== item.managedSha256) problems.push(`${name}: proof-managed values changed; rerun prep-charts`)
 
   }
 

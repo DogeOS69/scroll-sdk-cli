@@ -1,5 +1,5 @@
 import * as yaml from 'js-yaml'
-import {createPrivateKey, randomBytes} from 'node:crypto'
+import {createHash, createPrivateKey, randomBytes} from 'node:crypto'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -179,17 +179,32 @@ export function dstackSecretRefs(config: DstackControllerConfig, state: DstackCr
   return refs
 }
 
-export function renderDstackSecrets(config: DstackControllerConfig, state: DstackCredentials): DstackSecret[] {
+/** The controller's native config.yml: the encryption key and the project's backends. */
+export function renderDstackServerConfig(state: DstackCredentials): string {
   validateDstackCredentials(state)
-  const refs = dstackSecretRefs(config, state)
   const backends: unknown[] = []
   if (state.providers.includes('aws')) backends.push({creds: {type: 'default'}, default_vpcs: false, ...(state.aws!.iamInstanceProfile ? {iam_instance_profile: state.aws!.iamInstanceProfile} : {}), public_ips: state.aws!.publicIps ?? false, regions: Object.keys(state.aws!.vpcIds).sort(), type: 'aws', vpc_ids: state.aws!.vpcIds})
   if (state.providers.includes('vastai')) backends.push({creds: {api_key: state.vastaiApiKey, type: 'api_key'}, type: 'vastai'})
   if (state.providers.includes('gcp')) backends.push({creds: {filename: '/etc/dstack/credentials/gcp/service-account.json', type: 'service_account'}, project_id: state.gcp!.projectId, type: 'gcp'})
-  const server = yaml.dump({
+  return yaml.dump({
     encryption: {keys: [{name: 'primary', secret: state.encryptionKey, type: 'aes'}]},
+    // dstack reconciles this project at startup and deletes backends the file omits.
     projects: [{backends, name: state.project}],
   }, {lineWidth: -1, noRefs: true})
+}
+
+/**
+ * Digest of the rendered config.yml. Carried as a controller pod annotation so
+ * that helm upgrade restarts dstack, which reads the file only at startup.
+ * A SHA-256 of content holding 256-bit keys reveals nothing about them.
+ */
+export function dstackServerConfigChecksum(state: DstackCredentials): string {
+  return createHash('sha256').update(renderDstackServerConfig(state)).digest('hex')
+}
+
+export function renderDstackSecrets(config: DstackControllerConfig, state: DstackCredentials): DstackSecret[] {
+  const server = renderDstackServerConfig(state)
+  const refs = dstackSecretRefs(config, state)
   const make = (ref: {key: string; name: string}, content: string): DstackSecret => ({
     apiVersion: 'v1', kind: 'Secret', metadata: {name: ref.name}, stringData: {[ref.key]: content}, type: 'Opaque',
   })

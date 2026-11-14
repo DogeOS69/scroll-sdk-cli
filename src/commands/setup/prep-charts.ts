@@ -34,6 +34,7 @@ import {loadDeploymentSpec} from '../../utils/deployment-spec-generator.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {canonicalDogecoinNetwork} from '../../utils/dogecoin-network.js'
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues, validateDstackControllerConfig} from '../../utils/dstack-controller-values.js'
+import {dstackServerConfigChecksum, readDstackCredentials} from '../../utils/dstack-credentials.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
 import {verifyDstackAcmCertificate} from '../../utils/dstack-internal-tls.js'
 import {type EthereumDaRuntimeConfig, ethereumDaMainnetPolicyErrors, ethereumDaRuntimeEnv, resolveEthereumDaSubmitterPolicy} from '../../utils/ethereum-da-runtime.js'
@@ -2093,8 +2094,10 @@ export default class SetupPrepCharts extends Command {
 
   private async processDstackControllerValues(valuesDir: string): Promise<{skipped: number; updated: number}> {
     verifyDstackAcmCertificate(this.dstackController)
+    // Imported credentials define config.yml. External credential management has no local state.
+    const credentials = this.dstackController && this.dstackController.enabled !== false ? readDstackCredentials() : undefined
     const files = [
-      [DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues(this.dstackController)],
+      [DSTACK_CONTROLLER_VALUES_FILE, generateDstackControllerValues(this.dstackController, {serverConfigChecksum: credentials && dstackServerConfigChecksum(credentials)})],
       [DSTACK_MONITORING_VALUES_FILE, generateDstackMonitoringValues(this.dstackController)],
     ] as const
     const result = {skipped: 0, updated: 0}

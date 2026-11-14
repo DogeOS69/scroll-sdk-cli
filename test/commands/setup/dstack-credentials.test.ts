@@ -9,9 +9,9 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {fileURLToPath} from 'node:url'
 
-import {DSTACK_CREDENTIALS_FILE, configureDstackCredentialRefs, readDstackCredentials, renderDstackSecrets, writePrivateFile} from '../../../src/utils/dstack-credentials.js'
+import {DSTACK_CREDENTIALS_FILE, configureDstackCredentialRefs, dstackServerConfigChecksum, readDstackCredentials, renderDstackSecrets, renderDstackServerConfig, writePrivateFile} from '../../../src/utils/dstack-credentials.js'
 import {readDstackControllerConfig} from '../../../src/utils/dstack-database.js'
-import {loadDstackSecretPublication, publishDstackSecrets, runSecretKubectl} from '../../../src/utils/dstack-secret-publisher.js'
+import {dstackBackendRemovalWarning, loadDstackSecretPublication, publishDstackSecrets, runSecretKubectl} from '../../../src/utils/dstack-secret-publisher.js'
 import {writeGrafanaAdminSecret} from '../../../src/utils/grafana-admin.js'
 import {reconcileScrollMonitorGrafana} from '../../../src/utils/scroll-monitor-values.js'
 
@@ -382,6 +382,87 @@ else console.log('{}');
       await rejects(() => publication(async () => {count++; return JSON.stringify({items: [entry]})}), 'local state')
       expect(count).to.equal(1)
     }
+  })
+
+  it('annotates controller values with the config.yml checksum so helm upgrade restarts dstack', async () => {
+    importBoth()
+    generate()
+    const annotation = () => (yaml.load(fs.readFileSync('values/dstack-controller-production.yaml', 'utf8')) as any).podAnnotations?.['checksum/server-config']
+    const first = annotation()
+    expect(first).to.equal(dstackServerConfigChecksum(readDstackCredentials()!)).and.match(/^[\da-f]{64}$/)
+    fs.writeFileSync('vast-key', 'replacement-key')
+    run('dstack-config', '--vastai-api-key-file', 'vast-key')
+    run('gen-secrets', '--dstack-only')
+    // Secrets are current but the values would not restart the controller.
+    await rejects(() => publication(async () => {throw new Error('must not contact cluster')}), 'checksum/server-config')
+    run('prep-charts', '--dstack-only')
+    expect(annotation()).to.match(/^[\da-f]{64}$/).and.not.equal(first)
+    expect(fs.readFileSync('values/dstack-controller-production.yaml', 'utf8')).not.to.include('replacement-key')
+    fs.writeFileSync('.data/doge-config.toml', toml.stringify({dstackController: {...readDstackControllerConfig(), podAnnotations: {'checksum/server-config': 'operator'}}}))
+    expect(execute('prep-charts', '--dstack-only', '-N', '--json').status).not.to.equal(0)
+  })
+
+  it('publishes values that predate the checksum annotation, warning that helm upgrade will not restart dstack', async () => {
+    importBoth()
+    generate()
+    const file = 'values/dstack-controller-production.yaml'
+    const values = yaml.load(fs.readFileSync(file, 'utf8')) as any
+    delete values.podAnnotations
+    fs.writeFileSync(file, yaml.dump(values))
+    expect((await publication(async () => {throw new Error('must not contact cluster')}, true)).checksumMissing).to.equal(true)
+    installUploadStubs()
+    const result = execute('push-secrets', '--dstack-only', '--kube-context', 'isolated-e2e', '--namespace', 'default', '--json', '-N')
+    expect(result.status, result.stderr + result.stdout).to.equal(0)
+    expect(result.stdout + result.stderr).to.include('no checksum/server-config annotation')
+    expect(uploads().some(call => call.args.includes('apply') && !call.args.includes('--dry-run=server'))).to.equal(true)
+  })
+
+  it('leaves provider changes to capacity deploy once capacity.yaml exists', () => {
+    fs.writeFileSync('capacity.yaml', 'apiVersion: scrollsdk.dogeos/capacity/v1\n')
+    const result = execute('dstack-config', '--vastai-api-key-file', 'vast-key', '--json', '-N')
+    expect(result.status).not.to.equal(0)
+    expect(result.stdout + result.stderr).to.include('scrollsdk capacity deploy')
+    expect(fs.existsSync(DSTACK_CREDENTIALS_FILE)).to.equal(false)
+  })
+
+  it('reports backends that the controller restart will delete before writing', async () => {
+    importBoth()
+    generate()
+    const state = readDstackCredentials()!
+    const live = yaml.load(renderDstackServerConfig(state)) as any
+    live.projects[0].backends.push({creds: {type: 'default'}, regions: ['us-east-1'], type: 'aws'})
+    live.projects.push({backends: [{type: 'vastai'}], name: 'unlisted-project'})
+    const calls: string[][] = []
+    const runner = async (args: string[]) => {
+      calls.push(args)
+      return args.includes('get') ? JSON.stringify({items: [{data: {'config.yml': Buffer.from(yaml.dump(live)).toString('base64')}, metadata: {name: 'dstack-controller-config'}}]}) : ''
+    }
+
+    const seen: unknown[] = []
+    const result = await publishDstackSecrets({
+      config: readDstackControllerConfig()!, context: 'isolated-e2e', namespace: 'default',
+      onBackendRemovals(removals) {seen.push({calls: calls.length, removals})},
+      runner, valuesFile: 'values/dstack-controller-production.yaml',
+    })
+    // Only the listed project loses backends; reported after the read and before any apply.
+    expect(seen).to.deep.equal([{calls: 1, removals: [{backends: ['aws'], project: state.project}]}])
+    expect(result).to.include({serverConfigChanged: true})
+    expect(dstackBackendRemovalWarning(result.backendRemovals![0])).to.include('[aws]').and.not.include(key)
+    const cancelled = calls.length
+    await rejects(() => publishDstackSecrets({
+      config: readDstackControllerConfig()!, context: 'isolated-e2e', namespace: 'default',
+      onBackendRemovals() {throw new Error('cancelled by operator')},
+      runner, valuesFile: 'values/dstack-controller-production.yaml',
+    }), 'cancelled by operator')
+    expect(calls.slice(cancelled).some(args => args.includes('apply'))).to.equal(false)
+    const current = await publishDstackSecrets({
+      config: readDstackControllerConfig()!, context: 'isolated-e2e', namespace: 'default',
+      async runner(args) {
+        return args.includes('get') ? JSON.stringify({items: [{data: {'config.yml': Buffer.from(renderDstackServerConfig(state)).toString('base64')}, metadata: {name: 'dstack-controller-config'}}]}) : ''
+      },
+      valuesFile: 'values/dstack-controller-production.yaml',
+    })
+    expect(current).to.deep.include({backendRemovals: [], serverConfigChanged: false})
   })
 
   it('rejects conflicting Secret names and mismatched production values', async () => {

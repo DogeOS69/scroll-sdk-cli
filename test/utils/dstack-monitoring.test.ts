@@ -6,7 +6,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import {DSTACK_CONTROLLER_VALUES_FILE, DSTACK_MONITORING_VALUES_FILE, generateDstackControllerValues, generateDstackMonitoringValues} from '../../src/utils/dstack-controller-values.js'
-import {DSTACK_CREDENTIALS_FILE, newDstackCredentials, readDstackCredentials, writeDstackCredentialSecrets, writePrivateFile} from '../../src/utils/dstack-credentials.js'
+import {DSTACK_CREDENTIALS_FILE, dstackServerConfigChecksum, newDstackCredentials, readDstackCredentials, writeDstackCredentialSecrets, writePrivateFile} from '../../src/utils/dstack-credentials.js'
 import {loadDstackSecretPublication, publishDstackSecrets} from '../../src/utils/dstack-secret-publisher.js'
 import {generateValuesFiles} from '../../src/utils/values-generator.js'
 import {dstackSpec} from './dstack-controller-values.test.js'
@@ -72,6 +72,12 @@ describe('dstack monitoring generation and credential handoff', () => {
     const valuesFile = path.join('values', DSTACK_CONTROLLER_VALUES_FILE)
     fs.writeFileSync(valuesFile, generateDstackControllerValues(config)!)
     writeDstackCredentialSecrets(config)
+    // Values from before the annotation still publish; the caller warns that helm upgrade will not restart dstack.
+    expect(loadDstackSecretPublication(config, valuesFile, 'default')).to.have.length.greaterThan(0)
+    // Values generated for another config.yml are refused.
+    fs.writeFileSync(valuesFile, generateDstackControllerValues(config, {serverConfigChecksum: 'f'.repeat(64)})!)
+    expect(() => loadDstackSecretPublication(config, valuesFile, 'default')).to.throw('checksum/server-config')
+    fs.writeFileSync(valuesFile, generateDstackControllerValues(config, {serverConfigChecksum: dstackServerConfigChecksum(readDstackCredentials()!)})!)
     const secrets = loadDstackSecretPublication(config, valuesFile, 'default')
     expect(secrets.map(s => s.metadata.name)).to.include('dstack-controller-monitoring')
     expect(() => loadDstackSecretPublication(config, valuesFile, 'wrong')).to.throw('namespace')

@@ -94,20 +94,69 @@ describe('Core capacity manager', () => {
     expect(fleets[1].nodes).deep.equal({max: 2, min: 0, target: 0})
   })
 
-  for (const failure of ['duplicate-fleet', 'price', 'missing-price', 'region', 'gpu', 'vram', 'backend', 'reliability']) it(`rejects incompatible fallback ${failure}`, () => {
+  it('accepts a cheap Vast primary with a reliable AWS fallback and a separate worker budget', () => {
+    const input = fixture()
+    const config = input.spec.capacityManager!
+    Object.assign(config, {fleets: ['vast-ampere'], gpu: 'RTX3090', maxHourlyCostUsd: 1.6, maxPricePerHourUsd: 0.8, maxWorkers: 1, minWorkers: 0, provider: 'vastai', regions: ['us-texas']})
+    config.fallback = {fleet: 'aws-l4', gpu: 'L4', instanceTypes: ['g6.4xlarge'], maxPricePerHourUsd: 1.5, provider: 'aws', regions: ['us-east-1']}
+    assertDeploymentSpecFields({capacityManager: config})
+    input.imageCheck.cudaArchitectures = ['86', '89']
+    // The fallback price may exceed the primary price; the default estimate covers both.
+    expect(resolveCapacityManager(input.spec).workerBudgetUsdPerHour).equal(1.5)
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    const policy = toml.parse(values.manager.policy) as any
+    // Fallback runs keep the pool VRAM floor, so it must admit the 22 GiB L4.
+    expect(policy.pool).to.include({gpu_class: 'RTX3090', hourly_cost_usd_per_worker: 1.5, provider: 'vastai', vram_gib: 22})
+    expect(values.manager.dstack).to.include({fallbackFleet: 'aws-l4', maxPricePerHourUsd: 0.8})
+    expect(values.manager.workerCommand).include("'86'|'89'")
+    const [primary, fallback] = capacityManagerFleets(input.spec).configurations
+    expect(primary).to.include({max_price: 0.8, name: 'vast-ampere'})
+    expect(primary.backends).deep.equal(['vastai'])
+    expect(fallback).to.include({max_price: 1.5, name: 'aws-l4'})
+    expect(fallback.backends).deep.equal(['aws'])
+    expect(fallback.instance_types).deep.equal(['g6.4xlarge'])
+    expect(fallback).not.have.property('backend_options')
+    expect(fallback.nodes).deep.equal({max: 1, min: 0, target: 0})
+    config.workerBudgetUsdPerHour = 1.6
+    expect((toml.parse(buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck).manager.policy) as any).pool.hourly_cost_usd_per_worker).equal(1.6)
+    // Fleet prices stay their own.
+    expect(capacityManagerFleets(input.spec).configurations.map(fleet => fleet.max_price)).deep.equal([0.8, 1.5])
+    config.workerBudgetUsdPerHour = 1.2
+    expect(() => resolveCapacityManager(input.spec)).throw('cover the fallback')
+    config.workerBudgetUsdPerHour = 0.5
+    expect(() => resolveCapacityManager(input.spec)).throw('cover the primary')
+    config.workerBudgetUsdPerHour = 1.5
+    config.minWorkers = 2
+    config.maxWorkers = 2
+    expect(() => resolveCapacityManager(input.spec)).throw('per-worker budget estimate')
+  })
+
+  it('requires the AWS backend and VPCs for an imported AWS fallback', () => {
+    const input = fixture()
+    const config = input.spec.capacityManager!
+    Object.assign(config, {fleets: ['vast-ampere'], gpu: 'RTX3090', provider: 'vastai', regions: ['us-texas']})
+    config.fallback = {fleet: 'aws-l4', gpu: 'L4', maxPricePerHourUsd: 1.5, provider: 'aws', regions: ['us-east-1']}
+    input.spec.dstackController!.defaultCredentialsEnabled = true
+    input.spec.preparation!.dstack = {mode: 'import', providers: ['vastai'], vastaiApiKeyEnv: 'VASTAI_API_KEY'}
+    input.spec.infrastructure = {...input.spec.infrastructure, aws: {accountId: '000000000000', eksClusterName: 'fixture-cluster', region: 'us-east-1', roles: {dstackController: 'arn:aws:iam::000000000000:role/external-dstack'}}, provider: 'aws'}
+    expect(() => resolveCapacityManager(input.spec)).throw('providers must include')
+    input.spec.preparation!.dstack = {aws: {vpcIds: {'us-west-2': 'vpc-0123456789abcdef0'}}, mode: 'import', providers: ['vastai', 'aws'], vastaiApiKeyEnv: 'VASTAI_API_KEY'}
+    expect(() => resolveCapacityManager(input.spec)).throw('explicit dstack VPC ID')
+    input.spec.preparation!.dstack.aws!.vpcIds = {'us-east-1': 'vpc-0123456789abcdef0'}
+    expect(resolveCapacityManager(input.spec).fallback!.provider).equal('aws')
+  })
+
+  for (const failure of ['duplicate-fleet', 'price', 'missing-price', 'region', 'gpu', 'provider', 'reliability']) it(`rejects incompatible fallback ${failure}`, () => {
     const input = fixture()
     const config = input.spec.capacityManager!
     config.fallback = {fleet: 'vast-fallback', gpu: 'RTX4090', maxPricePerHourUsd: 0.8, provider: 'vastai', regions: ['us-east']}
     if (failure === 'duplicate-fleet') config.fallback.fleet = config.fleets[0]
-    if (failure === 'price') config.fallback.maxPricePerHourUsd = 10
+    if (failure === 'price') Object.assign(config, {maxHourlyCostUsd: 20, workerBudgetUsdPerHour: 1.5}, {fallback: {...config.fallback, maxPricePerHourUsd: 10}})
     if (failure === 'missing-price') delete (config.fallback as any).maxPricePerHourUsd
     if (failure === 'region') config.fallback.regions = []
     if (failure === 'gpu') (config.fallback as any).gpu = 'unknown'
-    if (failure === 'vram') config.gpu = 'L40S'
     if (failure === 'reliability') config.fallback.minReliability = 0.5
-    if (failure === 'backend') {
-      config.provider = 'vastai'
-    }
+    if (failure === 'provider') (config.fallback as any).provider = 'gcp'
 
     expect(() => resolveCapacityManager(input.spec)).throw()
   })
@@ -233,6 +282,16 @@ describe('Core capacity manager', () => {
     expect(steps.find(step => step.id === 'capacity-manager')).include({effect: 'local', stage: 'render'})
     expect(() => assertCapacityChartVersions('CAPACITY_MANAGER_CHART_VERSION ?= 0.1.6\nDSTACK_CONTROLLER_CHART_VERSION ?= 0.1.5\n', spec)).throw('DSTACK_CONTROLLER requires chart >= 0.1.6')
     expect(() => assertCapacityChartVersions('CAPACITY_MANAGER_CHART_VERSION ?= 0.1.6\nDSTACK_CONTROLLER_CHART_VERSION ?= 0.1.6\n', spec)).not.throw()
+  })
+
+  it('requires capacity-manager chart 0.1.9 for an AWS fallback and for in-place fleet updates', () => {
+    const {spec} = fixture()
+    const pin = (version: string) => `CAPACITY_MANAGER_CHART_VERSION ?= ${version}\n`
+    expect(() => assertCapacityChartVersions(pin('0.1.8'), spec)).not.throw()
+    expect(() => assertCapacityChartVersions(pin('0.1.8'), spec, {fleetUpdate: true})).throw('capacity deploy and render require capacity-manager chart >= 0.1.9')
+    spec.capacityManager!.fallback = {fleet: 'aws-l4', gpu: 'L4', maxPricePerHourUsd: 1.5, provider: 'aws', regions: ['us-east-1']}
+    expect(() => assertCapacityChartVersions(pin('0.1.8'), spec)).throw('An AWS fallback requires capacity-manager chart >= 0.1.9')
+    expect(() => assertCapacityChartVersions(pin('0.1.9'), spec, {fleetUpdate: true})).not.throw()
   })
 
   it('uses an explicit dstack role reference', () => {

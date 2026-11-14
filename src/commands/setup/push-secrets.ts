@@ -11,7 +11,7 @@ import { promisify } from 'node:util'
 import { YAML_DUMP_OPTIONS } from '../../config/constants.js'
 import {AwsCliRunner} from '../../utils/aws-cli.js'
 import {readDstackControllerConfig} from '../../utils/dstack-database.js'
-import {publishDstackSecrets} from '../../utils/dstack-secret-publisher.js'
+import {DSTACK_CHECKSUM_MISSING_WARNING, DSTACK_RESTART_NOTE, type DstackBackendRemoval, dstackBackendRemovalWarning, publishDstackSecrets} from '../../utils/dstack-secret-publisher.js'
 import { CliExitError, JsonOutputContext } from '../../utils/json-output.js'
 import { resolveEnvValue } from '../../utils/non-interactive.js'
 import {isRetiredServiceFile, stripRetiredServiceConfig} from '../../utils/retired-services.js'
@@ -726,6 +726,7 @@ export default class SetupPushSecrets extends Command {
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
+  private reviewedBackendRemovals?: string
 
 
   public async run(): Promise<void> {
@@ -748,6 +749,7 @@ export default class SetupPushSecrets extends Command {
 
       if (flags['dry-run']) {
         const plan = dstack ? await publishDstackSecrets({...dstack, dryRun: true}) : undefined
+        if (plan?.checksumMissing) this.jsonCtx.addWarning(DSTACK_CHECKSUM_MISSING_WARNING)
         this.jsonCtx.info(`Local upload plan: ${legacyFiles.length} .env/.json files to ${flags.provider}; ${plan?.secrets.length ?? 0} dstack Secrets to Kubernetes.`)
         if (this.jsonMode) this.jsonCtx.success({...plan, dryRun: true, legacyFiles, provider: flags.provider})
         return
@@ -756,6 +758,7 @@ export default class SetupPushSecrets extends Command {
       if (legacyFiles.length === 0) {
         const result = dstack ? await publishDstackSecrets(dstack) : {secrets: []}
         this.jsonCtx.logSuccess(dstack ? 'Dstack Secrets uploaded to Kubernetes. No controller deployment, restart or GPU task was started.' : 'No selected Secret files to upload.')
+        if ('serverConfigChanged' in result && result.serverConfigChanged) this.dstackRestartNote(result.checksumMissing)
         if (this.jsonMode) this.jsonCtx.success(result)
         return
       }
@@ -836,6 +839,7 @@ export default class SetupPushSecrets extends Command {
 
       const dstackResult = dstack ? await publishDstackSecrets(dstack) : undefined
       if (dstackResult) this.jsonCtx.logSuccess('Dstack Secrets uploaded to Kubernetes. No controller deployment, restart or GPU task was started.')
+      if (dstackResult?.serverConfigChanged) this.dstackRestartNote(dstackResult.checksumMissing)
       this.jsonCtx.logSuccess('Secret upload process completed.')
 
       // JSON output
@@ -872,6 +876,12 @@ export default class SetupPushSecrets extends Command {
 
     delete target[key]
     return true
+  }
+
+  /** After an upload that changed config.yml. */
+  private dstackRestartNote(checksumMissing: boolean): void {
+    if (checksumMissing) this.jsonCtx.addWarning(DSTACK_CHECKSUM_MISSING_WARNING)
+    else this.jsonCtx.info(DSTACK_RESTART_NOTE)
   }
 
   private async getAWSCredentials(): Promise<Record<string, string>> {
@@ -994,6 +1004,7 @@ export default class SetupPushSecrets extends Command {
     if (!flags['kube-context'] || !flags.namespace) throw new Error('--kube-context and --namespace are required when enabled dstack Secrets are included, including dry-run')
     const options: DstackUploadOptions = {
       config: controller, context: flags['kube-context'], namespace: flags.namespace,
+      onBackendRemovals: removals => this.reviewBackendRemovals(removals),
       // --values-file belongs to the explicitly selected legacy service in full mode.
       valuesFile: flags['dstack-only'] ? flags['values-file'] ?? path.join(flags['values-dir'], 'dstack-controller-production.yaml') : path.join(flags['values-dir'], 'dstack-controller-production.yaml'),
     }
@@ -1054,6 +1065,18 @@ export default class SetupPushSecrets extends Command {
     }
 
     return config
+  }
+
+  /** Warn once per upload, before any write; interactive runs must confirm. */
+  private async reviewBackendRemovals(removals: DstackBackendRemoval[]): Promise<void> {
+    const key = JSON.stringify(removals)
+    if (this.reviewedBackendRemovals === key) return
+    for (const removal of removals) this.jsonCtx.addWarning(dstackBackendRemovalWarning(removal))
+    if (!this.nonInteractive && !await confirm({default: false, message: chalk.yellow('Upload the dstack config that drops these backends?')})) {
+      throw new Error('Dstack Secret upload cancelled; no dstack Secret was changed')
+    }
+
+    this.reviewedBackendRemovals = key
   }
 
   private setYamlValue(target: Record<string, any>, key: string, value: any): boolean {

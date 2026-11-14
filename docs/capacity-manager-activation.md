@@ -62,7 +62,12 @@ with the existing defaults (60/300/1800/1800 seconds). A zero minimum permits an
 idle fleet; Core's backlog floor can still request capacity when work appears.
 The hourly budget is a planner admission limit, not an AWS/Vast account billing
 cap. Storage, traffic, taxes and delayed provider cleanup are additional costs.
-Automatic AWS-to-Vast fallback is opt-in as described below; incompatible GPUs
+`maxPricePerHourUsd` is the primary fleets' `max_price` and the manager's per-run
+price ceiling. The planner's per-worker cost estimate is a separate field,
+`workerBudgetUsdPerHour` (Core `pool.hourly_cost_usd_per_worker`). It defaults
+to the larger of the primary and fallback prices and must not be lower than
+either. `maxHourlyCostUsd` must fund `minWorkers` at that estimate.
+An automatic fallback fleet is opt-in as described below; incompatible GPUs
 are rejected during preparation.
 
 `existing-https` uses an operator-owned endpoint. It must have a publicly trusted,
@@ -98,7 +103,14 @@ CloudFormation templates. Supply the resulting ARNs and HTTPS URL above.
 Retain ACM DNS validation records for renewal. Network costs remain outside the
 GPU budget.
 
-## Optional AWS-to-Vast fallback
+## Changing capacity after installation
+
+Provider, fleet, price and worker-limit changes on a running deployment use
+[`scrollsdk capacity deploy`](capacity.md), not a new `setup plan`. The
+capacity-manager preparation step writes `capacity.yaml`; from then on it is the
+source for these settings, and `setup render` reads it too.
+
+## Optional fallback fleet
 
 Requires a published immutable manager image containing Core #1612 (commit
 `73b06275a0ef19b4a761319215522f6671d2a408`) and capacity-manager chart **0.1.6+**.
@@ -107,39 +119,60 @@ pinned SDK revision and Makefile version before preparing. The Helm initializati
 selected manager image with `--dstack-fallback-fleet ... --help`, without
 credentials or reconciliation, to reject binaries lacking the new option.
 
-Merge this under an AWS `capacityManager` selection:
+Any primary and fallback provider pair is accepted, including the same provider
+with a different GPU. Core's fallback is fleet-based: a fallback run names only
+the fallback fleet, so the fleet's own backend, regions, GPU and price apply.
+For example, a cheap Vast primary with an on-demand AWS fallback:
 
 ```yaml
 capacityManager:
-  # Keep primary provider, GPU, project, fleets, image and other required fields.
+  # Keep project, image and the other required fields.
+  provider: vastai
+  gpu: RTX3090
+  regions: [us-texas]
+  fleets: [vast-rtx3090]
+  maxPricePerHourUsd: 0.80
+  workerBudgetUsdPerHour: 1.50   # optional; defaults to the larger fleet price
   fallback:
-    provider: vastai
-    fleet: vast-fallback
-    gpu: RTX3090
-    regions: [us-east]
-    maxPricePerHourUsd: 0.80
-    minReliability: 0.95
+    provider: aws
+    fleet: aws-l4
+    gpu: L4
+    regions: [us-east-1]
+    instanceTypes: [g6.4xlarge]  # optional
+    maxPricePerHourUsd: 1.50
 ```
 
-For imported backends, configure `preparation.dstack.providers: [aws, vastai]`
-and `preparation.dstack.vastaiApiKeyEnv: VASTAI_API_KEY`; retain AWS VPC/IRSA
-settings. Store the API key in the private environment file. The controller must provide both backends before manager installation; the
-Helm initialization Job checks both backends. Fleet names must differ from primary fleet names.
+An AWS-primary layout with a Vast fallback works the same way with the providers
+swapped; `fallback.minReliability` (default: the primary value) applies to Vast
+offers.
 
-Preparation generates a separate Vast fleet in the same project. It inherits
+For imported backends, list both providers in `preparation.dstack.providers`,
+with their credentials: `preparation.dstack.vastaiApiKeyEnv: VASTAI_API_KEY` for
+Vast, and the VPC and controller-role settings for AWS. An AWS fallback needs a
+VPC ID for each of its regions. Store the API key in the private environment
+file. The controller must provide both backends before manager installation; the
+Helm initialization Job checks both backends. Fleet names must differ from primary fleet names.
+An AWS fallback needs capacity-manager chart 0.1.9 or later, whose values
+schema accepts `aws` for `initialization.fallbackProvider`; preparation refuses
+an older `CAPACITY_MANAGER_CHART_VERSION` pin.
+
+Preparation generates a separate fallback fleet in the same project. It inherits
 primary fleet CPU/RAM/disk/idle settings, node maximum and create/reuse action;
-its initial minimum/target remain zero. Its GPU, regions, price and reliability
-come from `fallback`. Both GPU architectures must be in the checked Worker image,
-and the launch command accepts only those qualified architectures. Fallback VRAM
-must satisfy the primary policy's requirement. The explicit fallback price must
-not exceed primary `maxPricePerHourUsd`, which is the planner's per-worker cost
-estimate. The same global worker/budget limits apply across both providers.
+its initial minimum/target remain zero. Its provider, GPU, regions, instance
+types, price and reliability come from `fallback`. Both GPU architectures must be in the checked Worker image,
+and the launch command accepts only those qualified architectures. Core puts the
+policy's `pool.vram_gib` into every run's GPU memory request, fallback runs
+included, so preparation lowers it to the smallest VRAM of the selected GPUs
+(for example 22 GiB for an RTX3090 primary with an L4 fallback). Primary runs
+still name their GPU, so their selection does not widen. The fallback price may
+exceed the primary price; `workerBudgetUsdPerHour` must cover both. The same
+global worker and budget limits apply across both fleets.
 
 Core switches new workers to the fallback fleet for 30 minutes after primary
-no-capacity failures or provisioning timeouts, then tries AWS again. It does not
-balance workers across providers by percentage. A fallback run uses only its
-fleet's selectors, keeping AWS regions/types out of Vast runs. The window is in
-memory; restart tries AWS first while adopting existing workers. Other failures
+no-capacity failures or provisioning timeouts, then tries the primary again. It
+does not balance workers across providers by percentage. A fallback run uses only its
+fleet's selectors, keeping primary regions/types out of fallback runs. The window is in
+memory; restart tries the primary first while adopting existing workers. Other failures
 and scale-down do not trigger a switch. Core does not require draining solely
 for this option. Render uses the saved deployment intent; installation checks existing fleets
 without overwriting different configurations.

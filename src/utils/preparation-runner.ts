@@ -13,6 +13,7 @@ import {CONTRACTS_DOCKER_DEFAULT_TAG} from '../constants/docker.js'
 import {discoverAwsResources} from './aws-resource-discovery.js'
 import {prepareCapacityManager} from './capacity-manager.js'
 import {prepareDstackNetworkForSpec} from './capacity-manager-network.js'
+import {createCapacityDocumentAfterPreparation} from './capacity-runtime.js'
 import {writeContractsHelmValues} from './contracts-helm-values.js'
 import {cubesignerSessionExpiration} from './cubesigner-session-format.js'
 import {parseDatabaseUrl} from './dstack-database.js'
@@ -91,7 +92,12 @@ export class CommandPreparationRunner implements PreparationRunner {
     switch (step.id) {
       case 'dstack-network': {prepareDstackNetworkForSpec(root, spec); break}
 
-      case 'capacity-manager': {prepareCapacityManager(root); break}
+      case 'capacity-manager': {
+        prepareCapacityManager(root)
+        // From here on, capacity.yaml is the source for capacity changes (scrollsdk capacity deploy).
+        for (const warning of createCapacityDocumentAfterPreparation(root)) process.stderr.write(`Warning: ${warning}\n`)
+        break
+      }
 
       case 'bootstrap': {
         await command(['generate-from-spec', '--spec', '.scrollsdk/intent.json', '--output', '.', '--bootstrap', '--sdk-dir', plan.sdkDirectory, '--force'])

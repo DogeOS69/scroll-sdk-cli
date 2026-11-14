@@ -14,6 +14,7 @@ import {
   validateDeploymentSpec,
   writeGeneratedConfigs
 } from '../../utils/deployment-spec-generator.js'
+import {dstackServerConfigChecksum, readDstackCredentials} from '../../utils/dstack-credentials.js'
 import {reconcileEthereumRpcSecrets} from '../../utils/ethereum-rpc-secrets.js'
 import {ALB_SERVICES, preserveSharedAlbPaths, projectExistingAlb, validateExistingAlbSdk} from '../../utils/existing-alb.js'
 import {validateExistingNlbSdk} from '../../utils/existing-nlb.js'
@@ -268,7 +269,9 @@ export default class GenerateFromSpec extends Command {
 
       const monitor = 'scroll-monitor-production.yaml'
       const monitorTemplate = mergeBootstrapValues(templateFiles[`values/${monitor}`], '{}', existingValues(monitor))
-      valuesFiles = generateValuesFiles(spec, monitorTemplate, {bootstrap: flags.bootstrap})
+      // Once credentials exist, keep the controller values' restart checksum, as prep-charts does.
+      const dstackCredentials = spec.dstackController ? readDstackCredentials(outputDir) : undefined
+      valuesFiles = generateValuesFiles(spec, monitorTemplate, {bootstrap: flags.bootstrap, ...(dstackCredentials ? {dstackServerConfigChecksum: dstackServerConfigChecksum(dstackCredentials)} : {})})
       if (flags.bootstrap && spec.bridge?.cubesigner?.mode === 'production_verifier_key_policy'
         && !spec.bridge.cubesigner.policyReceipts && !spec.bridge.cubesigner.productionPolicy) {
         jsonCtx.addWarning('CubeSigner production policy receipts are pending. Bootstrap can prepare genesis; import the governed policy receipts before final configuration generation or deployment.')
