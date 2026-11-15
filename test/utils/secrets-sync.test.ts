@@ -8,6 +8,10 @@ import {type SecretsSyncDeps, secretDestination, secretsKubeTarget, syncSecrets}
 const OLD_RPC = 'https://old-rpc.example.invalid/NONFUNCTIONAL-OLD-TOKEN'
 const NEW_RPC = 'https://new-rpc.example.invalid/NONFUNCTIONAL-NEW-TOKEN'
 const PREFIX = 'dogeos/test-cluster/chain/test-deployment'
+const withdrawalSecret = (suffix: string) => 'DOGEOS_WITHDRAWAL_DOGECOIN_RPC_USER="u"\n'
+  + `DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS="NONFUNCTIONAL-PASS${suffix}"\n`
+  + `DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY="NONFUNCTIONAL-FEE${suffix}"\n`
+  + `DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY="NONFUNCTIONAL-SEQUENCER${suffix}"\n`
 
 describe('secrets sync', () => {
   let root: string
@@ -111,6 +115,27 @@ describe('secrets sync', () => {
 
     expect(files()).to.deep.equal(before)
     expect(pushes).to.deep.equal([])
+  })
+
+  it('refuses withdrawal fee and sequencer signer key changes', async () => {
+    write('withdrawal-processor-secret.env', withdrawalSecret(''))
+    const before = files()
+    generate = async directory => {fs.writeFileSync(path.join(directory, 'secrets/withdrawal-processor-secret.env'), withdrawalSecret('-OTHER'))}
+    try {
+      await syncSecrets(root, {apply: true, context: 'test-context', namespace: 'chain'}, deps())
+      expect.fail('expected refusal')
+    } catch (error) {
+      const {message} = error as Error
+      expect(message).to.include('withdrawal-processor-secret.env:DOGEOS_WITHDRAWAL_FEE_SIGNER_KEY')
+      expect(message).to.include('withdrawal-processor-secret.env:DOGEOS_WITHDRAWAL_SEQUENCER_SIGNER_KEY')
+      // The RPC password is an ordinary secret, not a pinned key.
+      expect(message).not.to.include('DOGEOS_WITHDRAWAL_DOGECOIN_RPC_PASS')
+      expect(message).not.to.include('NONFUNCTIONAL')
+    }
+
+    expect(files()).to.deep.equal(before)
+    expect(pushes).to.deep.equal([])
+    expect(fs.existsSync(path.join(root, '.scrollsdk/secrets-sync-backup'))).to.equal(false)
   })
 
   it('restores secrets/ when an upload fails, so a rerun uploads the same changes', async () => {
