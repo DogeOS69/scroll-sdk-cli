@@ -70,6 +70,7 @@ import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorAlerts, reconcileScrollMonitorAttestationSigner, reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
+import {sequencerSeedKind} from '../../utils/sequencing-two-of-two.js'
 import {validateServiceNetworkPolicy} from '../../utils/service-network-policy.js'
 import {
   getRequiredManagedSignerAddress,
@@ -1350,12 +1351,15 @@ export default class SetupPrepCharts extends Command {
   private flags: any
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
+  private migrateSequencerTwoOfTwo: boolean = false
   private nonInteractive: boolean = false
   private openingBridgeCustody: OpeningBridgeCustodyEntry[] = []
   private outputTestData: Record<string, any> = {}
   // Resolve pinned governance inputs at the source: governance receipts remain excluded from staging.
   private policyInputRoot?: string
   private proofIntent?: ResolvedProofIntent
+  /** Output 0 pays the sequencing 2-of-2: a P2SH genesis seed, or a chain migrating off a P2PKH seed. */
+  private sequencingTwoOfTwo: boolean = false
   private skipL2ContractDeploymentBlock: boolean = false
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
@@ -1850,6 +1854,17 @@ export default class SetupPrepCharts extends Command {
     this.jsonCtx.info(
       `Genesis sequencer transaction material: ${genesisTransaction.txid}:${genesisTransaction.vout} (validated)`,
     )
+    const seedKind = sequencerSeedKind(genesisTransaction.txHex, genesisTransaction.vout)
+    this.migrateSequencerTwoOfTwo = this.dogeConfig.defaults?.migrateSequencerTwoOfTwo === true
+    this.sequencingTwoOfTwo = seedKind === 'two-of-two' || this.migrateSequencerTwoOfTwo
+    if (this.sequencingTwoOfTwo) {
+      this.jsonCtx.info(`Sequencing output: 2-of-2 of the TEE and the proposer key (${seedKind === 'two-of-two' ? 'genesis seed' : 'migrating from the P2PKH genesis seed'})`)
+    } else {
+      this.jsonCtx.addWarning(
+        'The genesis sequencer seed is a P2PKH output and defaults.migrateSequencerTwoOfTwo is not set, so the Withdrawal Processor keeps a P2PKH sequencing output. '
+        + 'A CubeSigner policy that enforces the sequencing 2-of-2 refuses those transactions; follow the Core runbook to move the chain onto the 2-of-2.',
+      )
+    }
 
     const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf8');
     this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
@@ -2962,6 +2977,7 @@ export default class SetupPrepCharts extends Command {
           l2MessageQueueAddress: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR'),
           l2MessengerAddress: this.getConfigValue('contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR'),
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
+          migrateSequencerTwoOfTwo: this.migrateSequencerTwoOfTwo,
           networkStr: this.withdrawalProcessorConfig.network_str,
           openingBridgeCustody: this.openingBridgeCustody,
           productionVerifierKeyPolicy: this.dogeConfig.cubesigner?.mode === 'production_verifier_key_policy',

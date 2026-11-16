@@ -22,6 +22,7 @@ import {prepareProductionWallets, publicKeyAddress} from '../../src/utils/prepar
 import {AwaitingInput} from '../../src/utils/preparation-io.js'
 import {preparationSteps, validatePreparation} from '../../src/utils/preparation-plan.js'
 import {prepareSequencerKms as prepareResources, productionSequencer} from '../../src/utils/preparation-sequencer-kms.js'
+import {sequencingAddress} from '../../src/utils/sequencing-two-of-two.js'
 import {generateValuesFiles} from '../../src/utils/values-generator.js'
 import {mergeWithdrawalManagedDeploymentBlock} from '../../src/utils/withdrawal-config.js'
 import {reconcileWithdrawalSignerValues, withdrawalSequencerKms} from '../../src/utils/withdrawal-signers.js'
@@ -207,7 +208,11 @@ describe('production Bridge sequencer KMS', () => {
     })} catch (error) {waiting = error}
 
     expect(waiting).to.be.instanceOf(AwaitingInput)
-    expect((waiting as AwaitingInput).details.fundingRequests?.[0].address).to.equal(publicKeyAddress(productionSequencer(root, spec).publicKey, 'testnet'))
+    // The seed pays the sequencing 2-of-2 of the TEE and the proposer key, never the proposer's own P2PKH.
+    const sequencing = sequencingAddress(spec.bridge.cubesigner!.publicKey, productionSequencer(root, spec).publicKey, 'testnet')
+    expect((waiting as AwaitingInput).details.fundingRequests?.[0].address).to.equal(sequencing)
+    expect(sequencing).not.to.equal(publicKeyAddress(productionSequencer(root, spec).publicKey, 'testnet'))
+    expect(bitcore.Script.fromAddress(sequencing).toHex()).to.match(/^a914[\da-f]{40}87$/)
     expect((waiting as AwaitingInput).details.fundingRequests?.[0].amountSats).to.equal(42_069_000)
 
     expect((waiting as AwaitingInput).details.fundingRequests?.[0]).not.to.have.property('vout')
@@ -270,6 +275,7 @@ describe('production Bridge sequencer KMS', () => {
     await prepareProductionWallets(root, spec, rpc)
     expect(JSON.parse(fs.readFileSync(path.join(root, '.data/production-wallet-funding.json'), 'utf8')).sequencer.vout).to.equal(sequencerVout)
     expect((toml.parse(fs.readFileSync(path.join(root, '.data/GenerateBridgeInfo.toml'), 'utf8')) as any).default.initial_confirmed_block_number).to.equal(900)
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.data/output-test-data.json'), 'utf8')).sequencer_address).to.equal(sequencing)
     const outputPath = path.join(root, '.data/output-withdrawal-processor.toml')
     const output = toml.parse(fs.readFileSync(outputPath, 'utf8'))
     expect(output.genesis_sequencer_vout).to.equal(sequencerVout)

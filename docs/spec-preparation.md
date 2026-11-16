@@ -510,6 +510,13 @@ With a compatible image, the operator sequence is:
    the marked Bridge output. Test deposit-seed transactions are disabled.
 5. Continue with `scrollsdk setup proof-materials`. No additional funding
    txid/vout needs to be entered. All child outpoints are recorded by Core.
+   Core's helper pays the sequencer output to the sequencing key's P2PKH. The
+   CLI therefore records `defaults.migrateSequencerTwoOfTwo = true` in
+   `.data/doge-config.toml`, and `setup prep-charts` sets the Withdrawal
+   Processor's `migrate_sequencer_two_of_two`: the opening WF spends the P2PKH
+   seed and pays output 0 to the sequencing 2-of-2. Until that WF confirms, the
+   sequencing key alone can spend the seed, which is why production funding
+   uses the 2-of-2 seed of external funding instead.
 
 Keep `.data/bridge-helper-seed` private and backed up: it controls helper change
 and, when no external fee key was supplied, the fee wallet. Generated runtime
@@ -569,6 +576,15 @@ amounts and a JSON template. Fill only real outpoints, then rerun `scrollsdk set
 }
 ```
 
+The `sequencer` address in that report is not the sequencing key's own
+address. It is the sequencing 2-of-2,
+`P2SH(OP_2 <TEE key> <sequencing key> OP_2 OP_CHECKMULTISIG)`, built from the
+TEE public key and the sequencing (proposer) public key, so neither key can
+spend the genesis sequencer output alone. Pay exactly 42,069,000 satoshis to it.
+The CLI rejects an output that pays the sequencing key's P2PKH. The sequencing
+key must be compressed and must not also be the TEE key or an attestation,
+recovery or fee-wallet key.
+
 After the final Bridge address has been generated, add a `bridge` entry with its
 funding `txid` and `vout`. The CLI obtains amounts, raw transactions and block
 facts from the RPC; users do not hand-edit generated TOML. The RPC must support
@@ -590,6 +606,13 @@ list into the Withdrawal Processor configuration. The Withdrawal Processor
 refuses to start a genesis deployment without it; every later WF spends its
 parent's single custody output, its deposits and a rotation's liveness input, so
 put the full initial Bridge balance into this funding output.
+
+A chain that already runs with a P2PKH sequencing output keeps it until an
+operator moves it: `setup prep-charts` warns and changes nothing. To move it,
+follow Core's sequencing 2-of-2 runbook (new releases first, then the policy
+attach with the Withdrawal Processor paused), and for its last step set
+`defaults.migrateSequencerTwoOfTwo = true` in `.data/doge-config.toml` and run
+`setup prep-charts`. Leave the setting in place afterwards.
 
 No automatic wallet scan or wallet signing/broadcast is performed in external
 funding mode. The external wallet constructs and sends the payments. Confirmation waits

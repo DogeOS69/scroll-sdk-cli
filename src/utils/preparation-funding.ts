@@ -16,6 +16,7 @@ import {resolveEnvValue} from './non-interactive.js'
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
 import {AwaitingInput, localPath, privateWrite, writeJson} from './preparation-io.js'
 import {productionSequencer} from './preparation-sequencer-kms.js'
+import {assertDedicatedProposerKey, sequencingAddress} from './sequencing-two-of-two.js'
 
 export const BRIDGE_FUNDING_MARKER = '6a4901' + '00'.repeat(72)
 export type Rpc = (method: string, params: unknown[]) => Promise<any>
@@ -124,9 +125,12 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   // The genesis anchor is the sequencer funding block, at most the next block: stop before any payment is requested.
   if (spec.bridge.recovery.timelock > recoveryTimelockBounds(height + 1).maximum) throw new AwaitingInput({message: `Recovery timelock must be at most ${recoveryTimelockBounds(height + 1).maximum} (genesis anchor plus ${MAX_RECOVERY_DELAY_BLOCKS} blocks); use a reviewed block height in a new plan`})
   const {data, file} = fundingInput(root, spec)
-  const addresses = {feeWallet: feeWallet.address, sequencer: publicKeyAddress(sequencer.publicKey, spec.dogecoin.network)}
   const setupPath = path.join(root, '.data/setup_defaults.toml')
   const setup = toml.parse(fs.readFileSync(setupPath, 'utf8')) as any
+  const tee = spec.bridge.cubesigner!.publicKey!
+  assertDedicatedProposerKey(sequencer.publicKey, {attestation: Array.isArray(setup.attestation_pubkeys) ? setup.attestation_pubkeys : [], recovery: spec.bridge.recovery.publicKeys, tee})
+  // The genesis sequencer seed pays the sequencing 2-of-2 of the TEE and the proposer key, so neither key can spend it alone.
+  const addresses = {feeWallet: feeWallet.address, sequencer: sequencingAddress(tee, sequencer.publicKey, spec.dogecoin.network)}
   const facts: Record<string, FundingFact> = {}
   for (const role of ['sequencer', 'feeWallet'] as const) {
     const amount = role === 'sequencer' ? GENESIS_SEQUENCER_AMOUNT_SATS : setup.fee_wallet_target_amount
@@ -184,7 +188,7 @@ export async function prepareProductionBridgeFunding(root: string, spec: Deploym
   const facts = JSON.parse(fs.readFileSync(path.join(root, '.data/production-wallet-funding.json'), 'utf8'))
   await verifyDogecoinNetwork(spec.dogecoin.network, rpc)
   verifyProductionBridge(bridge, facts.sequencer)
-  const current = await inspectFunding(facts.sequencer, {address: publicKeyAddress(productionSequencer(root, spec).publicKey, spec.dogecoin.network), confirmations: spec.bridge.confirmationsRequired, exact: true, minimumSats: GENESIS_SEQUENCER_AMOUNT_SATS}, rpc)
+  const current = await inspectFunding(facts.sequencer, {address: sequencingAddress(spec.bridge.cubesigner!.publicKey!, productionSequencer(root, spec).publicKey, spec.dogecoin.network), confirmations: spec.bridge.confirmationsRequired, exact: true, minimumSats: GENESIS_SEQUENCER_AMOUNT_SATS}, rpc)
   if (current.blockHash !== facts.sequencer.blockHash) throw new Error('Sequencer confirmation anchor changed; review the reorganization before continuing')
   await inspectFunding(facts.feeWallet, {address: productionFeeWallet(root, spec).address, confirmations: spec.bridge.confirmationsRequired, minimumSats: setup.fee_wallet_target_amount}, rpc)
   if (await rpc('getblockcount', []) >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})

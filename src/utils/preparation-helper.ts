@@ -13,6 +13,7 @@ import {bridgeFundingMinimumSats, checkPrivateKey, fundingInput, inspectFunding,
 import {helperSeed, usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, privateWrite, writeJson} from './preparation-io.js'
 import {productionSequencer} from './preparation-sequencer-kms.js'
+import {assertDedicatedProposerKey} from './sequencing-two-of-two.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 
 /** This immutable release emits a 71-byte marker rejected by its own 73-byte decoder. */
@@ -41,6 +42,7 @@ export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
   const config = readToml(root, 'setup_defaults.toml')
   const topology = resolveSpecAttestationSigners(spec)!
   const active = topology.activeSignerIds.map(id => topology.external.find(signer => signer.id === id)!)
+  assertDedicatedProposerKey(sequencer.publicKey, {attestation: active.map(signer => signer.publicKey), recovery: spec.bridge.recovery.publicKeys, tee: spec.bridge.cubesigner!.publicKey})
   Object.assign(config, {
     attestation_key_count: active.length, attestation_pubkeys: active.map(signer => signer.publicKey),
     attestation_threshold: topology.threshold,
