@@ -193,6 +193,8 @@ export async function prepareProductionBridgeFunding(root: string, spec: Deploym
   const manifest = toml.parse(fs.readFileSync(manifestPath, 'utf8')) as any
   manifest.bridge_address = bridge.p2sh_address
   manifest.bridge_script_hex = bridge.redeem_script_hex
+  // The opening WF spends this output as its custody; every later WF spends its parent's.
+  manifest.opening_bridge_custody = [{tx_hex: funded.rawTransaction, vout: funded.vout}]
   privateWrite(manifestPath, toml.stringify(manifest))
   const configPath = path.join(root, '.data/doge-config.toml')
   const config = toml.parse(fs.readFileSync(configPath, 'utf8')) as any

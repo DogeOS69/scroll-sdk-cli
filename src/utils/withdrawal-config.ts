@@ -237,6 +237,8 @@ export interface WithdrawalDeploymentFactsInput {
   l2MessengerAddress: unknown
   l2RpcUrl: unknown
   networkStr: unknown
+  /** The opening WF's custody: validated `{tx_hex, vout}` Bridge funding outputs. */
+  openingBridgeCustody: Array<{tx_hex: string; vout: number}>
   productionVerifierKeyPolicy?: boolean
   tsoUrl?: unknown
 }
@@ -302,6 +304,9 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
       'defaults.l2BootstrapNextStartingBlockHeight'
     ),
     network_str: nonEmpty(input.networkStr),
+    // Required with genesis_sequencer_tx_hex: the Withdrawal Processor refuses a genesis
+    // deployment whose opening WF has no funded custody.
+    opening_bridge_custody: input.openingBridgeCustody.map(entry => ({tx_hex: entry.tx_hex, vout: entry.vout})),
     tso_url: nonEmpty(input.tsoUrl) || 'http://tso-service:3000',
   } as unknown as toml.JsonMap
 

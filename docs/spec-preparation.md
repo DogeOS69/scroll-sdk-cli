@@ -575,6 +575,14 @@ requires the recommended marker rather than accepting arbitrary WF-shaped
 payloads. It also rechecks the sequencer anchor, fee-wallet funding and future recovery
 timelock before accepting Bridge funding.
 
+The verified funding output is the opening WF's custody. The CLI records its raw
+transaction and output index as `opening_bridge_custody` in
+`.data/output-withdrawal-processor.toml`, and `setup prep-charts` writes that
+list into the Withdrawal Processor configuration. The Withdrawal Processor
+refuses to start a genesis deployment without it; every later WF spends its
+parent's single custody output, its deposits and a rotation's liveness input, so
+put the full initial Bridge balance into this funding output.
+
 No automatic wallet scan or wallet signing/broadcast is performed in external
 funding mode. The external wallet constructs and sends the payments. Confirmation waits
 return a resumable result instead of holding an interactive prompt open.

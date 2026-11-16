@@ -12,7 +12,7 @@ import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import {PROTOCOL_VERSION} from '../../constants/deployment.js'
-import {assertGenesisSequencerAmount, coreHelperNetwork} from '../../utils/bridge-constants.js'
+import {assertGenesisSequencerAmount, assertOpeningBridgeFunding, coreHelperNetwork} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import {resolveEthereumRpc} from '../../utils/ethereum-rpc-secrets.js'
@@ -1544,6 +1544,13 @@ export class BridgeInitCommand extends Command {
     ])
     this.moveLegacyOutputFiles(paths.dataDir)
     if (this.managedHelperWallets) this.materializeWithdrawalProcessorSecrets(paths)
+    const manifest = toml.parse(fs.readFileSync(paths.withdrawalProcessorTomlPath, 'utf8')) as any
+    if (!Array.isArray(manifest.opening_bridge_custody) || manifest.opening_bridge_custody.length === 0) {
+      this.jsonCtx.addWarning(
+        `${paths.withdrawalProcessorTomlPath} has no opening_bridge_custody — this bridge-genesis-tools image predates the single custody rule; `
+        + 'the Withdrawal Processor needs the marked Bridge funding output listed there before it starts'
+      )
+    }
   }
 
   private async runPrepareStep(imageTag: string, paths: BridgeInitPaths): Promise<void> {
@@ -1661,7 +1668,9 @@ export class BridgeInitCommand extends Command {
     }
 
     this.resolveSetupDefaultsEnvRefs(paths.setupDefaultsPath)
-    assertGenesisSequencerAmount((toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any).sequencer_target_amount)
+    const setupDefaults = toml.parse(fs.readFileSync(paths.setupDefaultsPath, 'utf8')) as any
+    assertGenesisSequencerAmount(setupDefaults.sequencer_target_amount)
+    assertOpeningBridgeFunding(setupDefaults)
     const dogecoinHeightBeforeSetup = await this.getDogecoinCurrentHeight(paths.setupDefaultsPath)
     const ethereumDaHeightBeforeSetup = await this.getEthereumDaCurrentHeight(path.join(paths.dataDir, 'doge-config.toml'))
     const indexerStartHeight = Math.max(0, dogecoinHeightBeforeSetup - 1)

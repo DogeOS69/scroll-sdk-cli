@@ -31,6 +31,7 @@ const FACTS_INPUT = {
   l2MessengerAddress: '0xmessenger',
   l2RpcUrl: 'http://l2-rpc:8545',
   networkStr: 'testnet',
+  openingBridgeCustody: [{tx_hex: '0100', vout: 1}],
 }
 
 describe('withdrawal-config deployment block', () => {
@@ -41,6 +42,18 @@ describe('withdrawal-config deployment block', () => {
     expect(toml.parse(merged).proof_system).to.deep.equal({correctness_policy_transport: 'bridge_proof_ref_v1', mode: 'disabled'})
     expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).to.equal(merged)
     expect(buildWithdrawalDeploymentFacts(FACTS_INPUT).facts).not.to.have.property('proof_system')
+  })
+
+  it('renders the opening custody list at document root and keeps the merge stable', () => {
+    const source = 'network_str = "regtest"\n\n[transitions]\nadvance_l1 = true\n'
+    const {facts} = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts)
+    const parsed: any = toml.parse(merged)
+    expect(parsed.opening_bridge_custody).to.deep.equal([{tx_hex: '0100', vout: 1}])
+    expect(parsed.transitions).to.deep.equal({advance_l1: true})
+    expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).to.equal(merged)
+    const replaced = buildWithdrawalDeploymentFacts({...FACTS_INPUT, openingBridgeCustody: [{tx_hex: '0200', vout: 0}]}).facts
+    expect((toml.parse(mergeWithdrawalManagedDeploymentBlock(merged, replaced)) as any).opening_bridge_custody).to.deep.equal([{tx_hex: '0200', vout: 0}])
   })
 
   it('adopts proof settings outside an existing deployment block when enabling production policy', () => {

@@ -196,9 +196,10 @@ describe('managed helper funding', () => {
       sequencer_utxo_vout: 0,
     })
     writeJson(path.join(root, '.data/bridge.json'), {p2sh_address: address, redeem_script_hex: redeem, script_pubkey_hex: script})
+    privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({genesis_sequencer_txid: txid, genesis_sequencer_vout: 0}))
     writeJson(path.join(root, '.data/production-ethereum-anchor.json'), {blockNumber: 42})
     privateWrite(path.join(root, '.data/doge-config.toml'), toml.stringify({defaults: {ethereumDaEmbeddedIndexerStartBlock: '999'}}))
-    const verify = verifyManagedHelperFunding(root, spec, async (method, params) => {
+    const rpc = async (method: string, params: unknown[]) => {
       const tx = params[0] === txid ? setup : funding
       switch (method) {
         case 'getblockchaininfo': {return {chain: 'regtest'}}
@@ -209,7 +210,9 @@ describe('managed helper funding', () => {
         case 'getblockheader': {return {confirmations: 6, height: 100}}
         default: {throw new Error(`Unexpected RPC ${method}`)}
       }
-    })
+    }
+
+    const verify = verifyManagedHelperFunding(root, spec, rpc)
     if (deployerWei) {
       let failure: unknown
       try {await verify} catch (error) {failure = error}
@@ -227,6 +230,13 @@ describe('managed helper funding', () => {
     const config: any = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8'))
     expect(config.defaults.ethereumDaEmbeddedIndexerStartBlock).to.equal('42')
     expect(config.defaults.dogecoinIndexerStartHeight).to.equal('99')
+    // The verified marked output becomes the opening WF's custody.
+    const manifest: any = toml.parse(fs.readFileSync(path.join(root, '.data/output-withdrawal-processor.toml'), 'utf8'))
+    expect(manifest.opening_bridge_custody).to.deep.equal([{tx_hex: funding.toHex(), vout: 0}])
+    privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({...manifest, opening_bridge_custody: [{tx_hex: setup.toHex(), vout: 0}]}))
+    let conflict: unknown
+    try {await verifyManagedHelperFunding(root, spec, rpc)} catch (error) {conflict = error}
+    expect((conflict as Error).message).to.include('opening custody differs')
   })
 
   it('restores KMS after Core rewrites the construction manifest and refuses mismatched identities', () => {
