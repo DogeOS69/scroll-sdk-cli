@@ -617,6 +617,11 @@ Processor configuration keeps `migrate_sequencer_two_of_two` once it is written,
 and `setup prep-charts` reads it back, so a doge-config.toml regenerated from a
 spec does not move the chain off the 2-of-2.
 
+A deployment that an earlier CLI release prepared with a P2PKH sequencer output
+and that has not built its opening WF yet needs no runbook: set
+`defaults.migrateSequencerTwoOfTwo = true` before the first start, and the
+opening WF pays output 0 to the 2-of-2.
+
 No automatic wallet scan or wallet signing/broadcast is performed in external
 funding mode. The external wallet constructs and sends the payments. Confirmation waits
 return a resumable result instead of holding an interactive prompt open.
