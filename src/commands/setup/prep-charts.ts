@@ -1880,7 +1880,7 @@ export default class SetupPrepCharts extends Command {
     } else {
       this.jsonCtx.addWarning(
         'The genesis sequencer seed does not pay the sequencing 2-of-2 and defaults.migrateSequencerTwoOfTwo is not set, so the Withdrawal Processor keeps a P2PKH sequencing output. '
-        + 'A CubeSigner policy that enforces the sequencing 2-of-2 refuses those transactions; follow the Core runbook to move the chain onto the 2-of-2.',
+        + 'A CubeSigner policy that enforces the sequencing 2-of-2 refuses those transactions. A chain that has not built its opening WF yet can set the value in .data/doge-config.toml now; a live chain moves with the Core sequencing 2-of-2 runbook, which ends with that setting.',
       )
     }
 
@@ -3110,7 +3110,7 @@ export default class SetupPrepCharts extends Command {
         if (policyResolution.requestContract && policyResolution.requestContract !== cubesignerRequestContract(this.sequencingTwoOfTwo)) {
           this.error(this.sequencingTwoOfTwo
             ? 'The selected CubeSigner policy release uses the v3 request contract, but this chain pays output 0 to the sequencing 2-of-2. Build and attach a policy with the sequencing pins (CURRENT, OUTPUT0_TEE), and import its receipts with the sequencing-consent-v5 request contract.'
-            : 'The selected CubeSigner policy release uses the sequencing-consent-v5 request contract, but this chain still has a P2PKH sequencing output. Set defaults.migrateSequencerTwoOfTwo = true in .data/doge-config.toml at the last step of the Core migration runbook, or select the v3 policy release.')
+            : 'The selected CubeSigner policy release uses the sequencing-consent-v5 request contract, but this chain still has a P2PKH sequencing output. Set defaults.migrateSequencerTwoOfTwo = true in .data/doge-config.toml (on a live chain, as the last step of the Core migration runbook), or select the v3 policy release.')
         }
 
         const projection = cubesignerLiveEvidenceProjection(policyResolution)
