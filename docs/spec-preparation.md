@@ -418,6 +418,14 @@ derived from `bridge.seedString` in production mode. Omit that test-helper field
 from a production spec. Helper funding uses a random seed saved privately in
 `.data/bridge-helper-seed`, separate from the independently managed Bridge keys.
 
+Core accepts a genesis recovery timelock only between the genesis anchor height
+plus 259,200 blocks and the anchor plus 525,600 blocks, inclusive. The anchor is
+the block that confirms the genesis sequencer output. `setup bridge-funding`
+checks the timelock against the earliest possible anchor before it asks for a
+payment or lets the helper broadcast, and against the actual anchor once the
+sequencer output is confirmed. Leave margin for funding delays: the anchor only
+moves later while the timelock stays fixed.
+
 The two Dogecoin wallet identities are distinct from the L2 Reth signer and the
 Ethereum DA/fee-oracle identities. With
 `images.services.withdrawalProcessor: {repository: dogeos69/withdrawal-processor, tag: v0.3.0-beta.6-kms}`,
@@ -502,6 +510,13 @@ With a compatible image, the operator sequence is:
    the marked Bridge output. Test deposit-seed transactions are disabled.
 5. Continue with `scrollsdk setup proof-materials`. No additional funding
    txid/vout needs to be entered. All child outpoints are recorded by Core.
+   Core's helper pays the sequencer output to the sequencing key's P2PKH. The
+   CLI therefore records `defaults.migrateSequencerTwoOfTwo = true` in
+   `.data/doge-config.toml`, and `setup prep-charts` sets the Withdrawal
+   Processor's `migrate_sequencer_two_of_two`: the opening WF spends the P2PKH
+   seed and pays output 0 to the sequencing 2-of-2. Until that WF confirms, the
+   sequencing key alone can spend the seed. External funding has no such
+   window, because its seed is the 2-of-2 from the start.
 
 Keep `.data/bridge-helper-seed` private and backed up: it controls helper change
 and, when no external fee key was supplied, the fee wallet. Generated runtime
@@ -561,6 +576,15 @@ amounts and a JSON template. Fill only real outpoints, then rerun `scrollsdk set
 }
 ```
 
+The `sequencer` address in that report is not the sequencing key's own
+address. It is the sequencing 2-of-2,
+`P2SH(OP_2 <TEE key> <sequencing key> OP_2 OP_CHECKMULTISIG)`, built from the
+TEE public key and the sequencing (proposer) public key, so neither key can
+spend the genesis sequencer output alone. Pay exactly 42,069,000 satoshis to it.
+The CLI rejects an output that pays the sequencing key's P2PKH. The sequencing
+key must be compressed and must not also be the TEE key or an attestation,
+recovery or fee-wallet key.
+
 After the final Bridge address has been generated, add a `bridge` entry with its
 funding `txid` and `vout`. The CLI obtains amounts, raw transactions and block
 facts from the RPC; users do not hand-edit generated TOML. The RPC must support
@@ -574,6 +598,29 @@ deposit transaction is not accepted as initial Bridge inventory. This adapter
 requires the recommended marker rather than accepting arbitrary WF-shaped
 payloads. It also rechecks the sequencer anchor, fee-wallet funding and future recovery
 timelock before accepting Bridge funding.
+
+The verified funding output is the opening WF's custody. The CLI records its raw
+transaction and output index as `opening_bridge_custody` in
+`.data/output-withdrawal-processor.toml`, and `setup prep-charts` writes that
+list into the Withdrawal Processor configuration. The Withdrawal Processor
+refuses to start a genesis deployment without it; every later WF spends its
+parent's single custody output, its deposits and a rotation's liveness input, so
+put the full initial Bridge balance into this funding output.
+
+A chain that already runs with a P2PKH sequencing output keeps it until an
+operator moves it: `setup prep-charts` warns and changes nothing. To move it,
+follow Core's sequencing 2-of-2 runbook (new releases first, then the policy
+attach with the Withdrawal Processor paused), and for its last step set
+`defaults.migrateSequencerTwoOfTwo = true` in `.data/doge-config.toml` and run
+`setup prep-charts`. Leave the setting in place afterwards. The Withdrawal
+Processor configuration keeps `migrate_sequencer_two_of_two` once it is written,
+and `setup prep-charts` reads it back, so a doge-config.toml regenerated from a
+spec does not move the chain off the 2-of-2.
+
+A deployment that an earlier CLI release prepared with a P2PKH sequencer output
+and that has not built its opening WF yet needs no runbook: set
+`defaults.migrateSequencerTwoOfTwo = true` before the first start, and the
+opening WF pays output 0 to the 2-of-2.
 
 No automatic wallet scan or wallet signing/broadcast is performed in external
 funding mode. The external wallet constructs and sends the payments. Confirmation waits

@@ -7,12 +7,13 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {Rpc} from './preparation-funding.js'
 
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
-import {GENESIS_SEQUENCER_AMOUNT_SATS, coreHelperNetwork} from './bridge-constants.js'
+import {GENESIS_SEQUENCER_AMOUNT_SATS, MAX_RECOVERY_DELAY_BLOCKS, MIN_RECOVERY_DELAY_BLOCKS, coreHelperNetwork, recoveryTimelockBounds} from './bridge-constants.js'
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
 import {bridgeFundingMinimumSats, checkPrivateKey, fundingInput, inspectFunding, publicKeyAddress, verifyDogecoinNetwork, verifyProductionBridge} from './preparation-funding.js'
 import {helperSeed, usesManagedHelper} from './preparation-helper-identity.js'
 import {AwaitingInput, privateWrite, writeJson} from './preparation-io.js'
 import {productionSequencer} from './preparation-sequencer-kms.js'
+import {assertDedicatedProposerKey} from './sequencing-two-of-two.js'
 import {resolveSpecAttestationSigners} from './spec-attestation-signers.js'
 
 /** This immutable release emits a 71-byte marker rejected by its own 73-byte decoder. */
@@ -23,15 +24,13 @@ export function assertHelperFundingImage(image: string): void {
 const readToml = (root: string, file: string): any => toml.parse(fs.readFileSync(path.join(root, '.data', file), 'utf8'))
 const readJson = (root: string, file: string): any => JSON.parse(fs.readFileSync(path.join(root, '.data', file), 'utf8'))
 
-// Core bridge_script_utils::MIN_RECOVERY_DELAY_BLOCKS.
-const MIN_RECOVERY_DELAY_BLOCKS = 259_200
-
 export async function checkHelperRecoveryTimelock(spec: DeploymentSpec, rpc: Rpc): Promise<void> {
   const height = await rpc('getblockcount', [])
   if (!Number.isSafeInteger(height) || height < 0) throw new Error('Invalid Dogecoin block height')
   // The setup transaction cannot be anchored before the next block.
-  const minimum = height + 1 + MIN_RECOVERY_DELAY_BLOCKS
+  const {maximum, minimum} = recoveryTimelockBounds(height + 1)
   if (spec.bridge.recovery.timelock < minimum) throw new AwaitingInput({message: `Recovery timelock must be at least ${minimum} (next possible genesis anchor plus ${MIN_RECOVERY_DELAY_BLOCKS} blocks); allow additional margin for funding delays`})
+  if (spec.bridge.recovery.timelock > maximum) throw new AwaitingInput({message: `Recovery timelock must be at most ${maximum} (next possible genesis anchor plus ${MAX_RECOVERY_DELAY_BLOCKS} blocks); use a reviewed block height in a new plan`})
 }
 
 export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
@@ -43,6 +42,7 @@ export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
   const config = readToml(root, 'setup_defaults.toml')
   const topology = resolveSpecAttestationSigners(spec)!
   const active = topology.activeSignerIds.map(id => topology.external.find(signer => signer.id === id)!)
+  assertDedicatedProposerKey(sequencer.publicKey, {attestation: active.map(signer => signer.publicKey), recovery: spec.bridge.recovery.publicKeys, tee: spec.bridge.cubesigner!.publicKey})
   Object.assign(config, {
     attestation_key_count: active.length, attestation_pubkeys: active.map(signer => signer.publicKey),
     attestation_threshold: topology.threshold,
@@ -143,12 +143,23 @@ export async function verifyManagedHelperFunding(root: string, spec: DeploymentS
   if (await rpc('getblockcount', []) >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
   writeJson(path.join(root, '.data/production-wallet-funding.json'), {feeWalletOutputs: feeFacts, sequencer})
   writeJson(path.join(root, '.data/production-bridge-funding.json'), bridgeFact)
+  // Core's helper records the opening custody itself; older helper images do not. Either way the
+  // manifest must name exactly the marked output verified above.
+  const manifest = readToml(root, 'output-withdrawal-processor.toml')
+  const custody = [{tx_hex: bridgeFact.rawTransaction, vout: bridgeFact.vout}]
+  const recorded = manifest.opening_bridge_custody
+  const matches = Array.isArray(recorded) && recorded.length === 1 && String(recorded[0]?.tx_hex).toLowerCase() === custody[0].tx_hex.toLowerCase() && recorded[0]?.vout === custody[0].vout
+  if (recorded !== undefined && !matches) throw new Error('Core helper opening custody differs from the verified Bridge funding output')
+  manifest.opening_bridge_custody = custody
+  privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify(manifest))
   const config = readToml(root, 'doge-config.toml')
   config.defaults ??= {}
   if (config.defaults.l2BootstrapNextStartingBlockHeight !== undefined) throw new Error('Helper genesis cannot initialize a snapshot continuation')
   config.defaults.dogecoinIndexerStartHeight = String(Math.max(0, sequencer.blockHeight - 1))
   config.defaults.l1GenesisBlock = String(sequencer.blockHeight)
   config.defaults.freshGenesisInit = true
+  // The seed verified above pays the sequencing key's P2PKH, so the opening WF moves output 0 to the sequencing 2-of-2.
+  config.defaults.migrateSequencerTwoOfTwo = true
   // Keep the previously validated Ethereum boundary instead of setup's latest tip.
   const anchor = readJson(root, 'production-ethereum-anchor.json')
   config.defaults.ethereumDaEmbeddedIndexerStartBlock = String(anchor.blockNumber)

@@ -15,6 +15,7 @@ import BridgeInitCommand, {
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
+import {assertOpeningBridgeFunding} from '../../../src/utils/bridge-constants.js'
 
 describe('bridge setup funding address', () => {
   it('uses the compressed public key required by the core setup transaction', () => {
@@ -30,6 +31,15 @@ describe('genesis sequencing output invariant', () => {
     expect(() => assertGenesisSequencerAmount(42_069_000)).not.to.throw()
     for (const amount of [420_690_000, 100_000_000, 0, undefined, '42069000']) {
       expect(() => assertGenesisSequencerAmount(amount)).to.throw('cannot prove its first WF transition')
+    }
+  })
+})
+
+describe('opening custody funding invariant', () => {
+  it('requires marked Bridge funding before the helper setup transaction is sent', () => {
+    expect(() => assertOpeningBridgeFunding({bridge_funding_target_amount: 5_000_000_000})).not.to.throw()
+    for (const amount of [0, undefined, '5000000000', -1]) {
+      expect(() => assertOpeningBridgeFunding({bridge_funding_target_amount: amount})).to.throw('bridge_funding_target_amount')
     }
   })
 })
@@ -77,6 +87,16 @@ describe('setup bridge-init timelock resolution', () => {
       shouldUpdate: true,
       timelock: desiredTimelock,
     })
+  })
+
+  it('rejects an explicit timelock outside the Core recovery delay window before any broadcast', () => {
+    const minimum = currentHeight + 1 + 259_200
+    const maximum = currentHeight + 1 + 525_600
+    expect(resolveBridgeTimelock(minimum, currentHeight)).to.deep.equal({shouldUpdate: false, timelock: minimum})
+    expect(resolveBridgeTimelock(maximum, currentHeight)).to.deep.equal({shouldUpdate: false, timelock: maximum})
+    for (const timelock of [minimum - 1, maximum + 1]) {
+      expect(() => resolveBridgeTimelock(timelock, currentHeight)).to.throw(`must be between ${minimum} and ${maximum}`)
+    }
   })
 
   it('rejects timestamp-semantics timelocks', () => {
@@ -396,6 +416,22 @@ describe('Core helper network synchronization', () => {
   })
 })
 
+
+describe('helper genesis lifecycle facts', () => {
+  it('records that a helper-funded chain moves its P2PKH sequencer seed onto the sequencing 2-of-2', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-init-lifecycle-'))
+    try {
+      fs.writeFileSync(path.join(root, 'doge-config.toml'), toml.stringify({defaults: {keep: 'fixture'}, network: 'regtest'}))
+      const command = Object.create(BridgeInitCommand.prototype)
+      command.jsonCtx = {info() {}}
+      command.updateDogeConfigBlockHeight(root, 10, 20)
+      const config = toml.parse(fs.readFileSync(path.join(root, 'doge-config.toml'), 'utf8')) as any
+      expect(config.defaults).to.deep.include({freshGenesisInit: true, keep: 'fixture', migrateSequencerTwoOfTwo: true})
+    } finally {
+      fs.rmSync(root, {force: true, recursive: true})
+    }
+  })
+})
 
 describe('Core bridge info network synchronization', () => {
   for (const nested of [true, false]) {

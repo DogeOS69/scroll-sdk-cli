@@ -124,6 +124,12 @@ export interface DogeConfig {
     freshGenesisInit?: boolean
     l1GenesisBlock?: string
     l2BootstrapNextStartingBlockHeight?: string
+    /**
+     * The genesis sequencer seed is a P2PKH output and the chain moves output 0
+     * to the sequencing 2-of-2 (Withdrawal Processor `migrate_sequencer_two_of_two`).
+     * Set by helper funding; once set it stays set.
+     */
+    migrateSequencerTwoOfTwo?: boolean
   }
   dogecoinClusterRpc?: {
     password?: string // for dogecoin that deploy on cluster

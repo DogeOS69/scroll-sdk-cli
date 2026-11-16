@@ -1630,6 +1630,14 @@ describe('deployment-spec-generator', () => {
       expect(output).to.include('sequencer_target_amount');
     });
 
+    it('funds the opening custody with one marked Bridge output instead of deposit seeds', () => {
+      const config = toml.parse(generateSetupDefaultsToml(createMinimalSpec())) as any;
+
+      expect(config.bridge_funding_target_amount).to.equal(config.bridge_target_amount);
+      expect(config.bridge_funding_tx_count).to.equal(1);
+      expect(config.enable_deposit_seed_txs).to.equal(false);
+    });
+
     it('includes deployer address as deposit recipient', () => {
       const spec = createMinimalSpec();
       const output = generateSetupDefaultsToml(spec);
