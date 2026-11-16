@@ -236,6 +236,8 @@ export interface WithdrawalDeploymentFactsInput {
   l2MessageQueueAddress: unknown
   l2MessengerAddress: unknown
   l2RpcUrl: unknown
+  /** The chain moves off a P2PKH genesis sequencer seed to the sequencing 2-of-2. */
+  migrateSequencerTwoOfTwo?: boolean
   networkStr: unknown
   /** The opening WF's custody: validated `{tx_hex, vout}` Bridge funding outputs. */
   openingBridgeCustody: Array<{tx_hex: string; vout: number}>
@@ -303,6 +305,8 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
       input.l2BootstrapNextStartingBlockHeight,
       'defaults.l2BootstrapNextStartingBlockHeight'
     ),
+    // Only ever set: once a chain is on the 2-of-2 the TEE policy refuses a P2PKH output 0.
+    ...(input.migrateSequencerTwoOfTwo ? {migrate_sequencer_two_of_two: true} : {}),
     network_str: nonEmpty(input.networkStr),
     // Required with genesis_sequencer_tx_hex: the Withdrawal Processor refuses a genesis
     // deployment whose opening WF has no funded custody.

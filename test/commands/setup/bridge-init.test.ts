@@ -417,6 +417,22 @@ describe('Core helper network synchronization', () => {
 })
 
 
+describe('helper genesis lifecycle facts', () => {
+  it('records that a helper-funded chain moves its P2PKH sequencer seed onto the sequencing 2-of-2', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-init-lifecycle-'))
+    try {
+      fs.writeFileSync(path.join(root, 'doge-config.toml'), toml.stringify({defaults: {keep: 'fixture'}, network: 'regtest'}))
+      const command = Object.create(BridgeInitCommand.prototype)
+      command.jsonCtx = {info() {}}
+      command.updateDogeConfigBlockHeight(root, 10, 20)
+      const config = toml.parse(fs.readFileSync(path.join(root, 'doge-config.toml'), 'utf8')) as any
+      expect(config.defaults).to.deep.include({freshGenesisInit: true, keep: 'fixture', migrateSequencerTwoOfTwo: true})
+    } finally {
+      fs.rmSync(root, {force: true, recursive: true})
+    }
+  })
+})
+
 describe('Core bridge info network synchronization', () => {
   for (const nested of [true, false]) {
     it(`preserves Core mainnet spelling in ${nested ? 'profiled' : 'flat'} bridge info`, () => {

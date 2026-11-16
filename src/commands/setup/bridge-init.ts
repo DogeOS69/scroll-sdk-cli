@@ -1796,6 +1796,10 @@ export class BridgeInitCommand extends Command {
       // Successful --step 2-setup explicitly creates a new bridge. Merely
       // re-rendering config or observing a missing DB never opts into seeding.
       dogeConfigForUpdate.defaults.freshGenesisInit = true
+      // Core's helper funds the sequencer seed to the sequencing key's P2PKH. The
+      // opening WF then moves output 0 to the sequencing 2-of-2, which the TEE
+      // signing policy requires of every WF.
+      dogeConfigForUpdate.defaults.migrateSequencerTwoOfTwo = true
       if (dogeConfigForUpdate.localSigners) {
         delete dogeConfigForUpdate.localSigners.network
       }

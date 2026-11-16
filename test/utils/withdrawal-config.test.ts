@@ -56,6 +56,17 @@ describe('withdrawal-config deployment block', () => {
     expect((toml.parse(mergeWithdrawalManagedDeploymentBlock(merged, replaced)) as any).opening_bridge_custody).to.deep.equal([{tx_hex: '0200', vout: 0}])
   })
 
+  it('sets the sequencing 2-of-2 migration switch only when declared and never removes it', () => {
+    expect(buildWithdrawalDeploymentFacts(FACTS_INPUT).facts).not.to.have.property('migrate_sequencer_two_of_two')
+    const {deletePaths, facts} = buildWithdrawalDeploymentFacts({...FACTS_INPUT, migrateSequencerTwoOfTwo: true})
+    expect(facts.migrate_sequencer_two_of_two).to.equal(true)
+    const merged = mergeWithdrawalManagedDeploymentBlock('', facts, {deletePaths})
+    expect((toml.parse(merged) as any).migrate_sequencer_two_of_two).to.equal(true)
+    // An operator who set the switch by hand keeps it across later runs.
+    const plain = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    expect((toml.parse(mergeWithdrawalManagedDeploymentBlock(merged, plain.facts, {deletePaths: plain.deletePaths})) as any).migrate_sequencer_two_of_two).to.equal(true)
+  })
+
   it('adopts proof settings outside an existing deployment block when enabling production policy', () => {
     const source = `[proof_system]
 correctness_policy_transport = "plain"
