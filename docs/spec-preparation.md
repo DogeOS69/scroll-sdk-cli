@@ -515,8 +515,8 @@ With a compatible image, the operator sequence is:
    `.data/doge-config.toml`, and `setup prep-charts` sets the Withdrawal
    Processor's `migrate_sequencer_two_of_two`: the opening WF spends the P2PKH
    seed and pays output 0 to the sequencing 2-of-2. Until that WF confirms, the
-   sequencing key alone can spend the seed, which is why production funding
-   uses the 2-of-2 seed of external funding instead.
+   sequencing key alone can spend the seed. External funding has no such
+   window, because its seed is the 2-of-2 from the start.
 
 Keep `.data/bridge-helper-seed` private and backed up: it controls helper change
 and, when no external fee key was supplied, the fee wallet. Generated runtime
@@ -612,7 +612,10 @@ operator moves it: `setup prep-charts` warns and changes nothing. To move it,
 follow Core's sequencing 2-of-2 runbook (new releases first, then the policy
 attach with the Withdrawal Processor paused), and for its last step set
 `defaults.migrateSequencerTwoOfTwo = true` in `.data/doge-config.toml` and run
-`setup prep-charts`. Leave the setting in place afterwards.
+`setup prep-charts`. Leave the setting in place afterwards. The Withdrawal
+Processor configuration keeps `migrate_sequencer_two_of_two` once it is written,
+and `setup prep-charts` reads it back, so a doge-config.toml regenerated from a
+spec does not move the chain off the 2-of-2.
 
 No automatic wallet scan or wallet signing/broadcast is performed in external
 funding mode. The external wallet constructs and sends the payments. Confirmation waits
