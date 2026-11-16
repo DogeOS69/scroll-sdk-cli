@@ -20,6 +20,54 @@ function readToml(file: string): toml.JsonMap {
   try {return toml.parse(fs.readFileSync(file, 'utf8'))} catch {throw new Error(`Cannot read valid TOML: ${file}; contents omitted`)}
 }
 
+const BASE_RPC_NAMESPACES = ['eth', 'net', 'rpc', 'web3']
+
+/** Namespaces each Reth role serves over HTTP and WebSocket. */
+function rethRpcRole(file: string): {allowed: string[]; name: string; public: boolean} | undefined {
+  if (file === 'l2-reth-rpc-public-production.yaml') return {allowed: BASE_RPC_NAMESPACES, name: 'public RPC', public: true}
+  // Proof materialization (debug_executionWitness) and explorer tracing call debug here.
+  if (file === 'l2-reth-rpc-production.yaml') return {allowed: [...BASE_RPC_NAMESPACES, 'debug'], name: 'internal RPC', public: false}
+  const match = /^l2-reth-(bootnode|sequencer)-production(?:-\d+)?\.yaml$/.exec(file)
+  return match ? {allowed: BASE_RPC_NAMESPACES, name: match[1], public: false} : undefined
+}
+
+/** An omitted list is the chart default (eth, net, web3, rpc); a disabled transport serves nothing. */
+function inspectRethRpcNamespaces(valuesDir: string, result: DeploymentPreflight): void {
+  for (const file of fs.readdirSync(valuesDir).sort()) {
+    const role = rethRpcRole(file)
+    if (!role) continue
+    let reth: Record<string, {api?: unknown; enabled?: unknown} | undefined> | undefined
+    try {
+      reth = (yaml.load(fs.readFileSync(path.join(valuesDir, file), 'utf8')) as {reth?: typeof reth} | undefined)?.reth
+    } catch {
+      result.blockers.push(`Cannot read valid YAML: values/${file}; contents omitted`)
+      continue
+    }
+
+    for (const transport of ['http', 'ws']) {
+      const settings = reth?.[transport]
+      if (settings?.enabled === false || typeof settings?.api !== 'string') continue
+      const extra = [...new Set(settings.api.split(',').map(item => item.trim()).filter(Boolean))].filter(item => !role.allowed.includes(item)).sort()
+      if (extra.length === 0) continue
+      const message = `values/${file} reth.${transport}.api enables ${extra.join(', ')} on the ${role.name} node`
+      if (role.public) result.blockers.push(`${message}; the public endpoint must serve only ${role.allowed.join(', ')}`)
+      else result.warnings.push(`${message}; keep ${role.allowed.join(', ')}, add a namespace only for a named caller, and use the IPC socket for operator access`)
+    }
+  }
+}
+
+/** The withdrawal backlog alerts page at the submitter's limit; an omitted value is 4500 on both sides. */
+function inspectWithdrawalAlertLimit(valuesDir: string, submitterLimit: unknown, result: DeploymentPreflight): void {
+  const file = path.join(valuesDir, 'scroll-monitor-production.yaml')
+  if (!fs.existsSync(file)) return
+  try {
+    const monitor = yaml.load(fs.readFileSync(file, 'utf8')) as {withdrawalBoundAlerts?: {maxWithdrawalsPerDaTx?: unknown}} | undefined
+    const withdrawalLimit = Number(submitterLimit ?? 4500)
+    const alertLimit = Number(monitor?.withdrawalBoundAlerts?.maxWithdrawalsPerDaTx ?? 4500)
+    if (withdrawalLimit !== alertLimit) result.warnings.push(`scroll-monitor withdrawalBoundAlerts.maxWithdrawalsPerDaTx (${alertLimit}) differs from eth-da-submitter max_withdrawals_per_da_tx (${withdrawalLimit}); set them equal so the withdrawal backlog alerts use the real limit`)
+  } catch {result.blockers.push('Cannot read valid YAML: values/scroll-monitor-production.yaml; contents omitted')}
+}
+
 /** Read-only checks for the currently supported configuration and deployment. */
 export function inspectDeployment(options: {
   deploymentDir: string; dogeConfig?: string; requireDstack?: boolean
@@ -67,6 +115,9 @@ export function inspectDeployment(options: {
   const chunkGas = Number(limit ?? 20_000_000)
   const blockGas = Number(genesis.gasLimit)
   if (!Number.isSafeInteger(blockGas) || blockGas <= 0 || !Number.isSafeInteger(chunkGas) || chunkGas <= blockGas) result.blockers.push('eth-da-submitter max_l2_gas_per_chunk must be strictly greater than the genesis gasLimit; set a valid explicit limit')
+
+  inspectWithdrawalAlertLimit(path.join(root, 'values'), values.configMaps?.env?.data?.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX, result)
+  inspectRethRpcNamespaces(path.join(root, 'values'), result)
 
   result.dstack.configured = Boolean(config.dstackController && config.dstackController.enabled !== false)
   result.dstack.valuesPresent = fs.existsSync(path.join(root, 'values/dstack-controller-production.yaml'))

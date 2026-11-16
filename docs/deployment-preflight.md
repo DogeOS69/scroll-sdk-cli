@@ -93,6 +93,15 @@ be used with preparation scope. It consumes doge-config and conventional
 values/native paths. It does not rewrite configuration, choose a release, inspect
 live database schemas or perform database recovery.
 
+It also reads the Reth values for their HTTP and WebSocket API namespaces. The
+public RPC values may enable only `eth`, `net`, `web3` and `rpc`; any other
+namespace there is an error. Sequencer and bootnode values get a warning for
+anything beyond those four, and the internal RPC values for anything beyond
+those and `debug`, which proof materialization and explorer tracing call. A
+second warning reports a `withdrawalBoundAlerts.maxWithdrawalsPerDaTx` in the
+scroll-monitor values that differs from the eth-da-submitter
+`max_withdrawals_per_da_tx`; an omitted value counts as 4500 on both sides.
+
 Optional runtime probes are described below. Kubernetes operations are read-only;
 the signer and Reth probes create disposable local Docker containers.
 
