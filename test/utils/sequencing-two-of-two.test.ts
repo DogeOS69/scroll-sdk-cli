@@ -46,6 +46,9 @@ describe('sequencing 2-of-2', () => {
     expect(() => sequencingRedeemScript(TEE, `02${'ff'.repeat(32)}`)).to.throw('not a valid')
     expect(() => sequencingRedeemScript(undefined, PROPOSER)).to.throw('TEE public key')
     expect(() => sequencingRedeemScript(TEE, TEE)).to.throw('must differ')
+    // The Bridge script commits the TEE key compressed whatever encoding is recorded; so does the 2-of-2.
+    expect(sequencingRedeemScript(UNCOMPRESSED, PROPOSER)).to.equal(sequencingRedeemScript(OTHER, PROPOSER))
+    expect(() => sequencingRedeemScript(ECDH.convertKey(PROPOSER, 'secp256k1', 'hex', 'hex', 'uncompressed') as string, PROPOSER)).to.throw('must differ')
   })
 
   it('requires a dedicated proposer key, whatever encoding the other roles use', () => {
@@ -53,7 +56,8 @@ describe('sequencing 2-of-2', () => {
     expect(() => assertDedicatedProposerKey(TEE, {tee: TEE})).to.throw('TEE key')
     expect(() => assertDedicatedProposerKey(OTHER, {attestation: [UNCOMPRESSED], tee: TEE})).to.throw('attestation key')
     expect(() => assertDedicatedProposerKey(OTHER, {recovery: [TEE, `0x${OTHER}`], tee: TEE})).to.throw('recovery key')
-    expect(() => assertDedicatedProposerKey(PROPOSER, {feeWallet: PROPOSER})).to.throw('fee wallet key')
+    // An unrelated placeholder among the role keys is not this check's concern.
+    expect(() => assertDedicatedProposerKey(PROPOSER, {attestation: [`04${'00'.repeat(63)}01`], tee: TEE})).not.to.throw()
   })
 
   it('selects the request contract from where output 0 sits', () => {

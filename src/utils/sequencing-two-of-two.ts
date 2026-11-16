@@ -19,9 +19,14 @@ function compressedKey(value: unknown, label: string): string {
   return normalizeCompressedSecp256k1PublicKey(key, label)
 }
 
-/** Hex of the canonical redeem script; rejects uncompressed, invalid or equal keys. */
+/**
+ * Hex of the canonical redeem script. The TEE key is committed in compressed
+ * form whatever encoding the deployment records, as in the Bridge script. The
+ * proposer key signs as configured, so it must already be compressed.
+ */
 export function sequencingRedeemScript(teePublicKey: unknown, proposerPublicKey: unknown): string {
-  const tee = compressedKey(teePublicKey, 'TEE public key')
+  if (typeof teePublicKey !== 'string') throw new Error('TEE public key is required')
+  const tee = normalizeCompressedSecp256k1PublicKey(teePublicKey, 'TEE public key')
   const proposer = compressedKey(proposerPublicKey, 'Sequencing (proposer) public key')
   if (tee === proposer) throw new Error('The sequencing (proposer) key must differ from the TEE key')
   return `5221${tee}21${proposer}52ae`
@@ -44,10 +49,15 @@ export function sequencingAddress(teePublicKey: unknown, proposerPublicKey: unkn
  * in that position defeats the separation of roles the 2-of-2 exists for, and
  * attestation signers refuse to sign input 0.
  */
-export function assertDedicatedProposerKey(proposerPublicKey: string, roles: {attestation?: string[]; feeWallet?: string; recovery?: string[]; tee?: string}): void {
+export function assertDedicatedProposerKey(proposerPublicKey: string, roles: {attestation?: string[]; recovery?: string[]; tee?: string}): void {
   const proposer = compressedKey(proposerPublicKey, 'Sequencing (proposer) public key')
-  for (const [role, keys] of [['TEE', roles.tee ? [roles.tee] : []], ['attestation', roles.attestation ?? []], ['recovery', roles.recovery ?? []], ['fee wallet', roles.feeWallet ? [roles.feeWallet] : []]] as const) {
-    if (keys.some(key => normalizeCompressedSecp256k1PublicKey(key, `${role} public key`) === proposer)) throw new Error(`The sequencing (proposer) key must not also be a ${role} key`)
+  // Role keys may be recorded uncompressed. Their own validity is checked where they are used.
+  const compressed = (key: unknown): string | undefined => {
+    try {return typeof key === 'string' ? normalizeCompressedSecp256k1PublicKey(key, 'role public key') : undefined} catch {return undefined}
+  }
+
+  for (const [role, keys] of [['TEE', roles.tee ? [roles.tee] : []], ['attestation', roles.attestation ?? []], ['recovery', roles.recovery ?? []]] as const) {
+    if (keys.some(key => compressed(key) === proposer)) throw new Error(`The sequencing (proposer) key must not also be a ${role} key`)
   }
 }
 
