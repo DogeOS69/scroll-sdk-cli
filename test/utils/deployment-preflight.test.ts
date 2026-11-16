@@ -70,4 +70,44 @@ describe('current deployment preflight', () => {
     expect(report.dstack).to.deep.equal({configured: false, valuesPresent: false})
   })
 
+  const mismatch = () => inspectDeployment(options()).warnings.filter(warning => warning.includes('withdrawalBoundAlerts'))
+  const reth = (file: string, http: string, ws: string, wsEnabled = true) =>
+    fs.writeFileSync(path.join(root, 'values', file), yaml.dump({reth: {http: {api: http, enabled: true}, ws: {api: ws, enabled: wsEnabled}}}))
+
+  it('accepts the namespaces each Reth role serves and a values file without lists', () => {
+    reth('l2-reth-sequencer-production.yaml', 'eth,net,web3,rpc', 'eth,net,web3,rpc')
+    reth('l2-reth-bootnode-production-0.yaml', 'eth,net,web3,rpc', 'net,web3,rpc,admin,eth', false)
+    reth('l2-reth-rpc-production.yaml', 'eth, net, web3, rpc, debug', 'eth,net,web3,rpc')
+    reth('l2-reth-rpc-public-production.yaml', 'eth,net,web3', 'eth,net,web3')
+    fs.writeFileSync(path.join(root, 'values/l2-reth-sequencer-production-0.yaml'), yaml.dump({reth: {networkId: 1}}))
+    const report = inspectDeployment(options())
+    expect(report.blockers).to.deep.equal([])
+    expect(report.warnings.join(' ')).not.to.include('reth.')
+  })
+
+  it('refuses privileged namespaces on the public RPC and warns about them on internal nodes', () => {
+    reth('l2-reth-rpc-public-production.yaml', 'eth,net,web3', 'eth,net,web3,debug')
+    reth('l2-reth-sequencer-production-1.yaml', 'net,web3,rpc,admin,debug,trace,txpool,eth,ots', 'eth,net,web3,rpc')
+    reth('l2-reth-rpc-production.yaml', 'eth,net,web3,rpc,debug,txpool', 'eth,net,web3,rpc')
+    const report = inspectDeployment(options())
+    expect(report.blockers).to.deep.equal(['values/l2-reth-rpc-public-production.yaml reth.ws.api enables debug on the public RPC node; the public endpoint must serve only eth, net, rpc, web3'])
+    const warnings = report.warnings.filter(warning => warning.includes('reth.'))
+    expect(warnings).to.have.length(2)
+    expect(warnings[0]).to.include('l2-reth-rpc-production.yaml reth.http.api enables txpool on the internal RPC node')
+    expect(warnings[1]).to.include('l2-reth-sequencer-production-1.yaml reth.http.api enables admin, debug, ots, trace, txpool on the sequencer node')
+  })
+
+  it('warns when the backlog alert limit differs from the submitter limit', () => {
+    const monitor = (values: unknown) => fs.writeFileSync(path.join(root, 'values/scroll-monitor-production.yaml'), yaml.dump(values))
+    monitor({grafana: {enabled: true}})
+    expect(mismatch()).to.deep.equal([])
+    monitor({withdrawalBoundAlerts: {maxWithdrawalsPerDaTx: 6000}})
+    expect(mismatch()).to.have.length(1)
+    expect(mismatch()[0]).to.include('(6000)').and.to.include('(4500)')
+    fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({configMaps: {env: {data: {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: '15000000', DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: '6000'}}}}))
+    expect(mismatch()).to.deep.equal([])
+    monitor({grafana: {enabled: true}})
+    expect(mismatch()).to.have.length(1)
+  })
+
 })
