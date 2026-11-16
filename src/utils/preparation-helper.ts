@@ -143,6 +143,13 @@ export async function verifyManagedHelperFunding(root: string, spec: DeploymentS
   if (await rpc('getblockcount', []) >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is no longer in the future'})
   writeJson(path.join(root, '.data/production-wallet-funding.json'), {feeWalletOutputs: feeFacts, sequencer})
   writeJson(path.join(root, '.data/production-bridge-funding.json'), bridgeFact)
+  // Core's helper records the opening custody itself; older helper images do not. Either way the
+  // manifest must name exactly the marked output verified above.
+  const manifest = readToml(root, 'output-withdrawal-processor.toml')
+  const custody = [{tx_hex: bridgeFact.rawTransaction, vout: bridgeFact.vout}]
+  if (manifest.opening_bridge_custody !== undefined && JSON.stringify(manifest.opening_bridge_custody) !== JSON.stringify(custody)) throw new Error('Core helper opening custody differs from the verified Bridge funding output')
+  manifest.opening_bridge_custody = custody
+  privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify(manifest))
   const config = readToml(root, 'doge-config.toml')
   config.defaults ??= {}
   if (config.defaults.l2BootstrapNextStartingBlockHeight !== undefined) throw new Error('Helper genesis cannot initialize a snapshot continuation')

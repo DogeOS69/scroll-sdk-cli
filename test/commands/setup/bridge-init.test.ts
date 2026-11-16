@@ -15,6 +15,7 @@ import BridgeInitCommand, {
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
+import {assertOpeningBridgeFunding} from '../../../src/utils/bridge-constants.js'
 
 describe('bridge setup funding address', () => {
   it('uses the compressed public key required by the core setup transaction', () => {
@@ -30,6 +31,15 @@ describe('genesis sequencing output invariant', () => {
     expect(() => assertGenesisSequencerAmount(42_069_000)).not.to.throw()
     for (const amount of [420_690_000, 100_000_000, 0, undefined, '42069000']) {
       expect(() => assertGenesisSequencerAmount(amount)).to.throw('cannot prove its first WF transition')
+    }
+  })
+})
+
+describe('opening custody funding invariant', () => {
+  it('requires marked Bridge funding before the helper setup transaction is sent', () => {
+    expect(() => assertOpeningBridgeFunding({bridge_funding_target_amount: 5_000_000_000})).not.to.throw()
+    for (const amount of [0, undefined, '5000000000', -1]) {
+      expect(() => assertOpeningBridgeFunding({bridge_funding_target_amount: amount})).to.throw('bridge_funding_target_amount')
     }
   })
 })

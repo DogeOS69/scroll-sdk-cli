@@ -6,6 +6,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {promisify} from 'node:util'
 
+import {openingCustodyFixture} from '../../helpers/opening-bridge-custody.js'
+
 const execute = promisify(execFile)
 const cli = path.resolve('bin/run.js')
 
@@ -40,6 +42,7 @@ genesis_sequencer_txid = "f5eedbcaed2b12685bfc046c04ae7827e47ba6b75cb09342a5ec06
 genesis_sequencer_vout = 0
 genesis_sequencer_tx_hex = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff00ffffffff0101000000000000000000000000"
 network_str = "testnet"
+opening_bridge_custody = [{ tx_hex = "${openingCustodyFixture('51').tx_hex}", vout = 0 }]
 `)
     fs.writeFileSync(path.join(root, '.data/bridge.json'), JSON.stringify({redeem_script_hex: '51'}))
     fs.writeFileSync(path.join(root, '.data/output-test-data.json'), JSON.stringify({fee_wallet_address: 'fixture', sequencer_address: 'fixture'}))

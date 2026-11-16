@@ -8,6 +8,18 @@ export function assertGenesisSequencerAmount(value: unknown): void {
   }
 }
 
+/**
+ * The opening WF spends marked Bridge funding as its custody. Core's helper only
+ * sends that funding when bridge_funding_target_amount is set; its default
+ * deposit-shaped seed outputs cannot back the opening WF.
+ */
+export function assertOpeningBridgeFunding(setupDefaults: {bridge_funding_target_amount?: unknown}): void {
+  const amount = setupDefaults.bridge_funding_target_amount
+  if (!Number.isSafeInteger(amount) || Number(amount) <= 0) {
+    throw new Error('setup_defaults.toml must set bridge_funding_target_amount (satoshis, with bridge_funding_tx_count = 1 and enable_deposit_seed_txs = false): the opening WF spends a marked Bridge funding output as its custody, and the Withdrawal Processor refuses to start without one. No setup transaction was sent.')
+  }
+}
+
 /** Core's helper config uses rust-dogecoin's serialized Network enum. */
 export function coreHelperNetwork(network: string): string {
   if (network === 'mainnet' || network === 'dogecoin') return 'dogecoin'

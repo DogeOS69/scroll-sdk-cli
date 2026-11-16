@@ -52,6 +52,7 @@ import {isDogecoinMainnet} from '../../utils/mainnet-proof-posture.js'
 import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
 import {reconcileMonitoringSlack} from '../../utils/monitoring-slack.js'
 import {reconcileMonitoringStatusPage} from '../../utils/monitoring-status-page.js'
+import {type OpeningBridgeCustodyEntry, ensureOpeningBridgeCustody} from '../../utils/opening-bridge-custody.js'
 import {readPreparedSequencerKms} from '../../utils/preparation-sequencer-kms.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {resolveProofReceiptSelection} from '../../utils/proof-deployment-contract.js'
@@ -1351,6 +1352,7 @@ export default class SetupPrepCharts extends Command {
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
   private nonInteractive: boolean = false
+  private openingBridgeCustody: OpeningBridgeCustodyEntry[] = []
   private outputTestData: Record<string, any> = {}
   // Resolve pinned governance inputs at the source: governance receipts remain excluded from staging.
   private policyInputRoot?: string
@@ -1872,6 +1874,13 @@ export default class SetupPrepCharts extends Command {
     if (!this.bridgeConfig.redeem_script_hex) {
       this.error(`${bridgeConfigPath} missing redeem_script_hex. Run scrollsdk setup bridge-init --step 3-bridge-info first`);
     }
+
+    this.openingBridgeCustody = ensureOpeningBridgeCustody({
+      bridgeFundingReceiptPath: path.join(process.cwd(), '.data/production-bridge-funding.json'),
+      bridgeJsonPath: bridgeConfigPath,
+      withdrawalProcessorOutputPath: withdrawalProcessorConfigPath,
+    })
+    this.jsonCtx.info(`Opening Bridge custody: ${this.openingBridgeCustody.length} funding output(s) (validated)`)
 
     const outputTestDataPath = path.join(process.cwd(), ".data/output-test-data.json")
     if (!fs.existsSync(outputTestDataPath)) {
@@ -2964,6 +2973,7 @@ export default class SetupPrepCharts extends Command {
           l2MessengerAddress: this.getConfigValue('contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR'),
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
           networkStr: this.withdrawalProcessorConfig.network_str,
+          openingBridgeCustody: this.openingBridgeCustody,
           productionVerifierKeyPolicy: this.dogeConfig.cubesigner?.mode === 'production_verifier_key_policy',
         })
 
