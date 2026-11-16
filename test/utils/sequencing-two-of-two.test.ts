@@ -4,12 +4,16 @@ import {expect} from 'chai'
 import {ECDH, createHash} from 'node:crypto'
 
 import {
+  CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5,
+  CUBESIGNER_REQUEST_CONTRACT_V3,
   SEQUENCING_REDEEM_BYTES,
   assertDedicatedProposerKey,
+  cubesignerRequestContract,
   sequencerSeedKind,
   sequencingAddress,
   sequencingRedeemScript,
   sequencingScriptPubkey,
+  usesSequencingTwoOfTwo,
 } from '../../src/utils/sequencing-two-of-two.js'
 
 // secp256k1 generator multiples G, 2G and 3G: public test vectors, not deployment keys.
@@ -50,6 +54,15 @@ describe('sequencing 2-of-2', () => {
     expect(() => assertDedicatedProposerKey(OTHER, {attestation: [UNCOMPRESSED], tee: TEE})).to.throw('attestation key')
     expect(() => assertDedicatedProposerKey(OTHER, {recovery: [TEE, `0x${OTHER}`], tee: TEE})).to.throw('recovery key')
     expect(() => assertDedicatedProposerKey(PROPOSER, {feeWallet: PROPOSER})).to.throw('fee wallet key')
+  })
+
+  it('selects the request contract from where output 0 sits', () => {
+    expect(usesSequencingTwoOfTwo('two-of-two', false)).to.equal(true)
+    expect(usesSequencingTwoOfTwo('p2pkh', true)).to.equal(true)
+    expect(usesSequencingTwoOfTwo('p2pkh', false)).to.equal(false)
+    expect(cubesignerRequestContract(true)).to.equal(CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5)
+    expect(cubesignerRequestContract(false)).to.equal(CUBESIGNER_REQUEST_CONTRACT_V3)
+    expect(CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5).to.match(/-explain-sequencing-consent-v5$/)
   })
 
   it('classifies the genesis sequencer seed by its output script', () => {

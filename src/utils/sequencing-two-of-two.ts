@@ -66,3 +66,22 @@ export function sequencerSeedKind(txHex: string, vout: number): SequencerSeedKin
   if (/^76a914[\da-f]{40}88ac$/.test(script)) return 'p2pkh'
   return 'other'
 }
+
+/** Output 0 pays the sequencing 2-of-2: the genesis seed is one, or the chain is moving off a P2PKH seed. */
+export function usesSequencingTwoOfTwo(seedKind: SequencerSeedKind, migrateSequencerTwoOfTwo: boolean): boolean {
+  return seedKind === 'two-of-two' || migrateSequencerTwoOfTwo
+}
+
+/** Production verifier-policy request contract of a chain with a P2PKH sequencing output. */
+export const CUBESIGNER_REQUEST_CONTRACT_V3 = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3'
+/**
+ * v3 plus the sequencing 2-of-2: input 0 travels with the proposer's consent
+ * signature. A policy that enforces the 2-of-2 accepts only this contract, and
+ * the gateway refuses to sign a 2-of-2 input 0 under v3.
+ */
+export const CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5 = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-sequencing-consent-v5'
+
+/** The gateway label and the attached policy must agree; both follow where output 0 sits. */
+export function cubesignerRequestContract(sequencingTwoOfTwo: boolean): string {
+  return sequencingTwoOfTwo ? CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5 : CUBESIGNER_REQUEST_CONTRACT_V3
+}

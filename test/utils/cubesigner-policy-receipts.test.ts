@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCubesignerPolicy} from '../../src/utils/cubesigner-policy-receipts.js'
 import {proofFileHash} from '../../src/utils/proof-software-release.js'
+import {CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5, CUBESIGNER_REQUEST_CONTRACT_V3} from '../../src/utils/sequencing-two-of-two.js'
 import {policyReceiptFixture} from '../helpers/cubesigner-policy-receipts.js'
 
 describe('CubeSigner policy receipt import', () => {
@@ -37,6 +38,25 @@ describe('CubeSigner policy receipt import', () => {
     fs.writeFileSync(file, JSON.stringify(attachment))
     refs.attachment.sha256 = `sha256:${proofFileHash(file)}`
     expect(resolveCubesignerPolicy(input).policy?.policyIdentifier).to.equal('dogeos_bridge/v0')
+  })
+
+  it('accepts the sequencing-consent v5 request contract and reports which contract the release uses', () => {
+    const rewrite = (contract: string) => {
+      const input = fixture()
+      const refs = input.selection.policyReceipts
+      const releaseFile = path.join(root, refs.release.path)
+      fs.writeFileSync(releaseFile, JSON.stringify({...JSON.parse(fs.readFileSync(releaseFile, 'utf8')), requestContract: contract}))
+      refs.release.sha256 = `sha256:${proofFileHash(releaseFile)}`
+      const file = path.join(root, refs.attachment.path)
+      fs.writeFileSync(file, JSON.stringify({...JSON.parse(fs.readFileSync(file, 'utf8')), releaseSha256: refs.release.sha256}))
+      refs.attachment.sha256 = `sha256:${proofFileHash(file)}`
+      return input
+    }
+
+    expect(resolveCubesignerPolicy(fixture()).requestContract).to.equal(CUBESIGNER_REQUEST_CONTRACT_V3)
+    expect(resolveCubesignerPolicy(rewrite(CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5)).requestContract).to.equal(CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5)
+    // The unreleased consent-only v4 and any other label stay rejected.
+    expect(() => resolveCubesignerPolicy(rewrite(CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5.replace('-v5', '-v4')))).to.throw('request contract mismatch')
   })
 
   it('rejects another key, organization, changed context and changed Wasm', () => {
