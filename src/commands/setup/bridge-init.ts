@@ -12,7 +12,7 @@ import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
 import {PROTOCOL_VERSION} from '../../constants/deployment.js'
-import {assertGenesisSequencerAmount, assertOpeningBridgeFunding, coreHelperNetwork} from '../../utils/bridge-constants.js'
+import {MAX_RECOVERY_DELAY_BLOCKS, MIN_RECOVERY_DELAY_BLOCKS, assertGenesisSequencerAmount, assertOpeningBridgeFunding, coreHelperNetwork, recoveryTimelockBounds} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
 import {resolveEthereumRpc} from '../../utils/ethereum-rpc-secrets.js'
@@ -46,7 +46,7 @@ interface BridgeInitPostprocessResult {
 }
 
 export const BRIDGE_TIMELOCK_PLACEHOLDER = 100
-export const BRIDGE_TIMELOCK_RELATIVE_BLOCKS = 259_200
+export const BRIDGE_TIMELOCK_RELATIVE_BLOCKS = MIN_RECOVERY_DELAY_BLOCKS
 export const BRIDGE_TIMELOCK_MARGIN_BLOCKS = 100
 export const BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT = 500_000_000
 
@@ -130,6 +130,18 @@ export function resolveBridgeTimelock(
   if (timelock >= BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT) {
     throw new Error(
       `Existing timelock ${timelock} is not a Dogecoin block-height CLTV value; it must be < ${BRIDGE_TIMELOCK_MAX_BLOCK_HEIGHT}.`
+    )
+  }
+
+  // The setup transaction anchors genesis at the next block or later. Core then
+  // rejects a timelock outside the anchor's delay window, after that
+  // transaction was already sent, so stop here instead.
+  const { maximum, minimum } = recoveryTimelockBounds(currentHeight + 1)
+  if (timelock < minimum || timelock > maximum) {
+    throw new Error(
+      `Existing timelock ${timelock} must be between ${minimum} and ${maximum}: the next possible genesis anchor ` +
+      `${currentHeight + 1} plus ${MIN_RECOVERY_DELAY_BLOCKS} to ${MAX_RECOVERY_DELAY_BLOCKS} blocks. Set a height in that range, ` +
+      `or the placeholder ${BRIDGE_TIMELOCK_PLACEHOLDER} to have one chosen. No setup transaction was sent.`
     )
   }
 

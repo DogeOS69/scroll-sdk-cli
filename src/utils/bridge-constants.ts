@@ -8,6 +8,18 @@ export function assertGenesisSequencerAmount(value: unknown): void {
   }
 }
 
+// Core bridge_script_utils::{MIN,MAX}_RECOVERY_DELAY_BLOCKS.
+export const MIN_RECOVERY_DELAY_BLOCKS = 259_200
+export const MAX_RECOVERY_DELAY_BLOCKS = 525_600
+
+/**
+ * Core admits a genesis recovery timelock only from the genesis anchor height
+ * plus the minimum delay to the anchor plus the maximum delay, inclusive.
+ */
+export function recoveryTimelockBounds(anchorHeight: number): {maximum: number; minimum: number} {
+  return {maximum: anchorHeight + MAX_RECOVERY_DELAY_BLOCKS, minimum: anchorHeight + MIN_RECOVERY_DELAY_BLOCKS}
+}
+
 /**
  * The opening WF spends marked Bridge funding as its custody. Core's helper only
  * sends that funding when bridge_funding_target_amount is set; its default

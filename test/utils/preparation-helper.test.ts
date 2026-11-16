@@ -101,6 +101,16 @@ describe('managed helper funding', () => {
     expect((failure as Error).message).to.include('466698')
   })
 
+  it('rejects a timelock beyond the Core maximum recovery delay', async () => {
+    spec.bridge.recovery.timelock = 733_097
+    await checkHelperRecoveryTimelock(spec, async () => 207_496)
+    spec.bridge.recovery.timelock = 733_098
+    let failure: unknown
+    try {await checkHelperRecoveryTimelock(spec, async () => 207_496)} catch (error) {failure = error}
+    expect(failure).to.be.instanceOf(AwaitingInput)
+    expect((failure as Error).message).to.include('at most 733097')
+  })
+
   it('prepares external KMS identity and a deterministic fee wallet without deriving bridge roles', () => {
     prepareManagedHelper(root, spec)
     const config: any = toml.parse(fs.readFileSync(path.join(root, '.data/setup_defaults.toml'), 'utf8'))

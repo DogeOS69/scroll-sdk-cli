@@ -9,7 +9,7 @@ import path from 'node:path'
 import type {DeploymentSpec} from '../types/deployment-spec.js'
 
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
-import {GENESIS_SEQUENCER_AMOUNT_SATS} from './bridge-constants.js'
+import {GENESIS_SEQUENCER_AMOUNT_SATS, MAX_RECOVERY_DELAY_BLOCKS, MIN_RECOVERY_DELAY_BLOCKS, recoveryTimelockBounds} from './bridge-constants.js'
 import {deployerAllocationSats} from './deployment-spec-generator.js'
 import {resolveEthereumRpc} from './ethereum-rpc-secrets.js'
 import {resolveEnvValue} from './non-interactive.js'
@@ -119,7 +119,10 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   if (!sequencer.kms) checkPrivateKey(sequencer.publicKey, policy.sequencerKeyEnv!)
   const feeWallet = productionFeeWallet(root, spec)
   if (feeWallet.publicKey === sequencer.publicKey.toLowerCase()) throw new Error('Production sequencer and fee wallet must have different keys')
-  if (await rpc('getblockcount', []) >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is not in the future; use a reviewed future block height in a new plan'})
+  const height = await rpc('getblockcount', [])
+  if (height >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is not in the future; use a reviewed future block height in a new plan'})
+  // The genesis anchor is the sequencer funding block, at most the next block: stop before any payment is requested.
+  if (spec.bridge.recovery.timelock > recoveryTimelockBounds(height + 1).maximum) throw new AwaitingInput({message: `Recovery timelock must be at most ${recoveryTimelockBounds(height + 1).maximum} (genesis anchor plus ${MAX_RECOVERY_DELAY_BLOCKS} blocks); use a reviewed block height in a new plan`})
   const {data, file} = fundingInput(root, spec)
   const addresses = {feeWallet: feeWallet.address, sequencer: publicKeyAddress(sequencer.publicKey, spec.dogecoin.network)}
   const setupPath = path.join(root, '.data/setup_defaults.toml')
@@ -138,10 +141,14 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   }
 
   if (facts.sequencer.txid === facts.feeWallet.txid && facts.sequencer.vout === facts.feeWallet.vout) throw new Error('Sequencer and fee wallet must use distinct outpoints')
+  // Core checks the recovery timelock against the genesis anchor, the sequencer funding block.
+  const bounds = recoveryTimelockBounds(facts.sequencer.blockHeight)
+  if (spec.bridge.recovery.timelock < bounds.minimum || spec.bridge.recovery.timelock > bounds.maximum) throw new AwaitingInput({message: `Recovery timelock ${spec.bridge.recovery.timelock} must be between ${bounds.minimum} and ${bounds.maximum}: the genesis anchor ${facts.sequencer.blockHeight} plus ${MIN_RECOVERY_DELAY_BLOCKS} to ${MAX_RECOVERY_DELAY_BLOCKS} blocks. Use a reviewed block height in a new plan, or a sequencer funding output confirmed at a height that fits`})
   if (!Array.isArray(setup.attestation_pubkeys) || setup.attestation_pubkeys.length === 0) throw new AwaitingInput({message: 'Import the selected attestation descriptors before Bridge preparation'})
   writeJson(path.join(root, '.data/production-wallet-funding.json'), facts)
   privateWrite(path.join(root, '.data/GenerateBridgeInfo.toml'), toml.stringify({default: {
     attestation: {pubkeys: setup.attestation_pubkeys, threshold: setup.attestation_threshold},
+    initial_confirmed_block_number: facts.sequencer.blockHeight,
     namespace_id: Array.from({length: 20}, () => 0), network: spec.dogecoin.network === 'mainnet' ? 'dogecoin' : spec.dogecoin.network,
     recovery: {pubkeys: spec.bridge.recovery.publicKeys, threshold: spec.bridge.recovery.threshold},
     tee_pubkey: spec.bridge.cubesigner!.publicKey!,

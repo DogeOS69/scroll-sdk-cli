@@ -114,7 +114,7 @@ describe('production Bridge sequencer KMS', () => {
     const fee = feeKey()
     process.env.DOGECOIN_FEE_WALLET_KEY = fee.toWIF()
     const publicKey = fee.toPublicKey().toString()
-    spec = {bridge: {attestation: {signers: [{attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: 'partner-a', transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}], threshold: 1}, confirmationsRequired: 6, cubesigner: {publicKey}, recovery: {publicKeys: [publicKey, feeKey().toPublicKey().toString()], threshold: 2, timelock: 100_000}}, contracts: {feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString()}, dogecoin: {network: 'testnet'}, images: {services: {withdrawalProcessor: {tag: 'v0.3.0-beta.6-kms'}}}, infrastructure: {aws: {accountId: account, eksClusterName: 'cluster', region, roles: {proofCoordinator: `arn:aws:iam::${account}:role/external-proof-coordinator`, withdrawalProcessor: `arn:aws:iam::${account}:role/external-wp`}}, namespace: 'test', provider: 'aws'}, metadata: {name: 'test'}, preparation: {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, sequencerKms: {action: 'reuse', keyId: keyArn}}}, proofMaterials: {mode: 'existing'}}} as DeploymentSpec
+    spec = {bridge: {attestation: {signers: [{attestationPubkey: new bitcore.PrivateKey().toPublicKey().toString(), name: 'partner-a', transportPubkey: new bitcore.PrivateKey().toPublicKey().toString()}], threshold: 1}, confirmationsRequired: 6, cubesigner: {publicKey}, recovery: {publicKeys: [publicKey, feeKey().toPublicKey().toString()], threshold: 2, timelock: 300_000}}, contracts: {feeVaultDogeRecipientAddress: new bitcore.Address(Buffer.alloc(20, 1), bitcore.Networks.testnet, 'pubkeyhash').toString()}, dogecoin: {network: 'testnet'}, images: {services: {withdrawalProcessor: {tag: 'v0.3.0-beta.6-kms'}}}, infrastructure: {aws: {accountId: account, eksClusterName: 'cluster', region, roles: {proofCoordinator: `arn:aws:iam::${account}:role/external-proof-coordinator`, withdrawalProcessor: `arn:aws:iam::${account}:role/external-wp`}}, namespace: 'test', provider: 'aws'}, metadata: {name: 'test'}, preparation: {bridge: {image: `dogeos69/bridge-genesis-tools@sha256:${'a'.repeat(64)}`, mode: 'production', production: {ethereumAnchor: {blockTag: 'finalized'}, sequencerKms: {action: 'reuse', keyId: keyArn}}}, proofMaterials: {mode: 'existing'}}} as DeploymentSpec
   })
   afterEach(() => {
     fs.rmSync(root, {force: true, recursive: true})
@@ -259,8 +259,17 @@ describe('production Bridge sequencer KMS', () => {
       fs.writeFileSync(input, correct)
     }
 
+    // Core bounds the recovery timelock by the genesis anchor (the sequencer funding block, 900 here).
+    for (const [timelock, expected] of [[526_602, 'at most 526601'], [526_501, 'between 260100 and 526500'], [260_099, 'between 260100 and 526500']] as const) {
+      let outOfRange: unknown
+      try {await prepareProductionWallets(root, {...spec, bridge: {...spec.bridge, recovery: {...spec.bridge.recovery, timelock}}}, rpc)} catch (error) {outOfRange = error}
+      expect(String(outOfRange)).to.include(expected)
+      expect(fs.existsSync(path.join(root, '.data/production-wallet-funding.json'))).to.equal(false)
+    }
+
     await prepareProductionWallets(root, spec, rpc)
     expect(JSON.parse(fs.readFileSync(path.join(root, '.data/production-wallet-funding.json'), 'utf8')).sequencer.vout).to.equal(sequencerVout)
+    expect((toml.parse(fs.readFileSync(path.join(root, '.data/GenerateBridgeInfo.toml'), 'utf8')) as any).default.initial_confirmed_block_number).to.equal(900)
     const outputPath = path.join(root, '.data/output-withdrawal-processor.toml')
     const output = toml.parse(fs.readFileSync(outputPath, 'utf8'))
     expect(output.genesis_sequencer_vout).to.equal(sequencerVout)
