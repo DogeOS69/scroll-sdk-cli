@@ -21,8 +21,16 @@ the WP proof artifact base URL, and the genesis Bridge public redeem script
 with the release owner. Never share private Bridge configuration or wallet keys.
 
 The source commit contains the deployment's resolver, Bridge commitment, and
-namespace. The build-script commit selects the reproducible build procedure;
-these are different inputs. Follow Core PR #1495's
+namespace. From the Core release that enforces the sequencing 2-of-2 it also
+contains the sequencing pins, set with `set-policy-release-values.sh`: `--current`
+(the proposer key that holds output 0), `--output0-tee` (the TEE key in output
+0's 2-of-2) and, only for a planned proposer rotation, `--rotate-to`. Hand the
+release owner the sequencing (proposer) public key with the other public inputs:
+for a new chain it is the key whose 2-of-2 with the genesis TEE key received
+the genesis sequencer output, or the helper's sequencing key. A policy built
+with the checked-in placeholder pins refuses every request, and a wrong
+`--current` refuses every WF until the next attach. The build-script commit
+selects the reproducible build procedure; these are different inputs. Follow Core PR #1495's
 `docs/runbooks/cubesigner-tee-key-operations.md` and
 `tools/cubesigner/governance/README.md` at the agreed revision.
 
@@ -190,7 +198,7 @@ turn a build success into a passing test report.
     "coreRevision": "REPLACE_WITH_FULL_POLICY_SOURCE_COMMIT",
     "policyIdentifier": "example-policy/v2",
     "sdkVersion": "0.4.281",
-    "requestContract": "dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3",
+    "requestContract": "dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-sequencing-consent-v5",
     "proofResolverAuthority": "https://proofs.example.com",
     "protocolContextSha256": "sha256:REPLACE",
     "programIdentityDigest": "sha256:REPLACE",
@@ -205,6 +213,16 @@ turn a build success into a passing test report.
   }
 }
 ```
+
+`requestContract` names the request contract of the attached policy, which the
+gateway must use too. A policy that enforces the sequencing 2-of-2 uses
+`...-explain-sequencing-consent-v5`; a chain that still has a P2PKH sequencing
+output and its earlier policy use `...-explain-v3`. `prepare-input` selects the
+value from the deployment (a P2SH genesis sequencer output, or
+`defaults.migrateSequencerTwoOfTwo` in `.data/doge-config.toml`), and
+`setup prep-charts` writes the same label into the cubesigner-signer values. It
+stops when the selected release and the chain disagree, because either mismatch
+makes the signer refuse every WF.
 
 Set `requiresLiveEvidence` to the actual reviewed release requirement, not to
 whatever makes preparation pass. When required (or when already collected),
