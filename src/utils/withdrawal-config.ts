@@ -215,6 +215,21 @@ function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
+/**
+ * Whether a Withdrawal Processor TOML already carries
+ * `migrate_sequencer_two_of_two = true`. The switch is never removed once
+ * written, so the deployed configuration stays the authority even when
+ * doge-config.toml was regenerated without the declaration.
+ */
+export function withdrawalMigratesSequencerTwoOfTwo(source: string): boolean {
+  try {
+    return (toml.parse(source) as Record<string, unknown>).migrate_sequencer_two_of_two === true
+  } catch {
+    // An unparseable file is reported where it is merged.
+    return false
+  }
+}
+
 export interface WithdrawalDeploymentFactsInput {
   dogecoinIndexerStartHeight: number
   dogecoinRpcUrl: unknown

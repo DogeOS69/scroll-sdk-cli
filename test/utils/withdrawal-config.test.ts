@@ -8,6 +8,7 @@ import {
   ensureWithdrawalProofActivationSwitch,
   mergeWithdrawalManagedDeploymentBlock,
   stripMigratedWithdrawalEnv,
+  withdrawalMigratesSequencerTwoOfTwo,
 } from '../../src/utils/withdrawal-config.js'
 
 const FACTS_INPUT = {
@@ -64,7 +65,13 @@ describe('withdrawal-config deployment block', () => {
     expect((toml.parse(merged) as any).migrate_sequencer_two_of_two).to.equal(true)
     // An operator who set the switch by hand keeps it across later runs.
     const plain = buildWithdrawalDeploymentFacts(FACTS_INPUT)
-    expect((toml.parse(mergeWithdrawalManagedDeploymentBlock(merged, plain.facts, {deletePaths: plain.deletePaths})) as any).migrate_sequencer_two_of_two).to.equal(true)
+    const kept = mergeWithdrawalManagedDeploymentBlock(merged, plain.facts, {deletePaths: plain.deletePaths})
+    expect((toml.parse(kept) as any).migrate_sequencer_two_of_two).to.equal(true)
+    // The deployed configuration is read back, so the chain stays on the 2-of-2 without the doge-config declaration.
+    expect(withdrawalMigratesSequencerTwoOfTwo(kept)).to.equal(true)
+    expect(withdrawalMigratesSequencerTwoOfTwo(mergeWithdrawalManagedDeploymentBlock('', plain.facts))).to.equal(false)
+    expect(withdrawalMigratesSequencerTwoOfTwo('migrate_sequencer_two_of_two = "true"\n')).to.equal(false)
+    expect(withdrawalMigratesSequencerTwoOfTwo('not = [toml')).to.equal(false)
   })
 
   it('adopts proof settings outside an existing deployment block when enabling production policy', () => {

@@ -1557,7 +1557,8 @@ export class BridgeInitCommand extends Command {
     this.moveLegacyOutputFiles(paths.dataDir)
     if (this.managedHelperWallets) this.materializeWithdrawalProcessorSecrets(paths)
     const manifest = toml.parse(fs.readFileSync(paths.withdrawalProcessorTomlPath, 'utf8')) as any
-    if (!Array.isArray(manifest.opening_bridge_custody) || manifest.opening_bridge_custody.length === 0) {
+    // Managed preparation records the list itself when it verifies the funding output.
+    if (!this.managedHelperWallets && (!Array.isArray(manifest.opening_bridge_custody) || manifest.opening_bridge_custody.length === 0)) {
       this.jsonCtx.addWarning(
         `${paths.withdrawalProcessorTomlPath} has no opening_bridge_custody — this bridge-genesis-tools image predates the single custody rule; `
         + 'the Withdrawal Processor needs the marked Bridge funding output listed there before it starts'

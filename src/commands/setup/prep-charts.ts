@@ -90,6 +90,7 @@ import {
   isWithdrawalProofActivationEnv,
   mergeWithdrawalManagedDeploymentBlock,
   stripMigratedWithdrawalEnv,
+  withdrawalMigratesSequencerTwoOfTwo,
 } from '../../utils/withdrawal-config.js'
 import {reconcileWithdrawalSignerValues, withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 import {
@@ -1858,13 +1859,17 @@ export default class SetupPrepCharts extends Command {
       `Genesis sequencer transaction material: ${genesisTransaction.txid}:${genesisTransaction.vout} (validated)`,
     )
     const seedKind = sequencerSeedKind(genesisTransaction.txHex, genesisTransaction.vout)
+    // The switch is sticky: a Withdrawal Processor configuration that already has it keeps the chain on the
+    // 2-of-2 even if doge-config.toml was regenerated from a spec without the declaration.
+    const nativeWithdrawalConfigPath = path.resolve(path.dirname(path.resolve(flags['values-dir'] ?? './values')), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
     this.migrateSequencerTwoOfTwo = this.dogeConfig.defaults?.migrateSequencerTwoOfTwo === true
+      || (fs.existsSync(nativeWithdrawalConfigPath) && withdrawalMigratesSequencerTwoOfTwo(fs.readFileSync(nativeWithdrawalConfigPath, 'utf8')))
     this.sequencingTwoOfTwo = usesSequencingTwoOfTwo(seedKind, this.migrateSequencerTwoOfTwo)
     if (this.sequencingTwoOfTwo) {
       this.jsonCtx.info(`Sequencing output: 2-of-2 of the TEE and the proposer key (${seedKind === 'two-of-two' ? 'genesis seed' : 'migrating from the P2PKH genesis seed'})`)
     } else {
       this.jsonCtx.addWarning(
-        'The genesis sequencer seed is a P2PKH output and defaults.migrateSequencerTwoOfTwo is not set, so the Withdrawal Processor keeps a P2PKH sequencing output. '
+        'The genesis sequencer seed does not pay the sequencing 2-of-2 and defaults.migrateSequencerTwoOfTwo is not set, so the Withdrawal Processor keeps a P2PKH sequencing output. '
         + 'A CubeSigner policy that enforces the sequencing 2-of-2 refuses those transactions; follow the Core runbook to move the chain onto the 2-of-2.',
       )
     }
