@@ -89,6 +89,16 @@ describe('setup bridge-init timelock resolution', () => {
     })
   })
 
+  it('rejects an explicit timelock outside the Core recovery delay window before any broadcast', () => {
+    const minimum = currentHeight + 1 + 259_200
+    const maximum = currentHeight + 1 + 525_600
+    expect(resolveBridgeTimelock(minimum, currentHeight)).to.deep.equal({shouldUpdate: false, timelock: minimum})
+    expect(resolveBridgeTimelock(maximum, currentHeight)).to.deep.equal({shouldUpdate: false, timelock: maximum})
+    for (const timelock of [minimum - 1, maximum + 1]) {
+      expect(() => resolveBridgeTimelock(timelock, currentHeight)).to.throw(`must be between ${minimum} and ${maximum}`)
+    }
+  })
+
   it('rejects timestamp-semantics timelocks', () => {
     expect(() => resolveBridgeTimelock(500_000_000, currentHeight)).to.throw(
       'Existing timelock 500000000 is not a Dogecoin block-height CLTV value'

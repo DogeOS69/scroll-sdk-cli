@@ -418,6 +418,14 @@ derived from `bridge.seedString` in production mode. Omit that test-helper field
 from a production spec. Helper funding uses a random seed saved privately in
 `.data/bridge-helper-seed`, separate from the independently managed Bridge keys.
 
+Core accepts a genesis recovery timelock only between the genesis anchor height
+plus 259,200 blocks and the anchor plus 525,600 blocks, inclusive. The anchor is
+the block that confirms the genesis sequencer output. `setup bridge-funding`
+checks the timelock against the earliest possible anchor before it asks for a
+payment or lets the helper broadcast, and against the actual anchor once the
+sequencer output is confirmed. Leave margin for funding delays: the anchor only
+moves later while the timelock stays fixed.
+
 The two Dogecoin wallet identities are distinct from the L2 Reth signer and the
 Ethereum DA/fee-oracle identities. With
 `images.services.withdrawalProcessor: {repository: dogeos69/withdrawal-processor, tag: v0.3.0-beta.6-kms}`,

@@ -7,7 +7,7 @@ import type {DeploymentSpec} from '../types/deployment-spec.js'
 import type {Rpc} from './preparation-funding.js'
 
 import {bridgeSetupHelperAddress} from '../commands/setup/bridge-init.js'
-import {GENESIS_SEQUENCER_AMOUNT_SATS, coreHelperNetwork} from './bridge-constants.js'
+import {GENESIS_SEQUENCER_AMOUNT_SATS, MAX_RECOVERY_DELAY_BLOCKS, MIN_RECOVERY_DELAY_BLOCKS, coreHelperNetwork, recoveryTimelockBounds} from './bridge-constants.js'
 import {FEE_WALLET_KEY_ENV, productionFeeWallet} from './preparation-fee-wallet.js'
 import {bridgeFundingMinimumSats, checkPrivateKey, fundingInput, inspectFunding, publicKeyAddress, verifyDogecoinNetwork, verifyProductionBridge} from './preparation-funding.js'
 import {helperSeed, usesManagedHelper} from './preparation-helper-identity.js'
@@ -23,15 +23,13 @@ export function assertHelperFundingImage(image: string): void {
 const readToml = (root: string, file: string): any => toml.parse(fs.readFileSync(path.join(root, '.data', file), 'utf8'))
 const readJson = (root: string, file: string): any => JSON.parse(fs.readFileSync(path.join(root, '.data', file), 'utf8'))
 
-// Core bridge_script_utils::MIN_RECOVERY_DELAY_BLOCKS.
-const MIN_RECOVERY_DELAY_BLOCKS = 259_200
-
 export async function checkHelperRecoveryTimelock(spec: DeploymentSpec, rpc: Rpc): Promise<void> {
   const height = await rpc('getblockcount', [])
   if (!Number.isSafeInteger(height) || height < 0) throw new Error('Invalid Dogecoin block height')
   // The setup transaction cannot be anchored before the next block.
-  const minimum = height + 1 + MIN_RECOVERY_DELAY_BLOCKS
+  const {maximum, minimum} = recoveryTimelockBounds(height + 1)
   if (spec.bridge.recovery.timelock < minimum) throw new AwaitingInput({message: `Recovery timelock must be at least ${minimum} (next possible genesis anchor plus ${MIN_RECOVERY_DELAY_BLOCKS} blocks); allow additional margin for funding delays`})
+  if (spec.bridge.recovery.timelock > maximum) throw new AwaitingInput({message: `Recovery timelock must be at most ${maximum} (next possible genesis anchor plus ${MAX_RECOVERY_DELAY_BLOCKS} blocks); use a reviewed block height in a new plan`})
 }
 
 export function prepareManagedHelper(root: string, spec: DeploymentSpec): void {
