@@ -49,6 +49,25 @@ opening_bridge_custody = [{ tx_hex = "${openingCustodyFixture('51').tx_hex}", vo
   })
   afterEach(() => fs.rmSync(root, {force: true, recursive: true}))
 
+  // The fixture seed is not a 2-of-2, so only a recorded migration puts the chain on it.
+  for (const declared of ['none', 'doge-config', 'deployed-wp-config'] as const) {
+    it(`selects the CubeSigner request contract from the sequencing output (migration: ${declared})`, async () => {
+      const contract = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain'
+      const file = path.join(root, 'values/cubesigner-signer-production.yaml')
+      fs.writeFileSync(file, yaml.dump({env: [{name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: `${contract}-v3`}]}))
+      if (declared === 'doge-config') fs.appendFileSync(path.join(root, '.data/doge-config.toml'), '[defaults]\nmigrateSequencerTwoOfTwo = true\n')
+      if (declared === 'deployed-wp-config') {
+        fs.mkdirSync(path.join(root, 'withdrawal-processor'))
+        fs.writeFileSync(path.join(root, 'withdrawal-processor/WithdrawalProcessor.toml'), 'migrate_sequencer_two_of_two = true\n')
+      }
+
+      await execute(process.execPath, [cli, 'setup', 'prep-charts', '-N', '--json'], {cwd: root})
+      const values = yaml.load(fs.readFileSync(file, 'utf8')) as {env: Array<{name: string; value?: string}>}
+      expect(values.env.find(entry => entry.name.endsWith('REQUEST_CONTRACT'))?.value)
+        .to.equal(declared === 'none' ? `${contract}-v3` : `${contract}-sequencing-consent-v5`)
+    })
+  }
+
   for (const retired of [false, true]) {
     it(`prepares current metrics values and removes retired rollup settings (legacy input: ${retired})`, async () => {
       const file = path.join(root, 'values/metrics-exporter-production.yaml')
