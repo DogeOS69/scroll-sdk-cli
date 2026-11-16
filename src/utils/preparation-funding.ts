@@ -123,7 +123,7 @@ export async function prepareProductionWallets(root: string, spec: DeploymentSpe
   const height = await rpc('getblockcount', [])
   if (height >= spec.bridge.recovery.timelock) throw new AwaitingInput({message: 'Recovery timelock is not in the future; use a reviewed future block height in a new plan'})
   // The genesis anchor is the sequencer funding block, at most the next block: stop before any payment is requested.
-  if (spec.bridge.recovery.timelock > recoveryTimelockBounds(height + 1).maximum) throw new AwaitingInput({message: `Recovery timelock must be at most ${recoveryTimelockBounds(height + 1).maximum} (genesis anchor plus ${MAX_RECOVERY_DELAY_BLOCKS} blocks); use a reviewed block height in a new plan`})
+  if (spec.bridge.recovery.timelock > recoveryTimelockBounds(height + 1).maximum) throw new AwaitingInput({message: `Recovery timelock must be at most ${recoveryTimelockBounds(height + 1).maximum} (next possible genesis anchor plus ${MAX_RECOVERY_DELAY_BLOCKS} blocks); use a reviewed block height in a new plan`})
   const {data, file} = fundingInput(root, spec)
   const setupPath = path.join(root, '.data/setup_defaults.toml')
   const setup = toml.parse(fs.readFileSync(setupPath, 'utf8')) as any

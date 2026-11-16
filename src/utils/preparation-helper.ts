@@ -147,7 +147,9 @@ export async function verifyManagedHelperFunding(root: string, spec: DeploymentS
   // manifest must name exactly the marked output verified above.
   const manifest = readToml(root, 'output-withdrawal-processor.toml')
   const custody = [{tx_hex: bridgeFact.rawTransaction, vout: bridgeFact.vout}]
-  if (manifest.opening_bridge_custody !== undefined && JSON.stringify(manifest.opening_bridge_custody) !== JSON.stringify(custody)) throw new Error('Core helper opening custody differs from the verified Bridge funding output')
+  const recorded = manifest.opening_bridge_custody
+  const matches = Array.isArray(recorded) && recorded.length === 1 && String(recorded[0]?.tx_hex).toLowerCase() === custody[0].tx_hex.toLowerCase() && recorded[0]?.vout === custody[0].vout
+  if (recorded !== undefined && !matches) throw new Error('Core helper opening custody differs from the verified Bridge funding output')
   manifest.opening_bridge_custody = custody
   privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify(manifest))
   const config = readToml(root, 'doge-config.toml')
@@ -156,6 +158,8 @@ export async function verifyManagedHelperFunding(root: string, spec: DeploymentS
   config.defaults.dogecoinIndexerStartHeight = String(Math.max(0, sequencer.blockHeight - 1))
   config.defaults.l1GenesisBlock = String(sequencer.blockHeight)
   config.defaults.freshGenesisInit = true
+  // The seed verified above pays the sequencing key's P2PKH, so the opening WF moves output 0 to the sequencing 2-of-2.
+  config.defaults.migrateSequencerTwoOfTwo = true
   // Keep the previously validated Ethereum boundary instead of setup's latest tip.
   const anchor = readJson(root, 'production-ethereum-anchor.json')
   config.defaults.ethereumDaEmbeddedIndexerStartBlock = String(anchor.blockNumber)

@@ -240,9 +240,15 @@ describe('managed helper funding', () => {
     const config: any = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8'))
     expect(config.defaults.ethereumDaEmbeddedIndexerStartBlock).to.equal('42')
     expect(config.defaults.dogecoinIndexerStartHeight).to.equal('99')
+    // The helper's P2PKH seed moves to the sequencing 2-of-2 in the opening WF.
+    expect(config.defaults.migrateSequencerTwoOfTwo).to.equal(true)
     // The verified marked output becomes the opening WF's custody.
     const manifest: any = toml.parse(fs.readFileSync(path.join(root, '.data/output-withdrawal-processor.toml'), 'utf8'))
     expect(manifest.opening_bridge_custody).to.deep.equal([{tx_hex: funding.toHex(), vout: 0}])
+    // Core's own record of the same output is accepted whatever its key order or hex case.
+    privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({...manifest, opening_bridge_custody: [Object.fromEntries([['vout', 0], ['tx_hex', funding.toHex().toUpperCase()]])]}))
+    await verifyManagedHelperFunding(root, spec, rpc)
+    expect((toml.parse(fs.readFileSync(path.join(root, '.data/output-withdrawal-processor.toml'), 'utf8')) as any).opening_bridge_custody).to.deep.equal([{tx_hex: funding.toHex(), vout: 0}])
     privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({...manifest, opening_bridge_custody: [{tx_hex: setup.toHex(), vout: 0}]}))
     let conflict: unknown
     try {await verifyManagedHelperFunding(root, spec, rpc)} catch (error) {conflict = error}
