@@ -15,6 +15,7 @@ import BridgeInitCommand, {
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
 } from '../../../src/commands/setup/bridge-init.js'
+import {KEY_ROTATION_MIN_GRACE_BLOCKS} from '../../../src/constants/deployment.js'
 
 describe('bridge setup funding address', () => {
   it('uses the compressed public key required by the core setup transaction', () => {
@@ -147,7 +148,7 @@ describe('setup bridge-init protocol seed generation', () => {
         moat_address: '0x0000000000000000000000000000000000000003',
       },
       eth_chain_id: 32_382,
-      key_rotation_min_grace_wf_txs: 300,
+      key_rotation_min_grace_blocks: KEY_ROTATION_MIN_GRACE_BLOCKS,
       l2_chain_id: 412_346,
       min_deposit_sats: 100_000_000,
     })
@@ -259,7 +260,8 @@ describe('setup bridge-init protocol seed generation', () => {
               deposit_queue_transform: {
                 message_queue_gas_limit: 250_000,
               },
-              key_rotation_min_grace_wf_txs: 12,
+              key_rotation_min_grace_blocks: 12,
+              key_rotation_min_grace_wf_txs: 300,
               min_deposit_sats: 34_567,
             },
           },
@@ -269,7 +271,8 @@ describe('setup bridge-init protocol seed generation', () => {
       helpers
     )
 
-    expect(result.protocol_config_seed.protocol_config.key_rotation_min_grace_wf_txs).to.equal(12)
+    expect(result.protocol_config_seed.protocol_config.key_rotation_min_grace_blocks).to.equal(12)
+    expect(result.protocol_config_seed.protocol_config).not.to.have.property('key_rotation_min_grace_wf_txs')
     expect(result.protocol_config_seed.protocol_config.min_deposit_sats).to.equal(34_567)
     expect(
       result.protocol_config_seed.protocol_config.deposit_queue_transform.message_queue_gas_limit

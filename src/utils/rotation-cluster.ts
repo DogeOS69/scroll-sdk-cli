@@ -12,9 +12,10 @@ export type RotateKeyIntentRequest = {liveness_outpoint: LivenessOutpoint} & Rot
 /** WP `GET /protocol-actions/rotate-key/intents/{key}` (dogeos-core #1535). */
 export interface RotateKeyIntent {
   activation_wf_tx_number: null | number
-  deprecation_wf_tx_number: null | number
+  /** The bound deposit cutoff height; null until the intent binds. */
+  deposit_cutoff_height: null | number
   job_status: null | string
-  payload: {grace_wf_txs: number; liveness_outpoint: LivenessOutpoint; new_bridge_redeem_script_hex: string; new_key_hash: string}
+  payload: {grace_blocks: number; liveness_outpoint: LivenessOutpoint; new_bridge_redeem_script_hex: string; new_key_hash: string}
   signed_txid: null | string
   status: string
 }

@@ -165,11 +165,17 @@ export function livenessFundingHelp(rotation: RotationExport): string {
 export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyIntent, livenessOutpoint?: LivenessOutpoint): void {
   const request = rotation.wp_rotate_key_request
   // A null-grace request is stored with the grace the WP resolved, so only a stated grace is compared.
-  const graceDiffers = request.grace_wf_txs !== null && intent.payload.grace_wf_txs !== request.grace_wf_txs
+  const graceDiffers = request.grace_blocks !== null && intent.payload.grace_blocks !== request.grace_blocks
   const stored = formatOutpoint(intent.payload.liveness_outpoint)
   const outpointDiffers = livenessOutpoint !== undefined && stored !== formatOutpoint(livenessOutpoint)
   if (intent.payload.new_key_hash.toLowerCase() !== request.new_key_hash || intent.payload.new_bridge_redeem_script_hex.toLowerCase() !== request.new_bridge_redeem_script_hex || graceDiffers || outpointDiffers) {
     throw new Error(`The WP already stores a different rotation under idempotency key ${request.idempotency_key} (stored liveness outpoint ${stored}${livenessOutpoint ? `, requested ${formatOutpoint(livenessOutpoint)}` : ''}); do not resubmit`)
+  }
+
+  // An exact allowlist entry pins the bound cutoff; attestors with that pin refuse any other.
+  const pinned = rotation.deposit_cutoff_height
+  if (pinned !== null && intent.deposit_cutoff_height !== null && intent.deposit_cutoff_height !== pinned) {
+    throw new Error(`The intent is bound to deposit cutoff height ${intent.deposit_cutoff_height}, but the export pins ${pinned}; attestors with the pinned entry will not sign. Re-issue the export with the bound height or a bare allowlist entry`)
   }
 }
 
@@ -202,8 +208,10 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
     return {exitCode: INTENT_EXIT_CODES[intent.status] ?? 1, intent, kind: 'existing'}
   }
 
+  // The WP fixes the cutoff height only when the intent binds, so a new intent cannot carry a pin.
+  if (rotation.deposit_cutoff_height !== null) throw new Error(`The export pins deposit cutoff height ${rotation.deposit_cutoff_height}, but no intent exists yet; the WP fixes the cutoff only when the intent binds. Send the export with a bare allowlist entry and no deposit_cutoff_height`)
   assertPredecessor(rotation, status)
-  if (status.deprecating) throw new Error(`A previous rotation is still in its grace window (deprecating ${status.deprecating.key_hash} until WF ${status.deprecating.deprecation_wf_tx_number})`)
+  if (status.deprecating) throw new Error(`A previous rotation is still in its grace window (deprecating ${status.deprecating.key_hash} until the deposit scan passes the cutoff height ${status.deprecating.deposit_cutoff_height})`)
   if (status.active_intent) throw new Error(`The WP already has an active rotation intent ${status.active_intent.idempotency_key} (${status.active_intent.status})`)
   // Only after the checks above, so nobody funds an output for a rotation that is blocked anyway.
   if (!livenessOutpoint) throw new Error(livenessFundingHelp(rotation))

@@ -17,7 +17,7 @@ import {WP_VALUES_FILE, parseLastPolls} from '../../src/utils/tso-signer-polls.j
 // The governance portal's export goldens (dogeos-gov-portal #125, vectors/rotation-export/).
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '../fixtures/rotation-export', name), 'utf8'))
 const GOLDEN = fixture('mainnet-example.json')
-const EXACT_GRACE = fixture('mainnet-example-exact-grace.json')
+const EXACT_CUTOFF = fixture('mainnet-example-exact-cutoff.json')
 const golden = (): any => structuredClone(GOLDEN)
 const key = () => {const ec = createECDH('secp256k1'); ec.generateKeys(); return ec.getPublicKey('hex', 'compressed')}
 
@@ -25,7 +25,7 @@ const key = () => {const ec = createECDH('secp256k1'); ec.generateKeys(); return
 function status(rotation: RotationExport, change: Partial<RotateKeyStatus> = {}): RotateKeyStatus {
   return {
     active_intent: null, current_attestation: {pubkeys: rotation.current.signers.map(s => s.public_key), threshold: rotation.current.threshold}, current_key_hash: rotation.current.key_hash,
-    deprecating: null, min_grace_wf_txs: 10, network: 'mainnet', next_wf_tx_number: 40, protocol_instance_id: rotation.protocol_instance_id, registered_signer_pubkeys: [], ...change,
+    deprecating: null, min_grace_blocks: 10, network: 'mainnet', next_wf_tx_number: 40, protocol_instance_id: rotation.protocol_instance_id, registered_signer_pubkeys: [], ...change,
   }
 }
 
@@ -34,13 +34,37 @@ const metrics = (entries: [string, number][]) => ['# HELP tso_core_signer_last_p
   ...entries.map(([pubkey, at]) => `tso_core_signer_last_poll_timestamp_seconds{signer_pubkey="${pubkey}"} ${at}`), 'tso_core_other_metric 1'].join('\n')
 
 describe('bridge rotation export validation', () => {
-  it('accepts the portal goldens, bare and exact-grace', () => {
+  it('accepts the goldens, bare and exact-cutoff', () => {
     const rotation = validateRotationExport(golden())
     expect(rotation.wp_rotate_key_request.idempotency_key).to.equal(`${GOLDEN.protocol_instance_id.slice(2)}-DGP-0012-rev2`)
-    expect(validateRotationExport(EXACT_GRACE).allowlist_entry).to.equal(`${GOLDEN.target.key_hash}:20160`)
-    const graceMismatch = structuredClone(EXACT_GRACE)
-    graceMismatch.allowlist_entry = `${GOLDEN.target.key_hash}:20161`
-    expect(() => validateRotationExport(graceMismatch)).to.throw('allowlist_entry')
+    expect(rotation.deposit_cutoff_height).to.equal(null)
+    const exact = validateRotationExport(EXACT_CUTOFF)
+    expect(exact.allowlist_entry).to.equal(`${GOLDEN.target.key_hash}:5501234`)
+    expect(exact.deposit_cutoff_height).to.equal(5_501_234)
+    expect(exact.wp_rotate_key_request).not.to.have.property('deposit_cutoff_height')
+  })
+
+  it('checks an exact entry against deposit_cutoff_height, as the signer does', () => {
+    const mismatch = structuredClone(EXACT_CUTOFF)
+    mismatch.allowlist_entry = `${GOLDEN.target.key_hash}:5501235`
+    expect(() => validateRotationExport(mismatch)).to.throw('differs from deposit_cutoff_height 5501234')
+    // The old WF-count grace pin no longer names the cutoff.
+    const gracePin = golden()
+    gracePin.allowlist_entry = `${GOLDEN.target.key_hash}:20160`
+    expect(() => validateRotationExport(gracePin)).to.throw('deposit_cutoff_height is unset')
+    // A bare entry may carry the bound height without pinning it.
+    const bare = structuredClone(EXACT_CUTOFF)
+    bare.allowlist_entry = GOLDEN.target.key_hash
+    expect(validateRotationExport(bare).deposit_cutoff_height).to.equal(5_501_234)
+    for (const height of [-1, 1.5, '5501234', 2 ** 32]) {
+      const bad = structuredClone(EXACT_CUTOFF)
+      bad.deposit_cutoff_height = height
+      expect(() => validateRotationExport(bad)).to.throw('deposit_cutoff_height')
+    }
+
+    const leadingZero = structuredClone(EXACT_CUTOFF)
+    leadingZero.allowlist_entry = `${GOLDEN.target.key_hash}:05501234`
+    expect(() => validateRotationExport(leadingZero)).to.throw('allowlist_entry')
   })
 
   const mutations: [string, (value: any) => void, string][] = [
@@ -58,15 +82,15 @@ describe('bridge rotation export validation', () => {
     ['transport key equal to another signer public key', v => {v.target.signers[1].transport_pubkey = v.current.signers[0].public_key}, "is a signer's public key"],
     ['transport key shared by two public keys', v => {v.target.signers[0].transport_pubkey = v.current.signers[0].transport_pubkey}, 'same transport key'],
     ['p2sh address', v => {v.target.p2sh_address = GOLDEN.bridge_json.p2sh_address.replace('A', 'B')}, 'p2sh_address'],
-    ['grace null with a stated request grace', v => {v.grace_wf_txs = null}, 'grace_wf_txs'],
-    ['request grace null with a stated grace', v => {v.wp_rotate_key_request.grace_wf_txs = null}, 'grace_wf_txs'],
-    ['grace over ceiling', v => {v.grace_wf_txs = 260_001; v.wp_rotate_key_request.grace_wf_txs = 260_001}, 'grace_wf_txs'],
+    ['grace null with a stated request grace', v => {v.grace_blocks = null}, 'grace_blocks'],
+    ['request grace null with a stated grace', v => {v.wp_rotate_key_request.grace_blocks = null}, 'grace_blocks'],
+    ['grace over ceiling', v => {v.grace_blocks = 260_001; v.wp_rotate_key_request.grace_blocks = 260_001}, 'grace_blocks'],
     ['allowlist for another hash', v => {v.allowlist_entry = v.current.key_hash}, 'allowlist_entry'],
-    ['allowlist grace mismatch', v => {v.allowlist_entry = `${v.target.key_hash}:20161`}, 'allowlist_entry'],
+    ['allowlist pin without a cutoff height', v => {v.allowlist_entry = `${v.target.key_hash}:20161`}, 'allowlist_entry'],
     ['0x idempotency key', v => {v.wp_rotate_key_request.idempotency_key = `0x${v.wp_rotate_key_request.idempotency_key}`}, 'idempotency_key'],
     ['request hash', v => {v.wp_rotate_key_request.new_key_hash = v.current.key_hash}, 'new_key_hash'],
     ['request script', v => {v.wp_rotate_key_request.new_bridge_redeem_script_hex = v.current.redeem_script_hex}, 'script'],
-    ['request grace', v => {v.wp_rotate_key_request.grace_wf_txs = 20_161}, 'grace'],
+    ['request grace', v => {v.wp_rotate_key_request.grace_blocks = 20_161}, 'grace'],
   ]
   for (const [name, mutate, message] of mutations) {
     it(`rejects a changed ${name}`, () => {
@@ -79,32 +103,33 @@ describe('bridge rotation export validation', () => {
 
 function nullGrace() {
   const value = golden()
-  value.grace_wf_txs = null
-  value.wp_rotate_key_request.grace_wf_txs = null
+  value.grace_blocks = null
+  value.wp_rotate_key_request.grace_blocks = null
   return value
 }
 
 describe('bridge rotation export: null grace, regtest and kept signers', () => {
-  it('accepts a null grace only with a bare entry, and keeps null in the WP request', () => {
+  it('accepts a null grace, keeps null in the WP request, and refuses a zero grace as the WP does', () => {
     const rotation = validateRotationExport(nullGrace())
-    expect(rotation.grace_wf_txs).to.equal(null)
-    expect(rotation.wp_rotate_key_request.grace_wf_txs).to.equal(null)
+    expect(rotation.grace_blocks).to.equal(null)
+    expect(rotation.wp_rotate_key_request.grace_blocks).to.equal(null)
+    // The grace no longer constrains the pin: a null-grace export may pin the bound height.
     const exact = nullGrace()
-    exact.allowlist_entry = EXACT_GRACE.allowlist_entry
-    expect(() => validateRotationExport(exact)).to.throw('allowlist_entry')
-    const zero = structuredClone(EXACT_GRACE)
-    zero.grace_wf_txs = 0
-    zero.wp_rotate_key_request.grace_wf_txs = 0
-    zero.allowlist_entry = `${zero.target.key_hash}:0`
-    expect(() => validateRotationExport(zero)).to.throw('at least 1')
+    exact.deposit_cutoff_height = EXACT_CUTOFF.deposit_cutoff_height
+    exact.allowlist_entry = EXACT_CUTOFF.allowlist_entry
+    expect(validateRotationExport(exact).allowlist_entry).to.equal(EXACT_CUTOFF.allowlist_entry)
+    const zero = golden()
+    zero.grace_blocks = 0
+    zero.wp_rotate_key_request.grace_blocks = 0
+    expect(() => validateRotationExport(zero)).to.throw('1..260000')
   })
 
   it('matches a stored intent from a null-grace request whatever grace the WP resolved', () => {
     const rotation = validateRotationExport(nullGrace())
-    const intent = (change: Partial<RotateKeyIntent['payload']>): RotateKeyIntent => ({activation_wf_tx_number: null, deprecation_wf_tx_number: null, job_status: null,
-      payload: {grace_wf_txs: 10, liveness_outpoint: {txid: `0x${'1f'.repeat(32)}`, vout: 1}, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: null, status: 'pending'})
+    const intent = (change: Partial<RotateKeyIntent['payload']>): RotateKeyIntent => ({activation_wf_tx_number: null, deposit_cutoff_height: null, job_status: null,
+      payload: {grace_blocks: 10, liveness_outpoint: {txid: `0x${'1f'.repeat(32)}`, vout: 1}, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: null, status: 'pending'})
     assertIntentMatches(rotation, intent({}))
-    assertIntentMatches(rotation, intent({grace_wf_txs: 20_160}))
+    assertIntentMatches(rotation, intent({grace_blocks: 20_160}))
     expect(() => assertIntentMatches(rotation, intent({new_key_hash: rotation.current.key_hash}))).to.throw('different rotation')
     expect(() => assertIntentMatches(rotation, intent({new_bridge_redeem_script_hex: rotation.current.redeem_script_hex}))).to.throw('different rotation')
   })
@@ -398,8 +423,8 @@ describe('bridge rotation send', () => {
   const OUTPOINT = parseLivenessOutpoint(`${'1f'.repeat(32)}:1`)
   const fresh = () => [...rotation.current.signers, ...rotation.target.signers].map(s => `tso_core_signer_last_poll_timestamp_seconds{signer_pubkey="${s.public_key}"} ${Math.floor(Date.now() / 1000)}`).join('\n')
   const stored = (change: Partial<RotateKeyIntent['payload']> = {}, state = 'completed'): RotateKeyIntent => ({
-    activation_wf_tx_number: 41, deprecation_wf_tx_number: 20_201, job_status: 'completed',
-    payload: {grace_wf_txs: 20_160, liveness_outpoint: OUTPOINT, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state,
+    activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'completed',
+    payload: {grace_blocks: 20_160, liveness_outpoint: OUTPOINT, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state,
   })
 
   function cluster(intent: RotateKeyIntent | null, post: (route: string) => Promise<{body: unknown; status: number}> = async () => ({body: {status: 'pending'}, status: 202})) {
@@ -479,7 +504,7 @@ describe('bridge rotation send', () => {
       for (const preview of [false, true]) {
         const existing = cluster(stored({}, state))
         // Predecessor and online checks would fail after a completed rotation; they must not run.
-        existing.cluster.wpStatus = async () => status(rotation, {current_key_hash: rotation.target.key_hash, deprecating: {deprecation_wf_tx_number: 20_201, key_hash: rotation.current.key_hash}})
+        existing.cluster.wpStatus = async () => status(rotation, {current_key_hash: rotation.target.key_hash, deprecating: {deposit_cutoff_height: 20_201, key_hash: rotation.current.key_hash}})
         existing.cluster.tsoMetrics = async () => {throw new Error('online check must not run')}
         expect(await sendRotation({cluster: existing.cluster, preview, rotation})).to.deep.include({exitCode, kind: 'existing'})
         expect(existing.posts).to.deep.equal([])
@@ -488,13 +513,38 @@ describe('bridge rotation send', () => {
   })
 
   it('treats a stored payload mismatch as an error', async () => {
-    for (const change of [{grace_wf_txs: 20_161}, {new_key_hash: rotation.current.key_hash}, {new_bridge_redeem_script_hex: rotation.current.redeem_script_hex}]) {
+    for (const change of [{grace_blocks: 20_161}, {new_key_hash: rotation.current.key_hash}, {new_bridge_redeem_script_hex: rotation.current.redeem_script_hex}]) {
       const mismatch = cluster(stored(change, 'pending'))
       let error: unknown
       try {await sendRotation({cluster: mismatch.cluster, preview: false, rotation})} catch (error_) {error = error_}
       expect((error as Error).message).to.contain('different rotation')
       expect(mismatch.posts).to.deep.equal([])
     }
+  })
+
+  it('checks a pinned export against the bound cutoff height of the stored intent', async () => {
+    const pinned = validateRotationExport(EXACT_CUTOFF)
+    const intent = (height: null | number, state: string): RotateKeyIntent => ({...stored({}, state), deposit_cutoff_height: height})
+    const sendPinned = async (stored_: RotateKeyIntent) => {
+      const existing = cluster(stored_)
+      try {return await sendRotation({cluster: existing.cluster, preview: false, rotation: pinned})} finally {expect(existing.posts).to.deep.equal([])}
+    }
+
+    expect(await sendPinned(intent(5_501_234, 'bound'))).to.deep.include({exitCode: 2, kind: 'existing'})
+    // Not bound yet: nothing to compare.
+    expect(await sendPinned(intent(null, 'pending'))).to.deep.include({exitCode: 2, kind: 'existing'})
+    let error: unknown
+    try {await sendPinned(intent(5_501_300, 'bound'))} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('bound to deposit cutoff height 5501300').and.contain('pins 5501234')
+  })
+
+  it('refuses a pinned export when no intent exists, since the cutoff is fixed only at binding', async () => {
+    const pinned = validateRotationExport(EXACT_CUTOFF)
+    const fresh = cluster(null)
+    let error: unknown
+    try {await sendRotation({cluster: fresh.cluster, livenessOutpoint: OUTPOINT, preview: true, rotation: pinned})} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('no intent exists yet').and.contain('bare allowlist entry')
+    expect(fresh.posts).to.deep.equal([])
   })
 
   it('says the submission may already be stored on any /propose HTTP failure', async () => {
@@ -508,7 +558,7 @@ describe('bridge rotation send', () => {
 
   it('refuses a new intent while a rotation overlaps, an intent is active, or signers are offline', async () => {
     const cases: [Partial<RotateKeyStatus>, string][] = [
-      [{deprecating: {deprecation_wf_tx_number: 50, key_hash: `0x${'11'.repeat(20)}`}}, 'grace window'],
+      [{deprecating: {deposit_cutoff_height: 50, key_hash: `0x${'11'.repeat(20)}`}}, 'until the deposit scan passes the cutoff height 50'],
       [{active_intent: {idempotency_key: 'other', status: 'pending'}}, 'active rotation intent'],
       [{current_key_hash: rotation.target.key_hash}, 'stale or already applied'],
     ]

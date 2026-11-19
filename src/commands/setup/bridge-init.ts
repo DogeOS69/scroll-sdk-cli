@@ -11,7 +11,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
-import {PROTOCOL_VERSION} from '../../constants/deployment.js'
+import {KEY_ROTATION_MIN_GRACE_BLOCKS, PROTOCOL_VERSION} from '../../constants/deployment.js'
 import {assertGenesisSequencerAmount, coreHelperNetwork} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
@@ -179,7 +179,9 @@ export function buildEthereumDaProtocolSeedConfig(
   delete protocolConfig.celestia_namespace
   protocolConfig.l2_chain_id = l2ChainId
   protocolConfig.eth_chain_id = ethChainId
-  protocolConfig.key_rotation_min_grace_wf_txs ??= 300
+  // The retired WF-count grace has no block equivalent, and core refuses the unknown key.
+  delete protocolConfig.key_rotation_min_grace_wf_txs
+  protocolConfig.key_rotation_min_grace_blocks ??= KEY_ROTATION_MIN_GRACE_BLOCKS
   protocolConfig.min_deposit_sats ??= 100_000_000
   protocolConfig.deposit_queue_transform ??= {}
   protocolConfig.deposit_queue_transform.l1_scroll_messenger_address = helpers.getContractAddress(

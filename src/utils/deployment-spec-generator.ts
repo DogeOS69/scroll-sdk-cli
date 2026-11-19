@@ -37,7 +37,7 @@ import {
   L1_INTERFACE_RPC_WEBSOCKET_ENDPOINT,
   L2_RPC_ENDPOINT,
 } from '../config/constants.js'
-import {GENESIS_PREDEPLOYS, L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT, PROTOCOL_VERSION} from '../constants/deployment.js'
+import {GENESIS_PREDEPLOYS, KEY_ROTATION_MIN_GRACE_BLOCKS, L2_BASE_FEE_OVERHEAD_WEI, L2_GENESIS_GAS_LIMIT, PROTOCOL_VERSION} from '../constants/deployment.js'
 import {assertSeparateDaProofBuckets} from './artifact-bucket-validation.js'
 import {GENESIS_SEQUENCER_AMOUNT_SATS, coreHelperNetwork} from './bridge-constants.js'
 import {assertDeploymentSpecFields, validateDeploymentSpecFields} from './deployment-spec-fields.js'
@@ -1840,7 +1840,7 @@ export function generateProtocolSeedToml(rawSpec: DeploymentSpec): string {
   const protocolConfig: toml.JsonMap = {}
   protocolConfig.l2_chain_id = spec.network.l2ChainId
   protocolConfig.eth_chain_id = ethChainId
-  protocolConfig.key_rotation_min_grace_wf_txs = 300
+  protocolConfig.key_rotation_min_grace_blocks = KEY_ROTATION_MIN_GRACE_BLOCKS
   protocolConfig.min_deposit_sats = 100_000_000
   protocolConfig.deposit_queue_transform = depositQueueTransform
 

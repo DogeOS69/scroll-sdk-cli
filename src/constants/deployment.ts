@@ -8,6 +8,11 @@ export const CONTRACTS_DEPLOYMENT_BATCH_SIZE = '10'
 export const L2_TX_FEE_VAULT = '0x5300000000000000000000000000000000000005'
 /** dogeos-core `SUPPORTED_PROTOCOL_VERSION`; core rejects any other protocol_version. */
 export const PROTOCOL_VERSION = 1
+/**
+ * Committed `key_rotation_min_grace_blocks`: the minimum RotateKey grace, in Dogecoin blocks
+ * (about a day), as in the dogeos-core genesis seed.
+ */
+export const KEY_ROTATION_MIN_GRACE_BLOCKS = 1440
 
 /** Canonical genesis predeploys used by the contracts generator and Reth. */
 export const GENESIS_PREDEPLOYS = {

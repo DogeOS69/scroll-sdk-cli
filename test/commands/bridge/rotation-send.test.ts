@@ -36,7 +36,7 @@ describe('bridge rotation send command', () => {
   const signers = [...GOLDEN.current.signers, ...GOLDEN.target.signers] as {public_key: string}[]
   const status = {
     active_intent: null, current_attestation: {pubkeys: GOLDEN.current.signers.map((s: {public_key: string}) => s.public_key), threshold: GOLDEN.current.threshold}, current_key_hash: GOLDEN.current.key_hash,
-    deprecating: null, min_grace_wf_txs: 10, network: 'mainnet', next_wf_tx_number: 40, protocol_instance_id: GOLDEN.protocol_instance_id, registered_signer_pubkeys: [],
+    deprecating: null, min_grace_blocks: 10, network: 'mainnet', next_wf_tx_number: 40, protocol_instance_id: GOLDEN.protocol_instance_id, registered_signer_pubkeys: [],
   }
 
   function handle(request: http.IncomingMessage, response: http.ServerResponse): void {
@@ -125,13 +125,13 @@ describe('bridge rotation send command', () => {
   })
 
   it('reports an existing intent with its stored outpoint, and refuses an intent response without one', async () => {
-    const payload = {grace_wf_txs: GOLDEN.wp_rotate_key_request.grace_wf_txs, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
-    intent = {activation_wf_tx_number: 41, deprecation_wf_tx_number: 20_201, job_status: 'completed', payload: {...payload, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}}, signed_txid: 'aa'.repeat(32), status: 'completed'}
+    const payload = {grace_blocks: GOLDEN.wp_rotate_key_request.grace_blocks, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'completed', payload: {...payload, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}}, signed_txid: 'aa'.repeat(32), status: 'completed'}
     await run()
     expect(JSON.parse(logs[0]).livenessOutpoint).to.equal(`${TXID}:2`)
     expect(process.exitCode).to.equal(0)
 
-    intent = {activation_wf_tx_number: null, deprecation_wf_tx_number: null, job_status: null, payload, signed_txid: null, status: 'pending'}
+    intent = {activation_wf_tx_number: null, deposit_cutoff_height: null, job_status: null, payload, signed_txid: null, status: 'pending'}
     let error: unknown
     try {await run('--liveness-outpoint', `${TXID}:2`)} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('no valid payload.liveness_outpoint')
