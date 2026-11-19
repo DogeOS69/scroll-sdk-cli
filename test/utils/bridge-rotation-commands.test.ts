@@ -531,11 +531,13 @@ describe('bridge rotation send', () => {
     }
 
     expect(await sendPinned(intent(5_501_234, 'bound'))).to.deep.include({exitCode: 2, kind: 'existing'})
-    // Not bound yet: nothing to compare.
-    expect(await sendPinned(intent(null, 'pending'))).to.deep.include({exitCode: 2, kind: 'existing'})
     let error: unknown
     try {await sendPinned(intent(5_501_300, 'bound'))} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('bound to deposit cutoff height 5501300').and.contain('pins 5501234')
+    // Not bound yet: the pin cannot have come from the WP.
+    error = undefined
+    try {await sendPinned(intent(null, 'pending'))} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('not bound yet').and.contain('bare allowlist entry')
 
     // Only the allowlist suffix pins: a bare entry carrying another height is not refused.
     const bare = structuredClone(EXACT_CUTOFF)

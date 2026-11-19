@@ -173,8 +173,13 @@ export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyI
   }
 
   // An exact allowlist entry pins the bound cutoff; attestors with that pin refuse any other.
+  // Before binding the WP has not fixed H, so a pin cannot have been read from it yet.
   const pinned = pinnedCutoffHeight(rotation)
-  if (pinned !== null && intent.deposit_cutoff_height !== null && intent.deposit_cutoff_height !== pinned) {
+  if (pinned !== null && intent.deposit_cutoff_height === null) {
+    throw new Error(`The export pins deposit cutoff height ${pinned}, but the intent is not bound yet; the WP fixes the cutoff only when it binds. Use a bare allowlist entry until then`)
+  }
+
+  if (pinned !== null && intent.deposit_cutoff_height !== pinned) {
     throw new Error(`The intent is bound to deposit cutoff height ${intent.deposit_cutoff_height}, but the export pins ${pinned}; attestors with the pinned entry will not sign. Re-issue the export with the bound height or a bare allowlist entry`)
   }
 }
