@@ -536,6 +536,12 @@ describe('bridge rotation send', () => {
     let error: unknown
     try {await sendPinned(intent(5_501_300, 'bound'))} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('bound to deposit cutoff height 5501300').and.contain('pins 5501234')
+
+    // Only the allowlist suffix pins: a bare entry carrying another height is not refused.
+    const bare = structuredClone(EXACT_CUTOFF)
+    bare.allowlist_entry = GOLDEN.target.key_hash
+    const existing = cluster(intent(5_501_300, 'bound'))
+    expect(await sendRotation({cluster: existing.cluster, preview: false, rotation: validateRotationExport(bare)})).to.deep.include({exitCode: 2, kind: 'existing'})
   })
 
   it('refuses a pinned export when no intent exists, since the cutoff is fixed only at binding', async () => {
@@ -545,6 +551,16 @@ describe('bridge rotation send', () => {
     try {await sendRotation({cluster: fresh.cluster, livenessOutpoint: OUTPOINT, preview: true, rotation: pinned})} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('no intent exists yet').and.contain('bare allowlist entry')
     expect(fresh.posts).to.deep.equal([])
+  })
+
+  it('sends a bare export that carries a deposit_cutoff_height, which the WP never receives', async () => {
+    const bare = structuredClone(EXACT_CUTOFF)
+    bare.allowlist_entry = GOLDEN.target.key_hash
+    const carried = validateRotationExport(bare)
+    expect(carried.wp_rotate_key_request).to.deep.equal(rotation.wp_rotate_key_request)
+    const fresh = cluster(null)
+    expect(await sendRotation({cluster: fresh.cluster, livenessOutpoint: OUTPOINT, preview: false, rotation: carried})).to.deep.include({kind: 'proposed', status: 202})
+    expect(fresh.posts).to.deep.equal(['/propose'])
   })
 
   it('says the submission may already be stored on any /propose HTTP failure', async () => {

@@ -165,6 +165,15 @@ export function validateRotationExport(input: unknown): RotationExport {
   }
 }
 
+/**
+ * The deposit cutoff height an exact `allowlist_entry` (`0x<hash>:<H>`) pins, or null for a bare
+ * entry. Only the suffix pins, as in the signer; a bare entry may still carry `deposit_cutoff_height`.
+ */
+export function pinnedCutoffHeight(rotation: RotationExport): null | number {
+  const suffix = rotation.allowlist_entry.split(':')[1]
+  return suffix === undefined ? null : Number(suffix)
+}
+
 /** A WP-reported outpoint: `{txid: "0x<64 hex>", vout: u32}`. */
 export function isOutpoint(value: unknown): value is LivenessOutpoint {
   const outpoint = value as LivenessOutpoint | null | undefined

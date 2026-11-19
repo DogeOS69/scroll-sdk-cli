@@ -9,7 +9,7 @@ import type {RotateKeyIntent, RotationCluster} from './rotation-cluster.js'
 import type {LivenessOutpoint, RotateKeyStatus, RotationExport} from './rotation-export.js'
 
 import {canonicalDogecoinNetwork} from './dogecoin-network.js'
-import {assertDeploymentIdentity, assertPredecessor, formatOutpoint, isOutpoint, rotationSigners} from './rotation-export.js'
+import {assertDeploymentIdentity, assertPredecessor, formatOutpoint, isOutpoint, pinnedCutoffHeight, rotationSigners} from './rotation-export.js'
 import {WP_VALUES_FILE, isFreshPoll, parseLastPolls} from './tso-signer-polls.js'
 
 /** Runs an external tool (helm, make, kubectl) with extra env; injectable for tests. Throws on failure. */
@@ -173,7 +173,7 @@ export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyI
   }
 
   // An exact allowlist entry pins the bound cutoff; attestors with that pin refuse any other.
-  const pinned = rotation.deposit_cutoff_height
+  const pinned = pinnedCutoffHeight(rotation)
   if (pinned !== null && intent.deposit_cutoff_height !== null && intent.deposit_cutoff_height !== pinned) {
     throw new Error(`The intent is bound to deposit cutoff height ${intent.deposit_cutoff_height}, but the export pins ${pinned}; attestors with the pinned entry will not sign. Re-issue the export with the bound height or a bare allowlist entry`)
   }
@@ -209,7 +209,8 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
   }
 
   // The WP fixes the cutoff height only when the intent binds, so a new intent cannot carry a pin.
-  if (rotation.deposit_cutoff_height !== null) throw new Error(`The export pins deposit cutoff height ${rotation.deposit_cutoff_height}, but no intent exists yet; the WP fixes the cutoff only when the intent binds. Send the export with a bare allowlist entry and no deposit_cutoff_height`)
+  const pinned = pinnedCutoffHeight(rotation)
+  if (pinned !== null) throw new Error(`The export pins deposit cutoff height ${pinned}, but no intent exists yet; the WP fixes the cutoff only when the intent binds. Send the export with a bare allowlist entry`)
   assertPredecessor(rotation, status)
   if (status.deprecating) throw new Error(`A previous rotation is still in its grace window (deprecating ${status.deprecating.key_hash} until the deposit scan passes the cutoff height ${status.deprecating.deposit_cutoff_height})`)
   if (status.active_intent) throw new Error(`The WP already has an active rotation intent ${status.active_intent.idempotency_key} (${status.active_intent.status})`)
