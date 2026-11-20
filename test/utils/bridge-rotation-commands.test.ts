@@ -67,6 +67,30 @@ describe('bridge rotation export validation', () => {
     expect(() => validateRotationExport(leadingZero)).to.throw('allowlist_entry')
   })
 
+  it('accepts the grace and cutoff bounds and refuses just past them', () => {
+    for (const grace of [1, 260_000]) {
+      const value = golden()
+      value.grace_blocks = grace
+      value.wp_rotate_key_request.grace_blocks = grace
+      expect(validateRotationExport(value).grace_blocks).to.equal(grace)
+    }
+
+    for (const height of [0, 4_294_967_295]) {
+      const value = structuredClone(EXACT_CUTOFF)
+      value.deposit_cutoff_height = height
+      value.allowlist_entry = `${GOLDEN.target.key_hash}:${height}`
+      expect(validateRotationExport(value).deposit_cutoff_height).to.equal(height)
+    }
+
+    const tooHigh = structuredClone(EXACT_CUTOFF)
+    tooHigh.deposit_cutoff_height = 4_294_967_296
+    tooHigh.allowlist_entry = `${GOLDEN.target.key_hash}:4294967296`
+    expect(() => validateRotationExport(tooHigh)).to.throw('deposit_cutoff_height')
+    const elevenDigits = structuredClone(EXACT_CUTOFF)
+    elevenDigits.allowlist_entry = `${GOLDEN.target.key_hash}:10000000000`
+    expect(() => validateRotationExport(elevenDigits)).to.throw('allowlist_entry')
+  })
+
   const mutations: [string, (value: any) => void, string][] = [
     ['schema', v => {v.schema = 'dogeos/rotation-export/v2'}, 'schema'],
     ['network', v => {v.network = 'dogecoin'}, 'network'],
@@ -538,6 +562,9 @@ describe('bridge rotation send', () => {
     error = undefined
     try {await sendPinned(intent(null, 'pending'))} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('not bound yet').and.contain('bare allowlist entry')
+    // A terminal intent is past signing: report it whatever the pin says.
+    expect(await sendPinned(intent(5_501_300, 'completed'))).to.deep.include({exitCode: 0, kind: 'existing'})
+    expect(await sendPinned(intent(null, 'failed_terminal'))).to.deep.include({exitCode: 1, kind: 'existing'})
 
     // Only the allowlist suffix pins: a bare entry carrying another height is not refused.
     const bare = structuredClone(EXACT_CUTOFF)
@@ -548,11 +575,13 @@ describe('bridge rotation send', () => {
 
   it('refuses a pinned export when no intent exists, since the cutoff is fixed only at binding', async () => {
     const pinned = validateRotationExport(EXACT_CUTOFF)
-    const fresh = cluster(null)
-    let error: unknown
-    try {await sendRotation({cluster: fresh.cluster, livenessOutpoint: OUTPOINT, preview: true, rotation: pinned})} catch (error_) {error = error_}
-    expect((error as Error).message).to.contain('no intent exists yet').and.contain('bare allowlist entry')
-    expect(fresh.posts).to.deep.equal([])
+    for (const preview of [false, true]) {
+      const fresh = cluster(null)
+      let error: unknown
+      try {await sendRotation({cluster: fresh.cluster, livenessOutpoint: OUTPOINT, preview, rotation: pinned})} catch (error_) {error = error_}
+      expect((error as Error).message).to.contain('no intent exists yet').and.contain('bare allowlist entry')
+      expect(fresh.posts).to.deep.equal([])
+    }
   })
 
   it('sends a bare export that carries a deposit_cutoff_height, which the WP never receives', async () => {

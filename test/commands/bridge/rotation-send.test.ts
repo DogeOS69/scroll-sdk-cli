@@ -16,6 +16,7 @@ import {WP_VALUES_FILE} from '../../../src/utils/tso-signer-polls.js'
 
 const CLI_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'test/fixtures/rotation-export/mainnet-example.json'), 'utf8'))
+const EXACT_CUTOFF = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'test/fixtures/rotation-export/mainnet-example-exact-cutoff.json'), 'utf8'))
 // Not a palindrome, so a byte-order reversal would show.
 const TXID = '0123456789abcdef'.repeat(4)
 
@@ -66,6 +67,7 @@ describe('bridge rotation send command', () => {
     fs.writeFileSync(exportFile, JSON.stringify(GOLDEN))
     status.network = 'mainnet'
     status.protocol_instance_id = GOLDEN.protocol_instance_id
+    status.min_grace_blocks = 10
     posts = []
     intent = null
     logs = []
@@ -135,6 +137,35 @@ describe('bridge rotation send command', () => {
     let error: unknown
     try {await run('--liveness-outpoint', `${TXID}:2`)} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('no valid payload.liveness_outpoint')
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses a pinned export with no intent, or pinned to another height than the bound one, and posts nothing', async () => {
+    fs.writeFileSync(exportFile, JSON.stringify(EXACT_CUTOFF))
+    let error: unknown
+    try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('no intent exists yet')
+
+    const payload = {grace_blocks: EXACT_CUTOFF.grace_blocks, liveness_outpoint: {txid: `0x${TXID}`, vout: 0}, new_bridge_redeem_script_hex: EXACT_CUTOFF.target.redeem_script_hex, new_key_hash: EXACT_CUTOFF.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: EXACT_CUTOFF.deposit_cutoff_height + 1, job_status: 'running', payload, signed_txid: null, status: 'bound'}
+    error = undefined
+    try {await run()} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain(`pins ${EXACT_CUTOFF.deposit_cutoff_height}`)
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses WP responses from before the deposit cutoff height', async () => {
+    const payload = {grace_wf_txs: 20_160, liveness_outpoint: {txid: `0x${TXID}`, vout: 0}, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deprecation_wf_tx_number: 20_201, job_status: 'completed', payload, signed_txid: 'aa'.repeat(32), status: 'completed'}
+    let error: unknown
+    try {await run()} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('deploy a WP that reports the deposit cutoff height')
+
+    intent = null
+    ;(status as Record<string, unknown>).min_grace_blocks = undefined
+    error = undefined
+    try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('deploy a WP that reports the deposit cutoff height')
     expect(posts).to.deep.equal([])
   })
 })

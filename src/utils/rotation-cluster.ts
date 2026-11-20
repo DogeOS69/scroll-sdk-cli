@@ -84,6 +84,8 @@ export class RotationCluster {
     if (response.status === 404) return null
     const intent = wpJson(response, 'intent') as RotateKeyIntent
     if (!isOutpoint(intent?.payload?.liveness_outpoint)) throw new Error('WP rotate-key intent has no valid payload.liveness_outpoint')
+    // A WP from before the deposit cutoff height lacks these; never read that as a different rotation.
+    if (!Number.isSafeInteger(intent.payload.grace_blocks) || !(intent.deposit_cutoff_height === null || Number.isSafeInteger(intent.deposit_cutoff_height))) throw new Error('WP rotate-key intent has no payload.grace_blocks or deposit_cutoff_height; deploy a WP that reports the deposit cutoff height')
     return intent
   }
 
@@ -93,6 +95,7 @@ export class RotationCluster {
     const status = wpJson(response, 'status') as RotateKeyStatus
     // A missing field must never read as "no deprecating key" or "no active intent".
     if (!('deprecating' in status) || !('active_intent' in status) || !Array.isArray(status.registered_signer_pubkeys) || !Array.isArray(status.current_attestation?.pubkeys)) throw new Error('WP rotate-key status is missing required fields')
+    if (!Number.isSafeInteger(status.min_grace_blocks) || (status.deprecating !== null && !Number.isSafeInteger(status.deprecating?.deposit_cutoff_height))) throw new Error('WP rotate-key status has no min_grace_blocks or deprecating.deposit_cutoff_height; deploy a WP that reports the deposit cutoff height')
     return status
   }
 

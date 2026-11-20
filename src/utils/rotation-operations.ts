@@ -147,6 +147,8 @@ export async function checkOnline(cluster: RotationCluster, rotation: RotationEx
 // ---------------------------------------------------------------- send
 
 export const INTENT_EXIT_CODES: Record<string, number> = {bound: 2, completed: 0, failed_terminal: 1, pending: 2, superseded: 1}
+/** Intents the WP scheduler still drives toward signing. */
+const ACTIVE_INTENT_STATUSES = new Set(['bound', 'pending'])
 
 /** The bridge-funding marker a liveness funding transaction carries as its only, zero-value OP_RETURN. */
 export const BRIDGE_FUNDING_MARKER_HEX = `6a4901${'00'.repeat(72)}`
@@ -173,8 +175,9 @@ export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyI
   }
 
   // An exact allowlist entry pins the bound cutoff; attestors with that pin refuse any other.
-  // Before binding the WP has not fixed H, so a pin cannot have been read from it yet.
-  const pinned = pinnedCutoffHeight(rotation)
+  // Before binding the WP has not fixed H, so a pin cannot have been read from it yet. A terminal
+  // intent is past signing, so it is only reported.
+  const pinned = ACTIVE_INTENT_STATUSES.has(intent.status) ? pinnedCutoffHeight(rotation) : null
   if (pinned !== null && intent.deposit_cutoff_height === null) {
     throw new Error(`The export pins deposit cutoff height ${pinned}, but the intent is not bound yet; the WP fixes the cutoff only when it binds. Use a bare allowlist entry until then`)
   }

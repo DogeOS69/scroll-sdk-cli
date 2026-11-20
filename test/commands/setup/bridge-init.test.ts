@@ -250,6 +250,21 @@ describe('setup bridge-init protocol seed generation', () => {
     expect(result.chain_anchors.initial_system_signer).to.equal('0xEE8dE6f473019dF6b8777252178D3cE1517694bB')
   })
 
+  it('replaces a seed holding only the retired WF-count grace with the block default', () => {
+    const result = buildEthereumDaProtocolSeedConfig(
+      {
+        configToml,
+        contractsConfig,
+        existingProtocolSeedConfig: {protocol_config_seed: {protocol_config: {key_rotation_min_grace_wf_txs: 300}}},
+        network: 'testnet',
+      },
+      helpers
+    )
+
+    expect(result.protocol_config_seed.protocol_config.key_rotation_min_grace_blocks).to.equal(1440)
+    expect(result.protocol_config_seed.protocol_config).not.to.have.property('key_rotation_min_grace_wf_txs')
+  })
+
   it('preserves explicit protocol config policy values', () => {
     const result = buildEthereumDaProtocolSeedConfig(
       {
