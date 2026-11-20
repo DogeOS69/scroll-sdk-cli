@@ -27,9 +27,9 @@ export interface RotationExport {
    */
   deposit_cutoff_height: null | number
   /**
-   * The requested grace in Dogecoin blocks; null asks for the committed minimum. At binding the WP
-   * sets H = max(live tip, deposit scan anchor) + max(grace, minimum) + a 120-block margin, clamped
-   * to the cutoff window.
+   * The requested grace in Dogecoin blocks; null asks for the committed minimum. The WP derives the
+   * deposit cutoff height from it when the intent binds, counted from the live tip; see dogeos-core
+   * #1911 (`rotate_key_deposit_cutoff_for`) for the exact rule.
    */
   grace_blocks: null | number
   network: 'mainnet' | 'regtest' | 'testnet'
@@ -67,7 +67,7 @@ function text(value: unknown, pattern: RegExp, label: string): string {
 const KEY_HASH = /^0x[\da-f]{40}$/
 const SCRIPT = /^(?:[\da-f]{2})+$/
 
-/** The WP's range for a stated grace, in Dogecoin blocks: 1..=260,000. */
+/** The WP's range for a stated grace, in Dogecoin blocks: 1..={@link MAX_ROTATION_GRACE}. */
 function grace(value: unknown, label: string): null | number {
   if (value === null) return null
   if (value === undefined) throw new Error(`Rotation export: ${label} is missing; re-export the proposal with grace_blocks and deposit_cutoff_height`)

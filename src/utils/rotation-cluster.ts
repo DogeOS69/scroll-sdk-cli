@@ -17,7 +17,7 @@ export function isIntentStatus(status: unknown): status is RotateKeyIntentStatus
   return typeof status === 'string' && INTENT_STATUSES.has(status)
 }
 
-/** A grace the WP stores: 1..=260,000 Dogecoin blocks. */
+/** A grace the WP stores: 1..={@link KEY_ROTATION_MAX_GRACE_BLOCKS} Dogecoin blocks. */
 function isStatedGrace(value: unknown): boolean {
   return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= KEY_ROTATION_MAX_GRACE_BLOCKS
 }
