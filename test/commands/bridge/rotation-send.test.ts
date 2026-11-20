@@ -188,6 +188,17 @@ describe('bridge rotation send command', () => {
     expect(posts).to.deep.equal([])
   })
 
+  it('accepts a WP status that reports a deprecating key with its cutoff height', async () => {
+    // After a rotation the WP reports the old key for the whole grace window.
+    ;(status as Record<string, unknown>).deprecating = {deposit_cutoff_height: 20_201, key_hash: GOLDEN.current.key_hash}
+    const payload = {grace_blocks: GOLDEN.wp_rotate_key_request.grace_blocks, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'completed', payload, signed_txid: 'aa'.repeat(32), status: 'completed'}
+    try {await run()} finally {status.deprecating = null}
+    expect(JSON.parse(logs[0]).intent.status).to.equal('completed')
+    expect(process.exitCode).to.equal(0)
+    expect(posts).to.deep.equal([])
+  })
+
   it('refuses a WP status whose deprecating key has no deposit cutoff height', async () => {
     ;(status as Record<string, unknown>).deprecating = {key_hash: GOLDEN.current.key_hash}
     let error: unknown

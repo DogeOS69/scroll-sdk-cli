@@ -216,7 +216,7 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
   if (intent) {
     // A pending or bound intent is driven by the WP scheduler; re-running only reports.
     assertIntentMatches(rotation, intent, livenessOutpoint)
-    return {exitCode: INTENT_EXIT_CODES[intent.status as RotateKeyIntentStatus], intent, kind: 'existing'}
+    return {exitCode: INTENT_EXIT_CODES[intent.status], intent, kind: 'existing'}
   }
 
   // The WP fixes the cutoff height only when the intent binds, so a new intent cannot carry a pin.
@@ -265,7 +265,7 @@ const INTENT_NOTES: Readonly<Record<RotateKeyIntentStatus, string>> = {
 
 /** What `send` prints for an intent already stored: the intent and its liveness outpoint as `<txid>:<vout>`. */
 export function existingIntentReport(rotation: RotationExport, intent: RotateKeyIntent): Record<string, unknown> {
-  return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: formatOutpoint(intent.payload.liveness_outpoint), note: INTENT_NOTES[intent.status as RotateKeyIntentStatus]}
+  return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: formatOutpoint(intent.payload.liveness_outpoint), note: INTENT_NOTES[intent.status]}
 }
 
 /** Sibling file of the export, e.g. `rotation-export.send.json`. */

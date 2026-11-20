@@ -24,7 +24,7 @@ export interface RotateKeyIntent {
   job_status: null | string
   payload: {grace_blocks: number; liveness_outpoint: LivenessOutpoint; new_bridge_redeem_script_hex: string; new_key_hash: string}
   signed_txid: null | string
-  status: string
+  status: RotateKeyIntentStatus
 }
 
 export type Forward = (pod: string, port: number) => Promise<{close: () => void; url: string}>

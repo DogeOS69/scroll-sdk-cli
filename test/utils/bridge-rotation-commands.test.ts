@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import type {RotateKeyIntent, RotationCluster} from '../../src/utils/rotation-cluster.js'
+import type {RotateKeyIntent, RotateKeyIntentStatus, RotationCluster} from '../../src/utils/rotation-cluster.js'
 
 import {type BridgeScript, bridgeHash, parseBridgeScript} from '../../src/utils/bridge-rotation.js'
 import {type RotateKeyStatus, type RotationExport, assertDeploymentIdentity, assertPredecessor, assertRoleSeparation, assertTransportKeys, parseLivenessOutpoint, validateRotationExport} from '../../src/utils/rotation-export.js'
@@ -59,7 +59,7 @@ describe('bridge rotation export validation', () => {
     for (const height of [-1, 1.5, '5501234', 2 ** 32]) {
       const bad = structuredClone(EXACT_CUTOFF)
       bad.deposit_cutoff_height = height
-      expect(() => validateRotationExport(bad)).to.throw('deposit_cutoff_height')
+      expect(() => validateRotationExport(bad)).to.throw('deposit_cutoff_height must be null or a Dogecoin block height')
     }
 
     const leadingZero = structuredClone(EXACT_CUTOFF)
@@ -458,7 +458,7 @@ describe('bridge rotation send', () => {
   const fresh = () => [...rotation.current.signers, ...rotation.target.signers].map(s => `tso_core_signer_last_poll_timestamp_seconds{signer_pubkey="${s.public_key}"} ${Math.floor(Date.now() / 1000)}`).join('\n')
   const stored = (change: Partial<RotateKeyIntent['payload']> = {}, state = 'completed'): RotateKeyIntent => ({
     activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'completed',
-    payload: {grace_blocks: 20_160, liveness_outpoint: OUTPOINT, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state,
+    payload: {grace_blocks: 20_160, liveness_outpoint: OUTPOINT, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state as RotateKeyIntentStatus,
   })
   const atCutoff = (height: null | number, state: string): RotateKeyIntent => ({...stored({}, state), deposit_cutoff_height: height})
 

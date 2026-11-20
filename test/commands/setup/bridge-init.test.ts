@@ -14,6 +14,7 @@ import BridgeInitCommand, {
   resolveBridgeGenesisImage,
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
+  retiredMinGraceNotice,
 } from '../../../src/commands/setup/bridge-init.js'
 import {KEY_ROTATION_MIN_GRACE_BLOCKS} from '../../../src/constants/deployment.js'
 
@@ -280,6 +281,11 @@ describe('setup bridge-init protocol seed generation', () => {
     for (const bad of [0, 260_001, 1.5, '1440']) {
       expect(build({key_rotation_min_grace_blocks: bad})).to.throw('key_rotation_min_grace_blocks must be an integer in 1..260000')
     }
+  })
+
+  it('warns when it drops the retired WF-count grace from the seed', () => {
+    expect(retiredMinGraceNotice(undefined, 1440)).to.equal(undefined)
+    expect(retiredMinGraceNotice(300, 1440)).to.contain('key_rotation_min_grace_wf_txs = 300').and.contain('key_rotation_min_grace_blocks is now 1440')
   })
 
   it('preserves explicit protocol config policy values', () => {

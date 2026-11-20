@@ -161,6 +161,16 @@ function normalizeMinGrace(protocolConfig: any): void {
   }
 }
 
+/**
+ * The warning `bridge-init` prints when the existing seed held the retired grace key, which
+ * {@link buildEthereumDaProtocolSeedConfig} drops; undefined when there was none.
+ */
+export function retiredMinGraceNotice(retiredGrace: unknown, minGraceBlocks: unknown): string | undefined {
+  if (retiredGrace === undefined) return undefined
+  return `Dropped the retired key_rotation_min_grace_wf_txs = ${JSON.stringify(retiredGrace)} (a WF count) from the protocol seed; `
+    + `key_rotation_min_grace_blocks is now ${JSON.stringify(minGraceBlocks)} Dogecoin blocks. Edit it in the seed to choose another grace`
+}
+
 export function buildEthereumDaProtocolSeedConfig(
   inputs: ProtocolSeedConfigInputs,
   helpers: {
@@ -1873,6 +1883,7 @@ export class BridgeInitCommand extends Command {
       primarySequencerSigner
     )
 
+    const retiredGrace = protocolSeedConfig.protocol_config_seed?.protocol_config?.key_rotation_min_grace_wf_txs
     protocolSeedConfig = buildEthereumDaProtocolSeedConfig(
       {
         configToml: protocolInputConfig,
@@ -1894,6 +1905,8 @@ export class BridgeInitCommand extends Command {
     )
 
     fs.writeFileSync(protocolSeedPath, toml.stringify(protocolSeedConfig))
+    const graceNotice = retiredMinGraceNotice(retiredGrace, protocolSeedConfig.protocol_config_seed.protocol_config.key_rotation_min_grace_blocks)
+    if (graceNotice) this.jsonCtx.addWarning(graceNotice)
     this.jsonCtx.info(
       `Updated ${protocolSeedPath} for Dogecoin network ${network} ` +
       `with initial_system_signer = ${initialSystemSigner}`
