@@ -197,6 +197,7 @@ describe('bridge rotation send command', () => {
       [{deposit_cutoff_height: 2 ** 32}, 'outside the range core allows'],
       [{deposit_cutoff_height: null}, 'bound but reports no deposit_cutoff_height'],
       [{status: 'retrying'}, 'upgrade the CLI'],
+      [{payload: {...payload, new_key_hash: null}}, 'no payload.new_key_hash'],
     ]
     for (const [change, message] of cases) {
       intent = {...base, ...change}

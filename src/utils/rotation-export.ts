@@ -143,7 +143,7 @@ export function assertRoleSeparation(currentScript: string, targetScript: string
 export function validateRotationExport(input: unknown): RotationExport {
   const source = object(input, 'export')
   if (source.schema !== ROTATION_EXPORT_SCHEMA) throw new Error(`Rotation export: schema must be ${ROTATION_EXPORT_SCHEMA}`)
-  // An export from before the deposit cutoff height counts the grace in WF transactions, and its
+  // An export from before the deposit-cutoff change counts the grace in WF transactions, and its
   // `:<n>` allowlist suffix is a grace, not a cutoff height. Say so instead of a range error.
   if ('grace_wf_txs' in source || 'grace_wf_txs' in object(source.wp_rotate_key_request, 'wp_rotate_key_request')) {
     throw new Error('Rotation export: grace_wf_txs is the retired WF-count grace; re-export the proposal with grace_blocks and deposit_cutoff_height')

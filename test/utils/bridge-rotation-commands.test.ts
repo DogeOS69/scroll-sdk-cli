@@ -161,6 +161,9 @@ describe('bridge rotation export: null grace, regtest and kept signers', () => {
       holder.grace_wf_txs = holder.grace_blocks
       delete holder.grace_blocks
       expect(() => validateRotationExport(retired)).to.throw('grace_wf_txs is the retired WF-count grace')
+      // Also next to a valid grace_blocks, as a portal in transition might write it.
+      holder.grace_blocks = holder.grace_wf_txs
+      expect(() => validateRotationExport(retired)).to.throw('grace_wf_txs is the retired WF-count grace')
     }
   })
 
@@ -551,7 +554,18 @@ describe('bridge rotation send', () => {
   it('reports a pin mismatch on a terminal intent, which may be why it failed', () => {
     const pinned = validateRotationExport(EXACT_CUTOFF)
     expect(existingIntentReport(pinned, atCutoff(5_501_300, 'failed_terminal')).pinMismatch).to.contain('pins deposit cutoff height 5501234').and.contain('bound 5501300')
-    expect(existingIntentReport(pinned, atCutoff(null, 'superseded')).pinMismatch).to.contain('never bound one')
+    // An intent that never bound a height never reached signing, so the pin played no part.
+    for (const state of ['superseded', 'failed_terminal', 'completed']) {
+      expect(existingIntentReport(pinned, atCutoff(null, state))).not.to.have.property('pinMismatch')
+    }
+
+    // Only the allowlist suffix pins: a bare entry with a stale height reports no mismatch.
+    const bare = structuredClone(EXACT_CUTOFF)
+    bare.allowlist_entry = GOLDEN.target.key_hash
+    for (const state of ['completed', 'failed_terminal']) {
+      expect(existingIntentReport(validateRotationExport(bare), atCutoff(5_501_300, state))).not.to.have.property('pinMismatch')
+    }
+
     expect(existingIntentReport(pinned, atCutoff(5_501_300, 'completed')).pinMismatch).to.contain('completed with the bound height').and.not.contain('refused to sign')
     expect(existingIntentReport(pinned, atCutoff(5_501_234, 'completed'))).not.to.have.property('pinMismatch')
     expect(existingIntentReport(rotation, atCutoff(5_501_300, 'failed_terminal'))).not.to.have.property('pinMismatch')

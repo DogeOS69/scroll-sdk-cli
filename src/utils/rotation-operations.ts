@@ -164,7 +164,9 @@ export function livenessFundingHelp(rotation: RotationExport): string {
 
 /**
  * The stored intent must be this export's request, and the outpoint given on the command line
- * if any; otherwise the key was reused for another rotation or another funding output.
+ * if any; otherwise the key was reused for another rotation or another funding output. The intent
+ * state must be one core defines. For a pending or bound intent, a pinned export must match the
+ * bound height, and a pending intent cannot be pinned at all.
  */
 export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyIntent, livenessOutpoint?: LivenessOutpoint): void {
   const request = rotation.wp_rotate_key_request
@@ -205,9 +207,10 @@ export type SendOutcome =
 export interface SendOptions {cluster: RotationCluster; livenessOutpoint?: LivenessOutpoint; now?: () => number; preview: boolean; rotation: RotationExport}
 
 /**
- * Report an existing intent and stop, or, for a new intent, require a liveness outpoint, run the
- * predecessor, overlap and online checks and then POST `/build` (preview, non-durable) or
- * `/propose` (durable). The WP validates the outpoint over Dogecoin RPC on both routes.
+ * Report an existing intent ({@link assertIntentMatches}) and stop, or, for a new intent, refuse a
+ * pinned export, require a liveness outpoint, run the predecessor, overlap and online checks and
+ * then POST `/build` (preview, non-durable) or `/propose` (durable). The WP validates the outpoint
+ * over Dogecoin RPC on both routes.
  */
 export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
   const {cluster, livenessOutpoint, rotation} = options
@@ -265,16 +268,20 @@ const INTENT_NOTES: Readonly<Record<RotateKeyIntentStatus, string>> = {
   superseded: `Already stored and superseded. ${TERMINAL_RETRY}`,
 }
 
-/** What `send` prints for an intent already stored: the intent and its liveness outpoint as `<txid>:<vout>`. */
+/**
+ * What `send` prints for an intent already stored: the intent, its liveness outpoint as
+ * `<txid>:<vout>`, a note for its state, and pinMismatch when a finished intent bound another height
+ * than the export's `:<H>` pin.
+ */
 export function existingIntentReport(rotation: RotationExport, intent: RotateKeyIntent): Record<string, unknown> {
-  // Active intents with a mismatched pin were refused before this; a failed one may have failed for it.
+  // Active intents with a mismatched pin were refused before this. A finished intent that bound
+  // another height may have failed for the pin; one that never bound a height never reached signing.
   const pinned = pinnedCutoffHeight(rotation)
-  const bound = intent.deposit_cutoff_height === null ? 'never bound one' : `bound ${intent.deposit_cutoff_height}`
   const consequence = intent.status === 'completed'
     ? 'it completed with the bound height, so this export does not describe the signed rotation'
     : 'attestors with the pinned entry would have refused to sign it'
-  const pinMismatch = pinned !== null && intent.deposit_cutoff_height !== pinned
-    ? `The export pins deposit cutoff height ${pinned}, but the intent ${bound}; ${consequence}`
+  const pinMismatch = pinned !== null && intent.deposit_cutoff_height !== null && intent.deposit_cutoff_height !== pinned
+    ? `The export pins deposit cutoff height ${pinned}, but the intent bound ${intent.deposit_cutoff_height}; ${consequence}`
     : undefined
   return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: formatOutpoint(intent.payload.liveness_outpoint), note: INTENT_NOTES[intent.status], ...(pinMismatch && {pinMismatch})}
 }

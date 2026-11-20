@@ -23,8 +23,9 @@ function isStatedGrace(value: unknown): boolean {
 }
 
 /**
- * A deposit-cutoff field of a WP response. A missing field means a WP from before the deposit cutoff
- * height; a present but invalid one is reported with its value, since redeploying would not help.
+ * A field of a WP response that the deposit-cutoff change added or redefined (a grace in blocks, a
+ * cutoff height). A missing one means a WP from before that change; a present but invalid one is
+ * reported with its value, since redeploying would not help.
  */
 function wpField(value: unknown, valid: (value: unknown) => boolean, field: string): void {
   if (value === undefined) throw new Error(`WP rotate-key ${field} is missing; deploy a WP that reports the deposit cutoff height`)
@@ -111,7 +112,8 @@ export class RotationCluster {
     if (response.status === 404) return null
     const intent = wpJson(response, 'intent') as RotateKeyIntent
     if (!isOutpoint(intent?.payload?.liveness_outpoint)) throw new Error('WP rotate-key intent has no valid payload.liveness_outpoint')
-    // A WP from before the deposit cutoff height lacks these; never read that as a different rotation.
+    if (typeof intent.payload.new_key_hash !== 'string' || typeof intent.payload.new_bridge_redeem_script_hex !== 'string') throw new Error('WP rotate-key intent has no payload.new_key_hash or payload.new_bridge_redeem_script_hex')
+    // A WP from before the deposit-cutoff change lacks these; never read that as a different rotation.
     wpField(intent.payload.grace_blocks, isStatedGrace, 'intent payload.grace_blocks')
     wpField(intent.deposit_cutoff_height, value => value === null || isBlockHeight(value), 'intent deposit_cutoff_height')
     if (!isIntentStatus(intent.status)) throw new Error(`WP rotate-key intent has status ${JSON.stringify(intent.status)}, which this CLI does not know; upgrade the CLI before acting on it`)
