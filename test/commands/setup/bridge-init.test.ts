@@ -14,7 +14,11 @@ import BridgeInitCommand, {
   resolveBridgeGenesisImage,
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
+  retiredMinGraceNotice,
+  updateEthereumDaProtocolSeedConfig,
 } from '../../../src/commands/setup/bridge-init.js'
+import {KEY_ROTATION_MIN_GRACE_BLOCKS} from '../../../src/constants/deployment.js'
+import {JsonOutputContext} from '../../../src/utils/json-output.js'
 
 describe('bridge setup funding address', () => {
   it('uses the compressed public key required by the core setup transaction', () => {
@@ -147,10 +151,11 @@ describe('setup bridge-init protocol seed generation', () => {
         moat_address: '0x0000000000000000000000000000000000000003',
       },
       eth_chain_id: 32_382,
-      key_rotation_min_grace_wf_txs: 300,
+      key_rotation_min_grace_blocks: KEY_ROTATION_MIN_GRACE_BLOCKS,
       l2_chain_id: 412_346,
       min_deposit_sats: 100_000_000,
     })
+    expect(KEY_ROTATION_MIN_GRACE_BLOCKS).to.equal(1440)
     expect(result.protocol).not.to.have.property('celestia_namespace')
     expect(result.chain_anchors).not.to.have.property('initial_celestia_height')
     expect(result.protocol_config_seed.protocol_config).not.to.have.property('celestia_namespace')
@@ -248,6 +253,53 @@ describe('setup bridge-init protocol seed generation', () => {
     expect(result.chain_anchors.initial_system_signer).to.equal('0xEE8dE6f473019dF6b8777252178D3cE1517694bB')
   })
 
+  it('replaces a seed holding only the retired WF-count grace with the block default', () => {
+    const result = buildEthereumDaProtocolSeedConfig(
+      {
+        configToml,
+        contractsConfig,
+        existingProtocolSeedConfig: {protocol_config_seed: {protocol_config: {key_rotation_min_grace_wf_txs: 300}}},
+        network: 'testnet',
+      },
+      helpers
+    )
+
+    expect(result.protocol_config_seed.protocol_config.key_rotation_min_grace_blocks).to.equal(1440)
+    expect(result.protocol_config_seed.protocol_config).not.to.have.property('key_rotation_min_grace_wf_txs')
+  })
+
+  const build = (protocolConfig: Record<string, unknown>) => () => buildEthereumDaProtocolSeedConfig(
+    {configToml, contractsConfig, existingProtocolSeedConfig: {protocol_config_seed: {protocol_config: protocolConfig}}, network: 'testnet'},
+    helpers
+  )
+
+  it('refuses a seed whose only grace is a non-default WF count, and an out-of-range block grace', () => {
+    expect(build({key_rotation_min_grace_wf_txs: 500})).to.throw('key_rotation_min_grace_wf_txs = 500')
+    // Once the operator states the block grace, the old key is dropped whatever it held.
+    expect(build({key_rotation_min_grace_blocks: 2880, key_rotation_min_grace_wf_txs: 500})().protocol_config_seed.protocol_config)
+      .to.include({key_rotation_min_grace_blocks: 2880}).and.not.have.property('key_rotation_min_grace_wf_txs')
+    expect(build({key_rotation_min_grace_blocks: 1})().protocol_config_seed.protocol_config.key_rotation_min_grace_blocks).to.equal(1)
+    expect(build({key_rotation_min_grace_blocks: 260_000})().protocol_config_seed.protocol_config.key_rotation_min_grace_blocks).to.equal(260_000)
+    for (const bad of [0, 260_001, 1.5, '1440']) {
+      expect(build({key_rotation_min_grace_blocks: bad})).to.throw('key_rotation_min_grace_blocks must be an integer in 1..260000')
+    }
+  })
+
+  const update = (protocolConfig: Record<string, unknown>) => updateEthereumDaProtocolSeedConfig(
+    {configToml, contractsConfig, existingProtocolSeedConfig: {protocol_config_seed: {protocol_config: protocolConfig}}, network: 'testnet'},
+    helpers
+  )
+
+  it('warns when it drops the retired WF-count grace from the seed, reading it before the build', () => {
+    const dropped = update({key_rotation_min_grace_wf_txs: 300})
+    expect(dropped.config.protocol_config_seed.protocol_config).to.include({key_rotation_min_grace_blocks: 1440}).and.not.have.property('key_rotation_min_grace_wf_txs')
+    expect(dropped.warnings).to.have.length(1)
+    expect(dropped.warnings[0]).to.contain('key_rotation_min_grace_wf_txs = 300').and.contain('key_rotation_min_grace_blocks is now 1440')
+    expect(update({key_rotation_min_grace_blocks: 2880, key_rotation_min_grace_wf_txs: 500}).warnings[0]).to.contain('is now 2880')
+    expect(update({key_rotation_min_grace_blocks: 2880}).warnings).to.deep.equal([])
+    expect(retiredMinGraceNotice(undefined, 1440)).to.equal(undefined)
+  })
+
   it('preserves explicit protocol config policy values', () => {
     const result = buildEthereumDaProtocolSeedConfig(
       {
@@ -259,7 +311,8 @@ describe('setup bridge-init protocol seed generation', () => {
               deposit_queue_transform: {
                 message_queue_gas_limit: 250_000,
               },
-              key_rotation_min_grace_wf_txs: 12,
+              key_rotation_min_grace_blocks: 12,
+              key_rotation_min_grace_wf_txs: 300,
               min_deposit_sats: 34_567,
             },
           },
@@ -269,7 +322,8 @@ describe('setup bridge-init protocol seed generation', () => {
       helpers
     )
 
-    expect(result.protocol_config_seed.protocol_config.key_rotation_min_grace_wf_txs).to.equal(12)
+    expect(result.protocol_config_seed.protocol_config.key_rotation_min_grace_blocks).to.equal(12)
+    expect(result.protocol_config_seed.protocol_config).not.to.have.property('key_rotation_min_grace_wf_txs')
     expect(result.protocol_config_seed.protocol_config.min_deposit_sats).to.equal(34_567)
     expect(
       result.protocol_config_seed.protocol_config.deposit_queue_transform.message_queue_gas_limit
@@ -376,6 +430,81 @@ describe('bridge genesis immutable image selection', () => {
     }
 
     expect(BridgeInitCommand.flags.image.exclusive).to.include('image-tag')
+  })
+})
+
+/** How often `text` appears in the printed lines. */
+function occurrences(lines: string[], text: string): number {
+  return lines.join('\n').split(text).length - 1
+}
+
+describe('setup bridge-init protocol seed retired grace warning', () => {
+  const SIGNER = '0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3'
+  let root: string
+  let stderr: string[]
+  let stdout: string[]
+  const originalError = console.error
+  const originalLog = console.log
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'protocol-seed-grace-'))
+    stderr = []
+    stdout = []
+    console.error = (message?: unknown) => {stderr.push(String(message))}
+    console.log = (message?: unknown) => {stdout.push(String(message))}
+  })
+
+  afterEach(() => {
+    console.error = originalError
+    console.log = originalLog
+    fs.rmSync(root, {force: true, recursive: true})
+  })
+
+  /** Run updateProtocolSeed on a seed file with the given protocol_config body. */
+  let jsonCtx: JsonOutputContext
+
+  async function updateSeed(protocolConfigToml: string, json: boolean): Promise<string> {
+    const seedFile = path.join(root, 'protocol_seed.toml')
+    fs.writeFileSync(seedFile, `[protocol_config_seed.protocol_config]\n${protocolConfigToml}`)
+    const command = Object.create(BridgeInitCommand.prototype)
+    jsonCtx = new JsonOutputContext('setup bridge-init', json)
+    command.jsonCtx = jsonCtx
+    command.getRequiredTomlConfig = (file: string) => file.endsWith('config-contracts.toml')
+      ? {L1_SCROLL_MESSENGER_PROXY_ADDR: '0x01', L2_DOGEOS_MESSENGER_PROXY_ADDR: '0x02', L2_MOAT_PROXY_ADDR: '0x03'}
+      : {general: {CHAIN_ID_L2: 412_346}}
+    command.getRequiredDogeConfig = () => ({config: {ethereumDa: {chainId: 32_382}}, path: 'doge-config.toml'})
+    command.getRequiredInitialSystemSigner = () => SIGNER
+    command.selectProtocolSeedInitialSystemSigner = async () => SIGNER
+    command.getRequiredContractAddress = (config: Record<string, string>, name: string) => config[name]
+    command.getRequiredNumberValue = (source: Record<string, number>, key: string) => source[key]
+    command.resolveDogecoinChainId = () => 111_111
+    await command.updateProtocolSeed(root, 'testnet', 'config.toml')
+    return seedFile
+  }
+
+  it('rewrites the seed and prints the warning at once in JSON mode, before any later step can fail', async () => {
+    const seedFile = await updateSeed('key_rotation_min_grace_wf_txs = 300\n', true)
+    const written = toml.parse(fs.readFileSync(seedFile, 'utf8')) as {protocol_config_seed: {protocol_config: Record<string, unknown>}}
+    expect(written.protocol_config_seed.protocol_config).to.include({key_rotation_min_grace_blocks: 1440}).and.not.have.property('key_rotation_min_grace_wf_txs')
+    expect(stderr.join('\n')).to.contain('key_rotation_min_grace_blocks is now 1440')
+    expect(occurrences(stderr, 'key_rotation_min_grace_wf_txs = 300')).to.equal(1)
+    expect(stdout).to.deep.equal([])
+    // And it still lands in the final JSON response when the command succeeds.
+    jsonCtx.success({})
+    expect(JSON.parse(stdout[0]).warnings[0]).to.contain('key_rotation_min_grace_wf_txs = 300')
+  })
+
+  it('prints the warning exactly once outside JSON mode', async () => {
+    await updateSeed('key_rotation_min_grace_wf_txs = 300\n', false)
+    expect(occurrences([...stderr, ...stdout], 'key_rotation_min_grace_wf_txs = 300')).to.equal(1)
+  })
+
+  it('leaves a seed with a non-default WF-count grace byte for byte unchanged when it refuses it', async () => {
+    const seedFile = path.join(root, 'protocol_seed.toml')
+    let error: unknown
+    try {await updateSeed('key_rotation_min_grace_wf_txs = 500\n', false)} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('key_rotation_min_grace_wf_txs = 500')
+    expect(fs.readFileSync(seedFile, 'utf8')).to.equal('[protocol_config_seed.protocol_config]\nkey_rotation_min_grace_wf_txs = 500\n')
   })
 })
 

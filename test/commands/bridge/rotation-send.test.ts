@@ -16,6 +16,7 @@ import {WP_VALUES_FILE} from '../../../src/utils/tso-signer-polls.js'
 
 const CLI_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'test/fixtures/rotation-export/mainnet-example.json'), 'utf8'))
+const EXACT_CUTOFF = JSON.parse(fs.readFileSync(path.join(CLI_ROOT, 'test/fixtures/rotation-export/mainnet-example-exact-cutoff.json'), 'utf8'))
 // Not a palindrome, so a byte-order reversal would show.
 const TXID = '0123456789abcdef'.repeat(4)
 
@@ -36,7 +37,7 @@ describe('bridge rotation send command', () => {
   const signers = [...GOLDEN.current.signers, ...GOLDEN.target.signers] as {public_key: string}[]
   const status = {
     active_intent: null, current_attestation: {pubkeys: GOLDEN.current.signers.map((s: {public_key: string}) => s.public_key), threshold: GOLDEN.current.threshold}, current_key_hash: GOLDEN.current.key_hash,
-    deprecating: null, min_grace_wf_txs: 10, network: 'mainnet', next_wf_tx_number: 40, protocol_instance_id: GOLDEN.protocol_instance_id, registered_signer_pubkeys: [],
+    deprecating: null, min_grace_blocks: 10, network: 'mainnet', next_wf_tx_number: 40, protocol_instance_id: GOLDEN.protocol_instance_id, registered_signer_pubkeys: [],
   }
 
   function handle(request: http.IncomingMessage, response: http.ServerResponse): void {
@@ -66,6 +67,7 @@ describe('bridge rotation send command', () => {
     fs.writeFileSync(exportFile, JSON.stringify(GOLDEN))
     status.network = 'mainnet'
     status.protocol_instance_id = GOLDEN.protocol_instance_id
+    status.min_grace_blocks = 10
     posts = []
     intent = null
     logs = []
@@ -124,17 +126,141 @@ describe('bridge rotation send command', () => {
     expect(posts).to.deep.equal([])
   })
 
+  it('exits 2 for a bound intent, and 1 with pinMismatch for a failed intent the export pins differently', async () => {
+    const payload = {grace_blocks: EXACT_CUTOFF.wp_rotate_key_request.grace_blocks, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}, new_bridge_redeem_script_hex: EXACT_CUTOFF.target.redeem_script_hex, new_key_hash: EXACT_CUTOFF.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'running', payload, signed_txid: null, status: 'bound'}
+    await run()
+    expect(process.exitCode).to.equal(2)
+    expect(JSON.parse(logs[0])).to.not.have.property('pinMismatch')
+
+    fs.writeFileSync(exportFile, JSON.stringify(EXACT_CUTOFF))
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: EXACT_CUTOFF.deposit_cutoff_height + 1, job_status: 'failed', payload, signed_txid: null, status: 'failed_terminal'}
+    logs = []
+    await run()
+    expect(process.exitCode).to.equal(1)
+    expect(JSON.parse(logs[0]).pinMismatch).to.contain(`pins deposit cutoff height ${EXACT_CUTOFF.deposit_cutoff_height}`)
+    expect(posts).to.deep.equal([])
+  })
+
   it('reports an existing intent with its stored outpoint, and refuses an intent response without one', async () => {
-    const payload = {grace_wf_txs: GOLDEN.wp_rotate_key_request.grace_wf_txs, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
-    intent = {activation_wf_tx_number: 41, deprecation_wf_tx_number: 20_201, job_status: 'completed', payload: {...payload, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}}, signed_txid: 'aa'.repeat(32), status: 'completed'}
+    const payload = {grace_blocks: GOLDEN.wp_rotate_key_request.grace_blocks, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'completed', payload: {...payload, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}}, signed_txid: 'aa'.repeat(32), status: 'completed'}
     await run()
     expect(JSON.parse(logs[0]).livenessOutpoint).to.equal(`${TXID}:2`)
     expect(process.exitCode).to.equal(0)
 
-    intent = {activation_wf_tx_number: null, deprecation_wf_tx_number: null, job_status: null, payload, signed_txid: null, status: 'pending'}
+    intent = {activation_wf_tx_number: null, deposit_cutoff_height: null, job_status: null, payload, signed_txid: null, status: 'pending'}
     let error: unknown
     try {await run('--liveness-outpoint', `${TXID}:2`)} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('no valid payload.liveness_outpoint')
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses a pinned export with no intent, or pinned to another height than the bound one, and posts nothing', async () => {
+    fs.writeFileSync(exportFile, JSON.stringify(EXACT_CUTOFF))
+    let error: unknown
+    try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('no intent exists yet')
+
+    const payload = {grace_blocks: EXACT_CUTOFF.grace_blocks, liveness_outpoint: {txid: `0x${TXID}`, vout: 0}, new_bridge_redeem_script_hex: EXACT_CUTOFF.target.redeem_script_hex, new_key_hash: EXACT_CUTOFF.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: EXACT_CUTOFF.deposit_cutoff_height + 1, job_status: 'running', payload, signed_txid: null, status: 'bound'}
+    error = undefined
+    try {await run()} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain(`pins ${EXACT_CUTOFF.deposit_cutoff_height}`)
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses WP responses from before the deposit cutoff height', async () => {
+    const payload = {grace_wf_txs: 20_160, liveness_outpoint: {txid: `0x${TXID}`, vout: 0}, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deprecation_wf_tx_number: 20_201, job_status: 'completed', payload, signed_txid: 'aa'.repeat(32), status: 'completed'}
+    let error: unknown
+    try {await run()} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('deploy a WP that reports the deposit cutoff height')
+
+    intent = null
+    ;(status as Record<string, unknown>).min_grace_blocks = undefined
+    error = undefined
+    try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('deploy a WP that reports the deposit cutoff height')
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses each missing or inconsistent cutoff field of the WP intent', async () => {
+    const payload = {grace_blocks: GOLDEN.grace_blocks, liveness_outpoint: {txid: `0x${TXID}`, vout: 0}, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+    const base = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'running', payload, signed_txid: null, status: 'bound'}
+    const cases: [Record<string, unknown>, string][] = [
+      [{deposit_cutoff_height: undefined}, 'deploy a WP that reports the deposit cutoff height'],
+      [{deposit_cutoff_height: '20201'}, 'outside the range core allows'],
+      [{deposit_cutoff_height: -1}, 'outside the range core allows'],
+      [{payload: {...payload, grace_blocks: 0}}, 'outside the range core allows'],
+      [{payload: {...payload, grace_blocks: 260_001}}, 'outside the range core allows'],
+      [{deposit_cutoff_height: 2 ** 32}, 'outside the range core allows'],
+      [{deposit_cutoff_height: null}, 'bound but reports no deposit_cutoff_height'],
+      [{status: 'retrying'}, 'upgrade the CLI'],
+      [{payload: {...payload, new_key_hash: null}}, 'no payload.new_key_hash'],
+    ]
+    for (const [change, message] of cases) {
+      intent = {...base, ...change}
+      let error: unknown
+      try {await run()} catch (error_) {error = error_}
+      expect((error as Error).message, JSON.stringify(change)).to.contain(message)
+    }
+
+    expect(posts).to.deep.equal([])
+  })
+
+  it('accepts WP intents and status at the edges of the grace and height ranges', async () => {
+    for (const [grace, height] of [[1, 0], [260_000, 4_294_967_295]]) {
+      const edge = structuredClone(GOLDEN)
+      edge.grace_blocks = grace
+      edge.wp_rotate_key_request.grace_blocks = grace
+      fs.writeFileSync(exportFile, JSON.stringify(edge))
+      status.min_grace_blocks = grace
+      const payload = {grace_blocks: grace, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+      intent = {activation_wf_tx_number: 41, deposit_cutoff_height: height, job_status: 'running', payload, signed_txid: null, status: 'bound'}
+      logs = []
+      await run()
+      expect(process.exitCode, `grace ${grace}, height ${height}`).to.equal(2)
+      expect(JSON.parse(logs[0]).intent.deposit_cutoff_height).to.equal(height)
+    }
+
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses a WP status min_grace_blocks outside 1..260000', async () => {
+    for (const bad of [0, 260_001, null, 1.5]) {
+      ;(status as Record<string, unknown>).min_grace_blocks = bad
+      let error: unknown
+      try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_}
+      expect((error as Error | undefined)?.message, String(bad)).to.contain('status min_grace_blocks is').and.contain('outside the range core allows')
+    }
+
+    expect(posts).to.deep.equal([])
+  })
+
+  it('accepts a WP status that reports a deprecating key with its cutoff height', async () => {
+    // After a rotation the WP reports the old key for the whole grace window.
+    ;(status as Record<string, unknown>).deprecating = {deposit_cutoff_height: 20_201, key_hash: GOLDEN.current.key_hash}
+    const payload = {grace_blocks: GOLDEN.wp_rotate_key_request.grace_blocks, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'completed', payload, signed_txid: 'aa'.repeat(32), status: 'completed'}
+    try {await run()} finally {status.deprecating = null}
+    expect(JSON.parse(logs[0]).intent.status).to.equal('completed')
+    expect(process.exitCode).to.equal(0)
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses a WP status whose deprecating key has no valid deposit cutoff height', async () => {
+    const cases: [Record<string, unknown>, string][] = [
+      [{key_hash: GOLDEN.current.key_hash}, 'deprecating.deposit_cutoff_height is missing'],
+      [{deposit_cutoff_height: -1, key_hash: GOLDEN.current.key_hash}, 'deprecating.deposit_cutoff_height is -1, outside the range'],
+    ]
+    for (const [deprecating, message] of cases) {
+      ;(status as Record<string, unknown>).deprecating = deprecating
+      let error: unknown
+      try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_} finally {status.deprecating = null}
+      expect((error as Error | undefined)?.message).to.contain(message)
+    }
+
     expect(posts).to.deep.equal([])
   })
 })

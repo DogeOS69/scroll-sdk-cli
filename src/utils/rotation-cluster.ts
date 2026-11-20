@@ -3,20 +3,49 @@ import {execFileSync, spawn} from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import {KEY_ROTATION_MAX_GRACE_BLOCKS} from '../constants/deployment.js'
 import {type LivenessOutpoint, type RotateKeyRequest, type RotateKeyStatus, isOutpoint} from './rotation-export.js'
 import {WP_VALUES_FILE} from './tso-signer-polls.js'
 
 /** The `/build` and `/propose` body: the export's request plus the operator's liveness outpoint. */
 export type RotateKeyIntentRequest = {liveness_outpoint: LivenessOutpoint} & RotateKeyRequest
 
-/** WP `GET /protocol-actions/rotate-key/intents/{key}` (dogeos-core #1535). */
+/** The WP's rotate-key intent states (`RotateKeyIntentStatus` in core). */
+export type RotateKeyIntentStatus = 'bound' | 'completed' | 'failed_terminal' | 'pending' | 'superseded'
+const INTENT_STATUSES: ReadonlySet<string> = new Set<RotateKeyIntentStatus>(['bound', 'completed', 'failed_terminal', 'pending', 'superseded'])
+export function isIntentStatus(status: unknown): status is RotateKeyIntentStatus {
+  return typeof status === 'string' && INTENT_STATUSES.has(status)
+}
+
+/** A grace the WP stores: 1..={@link KEY_ROTATION_MAX_GRACE_BLOCKS} Dogecoin blocks. */
+function isStatedGrace(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= KEY_ROTATION_MAX_GRACE_BLOCKS
+}
+
+/**
+ * A field of a WP response that the deposit-cutoff change added or redefined (a grace in blocks, a
+ * cutoff height). A missing one means a WP from before that change; a present but invalid one is
+ * reported with its value, since redeploying would not help.
+ */
+function wpField(value: unknown, valid: (value: unknown) => boolean, field: string): void {
+  if (value === undefined) throw new Error(`WP rotate-key ${field} is missing; deploy a WP that reports the deposit cutoff height`)
+  if (!valid(value)) throw new Error(`WP rotate-key ${field} is ${JSON.stringify(value)}, outside the range core allows`)
+}
+
+/** A Dogecoin block height as core stores it: a u32. */
+function isBlockHeight(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 0xFF_FF_FF_FF
+}
+
+/** WP `GET /protocol-actions/rotate-key/intents/{key}` (dogeos-core #1535; deposit cutoff fields #1911). */
 export interface RotateKeyIntent {
   activation_wf_tx_number: null | number
-  deprecation_wf_tx_number: null | number
+  /** The bound deposit cutoff height; null until the intent binds. */
+  deposit_cutoff_height: null | number
   job_status: null | string
-  payload: {grace_wf_txs: number; liveness_outpoint: LivenessOutpoint; new_bridge_redeem_script_hex: string; new_key_hash: string}
+  payload: {grace_blocks: number; liveness_outpoint: LivenessOutpoint; new_bridge_redeem_script_hex: string; new_key_hash: string}
   signed_txid: null | string
-  status: string
+  status: RotateKeyIntentStatus
 }
 
 export type Forward = (pod: string, port: number) => Promise<{close: () => void; url: string}>
@@ -83,6 +112,13 @@ export class RotationCluster {
     if (response.status === 404) return null
     const intent = wpJson(response, 'intent') as RotateKeyIntent
     if (!isOutpoint(intent?.payload?.liveness_outpoint)) throw new Error('WP rotate-key intent has no valid payload.liveness_outpoint')
+    if (typeof intent.payload.new_key_hash !== 'string' || typeof intent.payload.new_bridge_redeem_script_hex !== 'string') throw new Error('WP rotate-key intent has no payload.new_key_hash or payload.new_bridge_redeem_script_hex')
+    // A WP from before the deposit-cutoff change lacks these; never read that as a different rotation.
+    wpField(intent.payload.grace_blocks, isStatedGrace, 'intent payload.grace_blocks')
+    wpField(intent.deposit_cutoff_height, value => value === null || isBlockHeight(value), 'intent deposit_cutoff_height')
+    if (!isIntentStatus(intent.status)) throw new Error(`WP rotate-key intent has status ${JSON.stringify(intent.status)}, which this CLI does not know; upgrade the CLI before acting on it`)
+    // The WP sets the height in the same update that binds the intent.
+    if (intent.status === 'bound' && intent.deposit_cutoff_height === null) throw new Error('WP rotate-key intent is bound but reports no deposit_cutoff_height')
     return intent
   }
 
@@ -92,6 +128,8 @@ export class RotationCluster {
     const status = wpJson(response, 'status') as RotateKeyStatus
     // A missing field must never read as "no deprecating key" or "no active intent".
     if (!('deprecating' in status) || !('active_intent' in status) || !Array.isArray(status.registered_signer_pubkeys) || !Array.isArray(status.current_attestation?.pubkeys)) throw new Error('WP rotate-key status is missing required fields')
+    wpField(status.min_grace_blocks, isStatedGrace, 'status min_grace_blocks')
+    if (status.deprecating !== null) wpField(status.deprecating?.deposit_cutoff_height, isBlockHeight, 'status deprecating.deposit_cutoff_height')
     return status
   }
 

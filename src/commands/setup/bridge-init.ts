@@ -11,7 +11,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
-import {PROTOCOL_VERSION} from '../../constants/deployment.js'
+import {KEY_ROTATION_MAX_GRACE_BLOCKS, KEY_ROTATION_MIN_GRACE_BLOCKS, PROTOCOL_VERSION} from '../../constants/deployment.js'
 import {assertGenesisSequencerAmount, coreHelperNetwork} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
@@ -136,6 +136,61 @@ export function resolveBridgeTimelock(
   return { shouldUpdate: false, timelock }
 }
 
+/** The seed default of the retired `key_rotation_min_grace_wf_txs`. */
+const RETIRED_MIN_GRACE_WF_TXS_DEFAULT = 300
+
+/**
+ * Replace the retired WF-count `key_rotation_min_grace_wf_txs` with `key_rotation_min_grace_blocks`,
+ * which defaults to {@link KEY_ROTATION_MIN_GRACE_BLOCKS} and must be in 1..{@link KEY_ROTATION_MAX_GRACE_BLOCKS}. The WF count has no block equivalent, and core
+ * refuses the unknown key. It is dropped when it holds the old default 300 or a block grace is
+ * already set; any other value throws, so the operator restates it in blocks. The warning about the
+ * drop comes from {@link updateEthereumDaProtocolSeedConfig}.
+ */
+function normalizeMinGrace(protocolConfig: any): void {
+  const retiredGrace = protocolConfig.key_rotation_min_grace_wf_txs
+  if (retiredGrace !== undefined && retiredGrace !== RETIRED_MIN_GRACE_WF_TXS_DEFAULT && protocolConfig.key_rotation_min_grace_blocks === undefined) {
+    throw new Error(
+      `The protocol seed sets key_rotation_min_grace_wf_txs = ${String(retiredGrace)}, a WF-count grace core no longer reads. `
+        + 'Set key_rotation_min_grace_blocks (Dogecoin blocks) in the seed; the old key is then dropped'
+    )
+  }
+
+  delete protocolConfig.key_rotation_min_grace_wf_txs
+  protocolConfig.key_rotation_min_grace_blocks ??= KEY_ROTATION_MIN_GRACE_BLOCKS
+  const minGrace = protocolConfig.key_rotation_min_grace_blocks
+  if (!Number.isSafeInteger(minGrace) || minGrace < 1 || minGrace > KEY_ROTATION_MAX_GRACE_BLOCKS) {
+    throw new Error(`key_rotation_min_grace_blocks must be an integer in 1..${KEY_ROTATION_MAX_GRACE_BLOCKS}, got ${String(minGrace)}`)
+  }
+}
+
+/**
+ * The warning `bridge-init` prints when the existing seed held the retired grace key, which
+ * {@link buildEthereumDaProtocolSeedConfig} drops; undefined when there was none.
+ */
+export function retiredMinGraceNotice(retiredGrace: unknown, minGraceBlocks: unknown): string | undefined {
+  if (retiredGrace === undefined) return undefined
+  return `Dropped the retired key_rotation_min_grace_wf_txs = ${String(retiredGrace)} (a WF count) from the protocol seed; `
+    + `key_rotation_min_grace_blocks is now ${String(minGraceBlocks)} Dogecoin blocks. Edit it in the seed to choose another grace`
+}
+
+/**
+ * {@link buildEthereumDaProtocolSeedConfig} plus the warnings `bridge-init` prints for it. The
+ * retired grace key is read before the build, which drops it from the seed in place.
+ */
+export function updateEthereumDaProtocolSeedConfig(
+  inputs: ProtocolSeedConfigInputs,
+  helpers: {
+    getContractAddress: (contractsConfig: any, contractName: string) => string
+    getNumberValue: (source: any, key: string) => number
+    resolveDogecoinChainId: (network: string) => number
+  }
+): {config: any; warnings: string[]} {
+  const retiredGrace = inputs.existingProtocolSeedConfig?.protocol_config_seed?.protocol_config?.key_rotation_min_grace_wf_txs
+  const config = buildEthereumDaProtocolSeedConfig(inputs, helpers)
+  const notice = retiredMinGraceNotice(retiredGrace, config.protocol_config_seed.protocol_config.key_rotation_min_grace_blocks)
+  return {config, warnings: notice ? [notice] : []}
+}
+
 export function buildEthereumDaProtocolSeedConfig(
   inputs: ProtocolSeedConfigInputs,
   helpers: {
@@ -179,7 +234,7 @@ export function buildEthereumDaProtocolSeedConfig(
   delete protocolConfig.celestia_namespace
   protocolConfig.l2_chain_id = l2ChainId
   protocolConfig.eth_chain_id = ethChainId
-  protocolConfig.key_rotation_min_grace_wf_txs ??= 300
+  normalizeMinGrace(protocolConfig)
   protocolConfig.min_deposit_sats ??= 100_000_000
   protocolConfig.deposit_queue_transform ??= {}
   protocolConfig.deposit_queue_transform.l1_scroll_messenger_address = helpers.getContractAddress(
@@ -1848,7 +1903,7 @@ export class BridgeInitCommand extends Command {
       primarySequencerSigner
     )
 
-    protocolSeedConfig = buildEthereumDaProtocolSeedConfig(
+    const seedUpdate = updateEthereumDaProtocolSeedConfig(
       {
         configToml: protocolInputConfig,
         contractsConfig,
@@ -1867,8 +1922,16 @@ export class BridgeInitCommand extends Command {
         resolveDogecoinChainId: (dogecoinNetwork) => this.resolveDogecoinChainId(dogecoinNetwork),
       }
     )
+    protocolSeedConfig = seedUpdate.config
 
     fs.writeFileSync(protocolSeedPath, toml.stringify(protocolSeedConfig))
+    for (const warning of seedUpdate.warnings) {
+      this.jsonCtx.addWarning(warning)
+      // The seed is already rewritten and a rerun cannot see the dropped key again, so in JSON
+      // mode print it now too, rather than only in a success response a later step may not reach.
+      if (this.jsonCtx.isJsonEnabled) this.jsonCtx.info(`Warning: ${warning}`)
+    }
+
     this.jsonCtx.info(
       `Updated ${protocolSeedPath} for Dogecoin network ${network} ` +
       `with initial_system_signer = ${initialSystemSigner}`
