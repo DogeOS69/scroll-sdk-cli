@@ -171,6 +171,24 @@ export function retiredMinGraceNotice(retiredGrace: unknown, minGraceBlocks: unk
     + `key_rotation_min_grace_blocks is now ${JSON.stringify(minGraceBlocks)} Dogecoin blocks. Edit it in the seed to choose another grace`
 }
 
+/**
+ * {@link buildEthereumDaProtocolSeedConfig} plus the warnings `bridge-init` prints for it. The
+ * retired grace key is read before the build, which drops it from the seed in place.
+ */
+export function updateEthereumDaProtocolSeedConfig(
+  inputs: ProtocolSeedConfigInputs,
+  helpers: {
+    getContractAddress: (contractsConfig: any, contractName: string) => string
+    getNumberValue: (source: any, key: string) => number
+    resolveDogecoinChainId: (network: string) => number
+  }
+): {config: any; warnings: string[]} {
+  const retiredGrace = inputs.existingProtocolSeedConfig?.protocol_config_seed?.protocol_config?.key_rotation_min_grace_wf_txs
+  const config = buildEthereumDaProtocolSeedConfig(inputs, helpers)
+  const notice = retiredMinGraceNotice(retiredGrace, config.protocol_config_seed.protocol_config.key_rotation_min_grace_blocks)
+  return {config, warnings: notice ? [notice] : []}
+}
+
 export function buildEthereumDaProtocolSeedConfig(
   inputs: ProtocolSeedConfigInputs,
   helpers: {
@@ -1883,8 +1901,7 @@ export class BridgeInitCommand extends Command {
       primarySequencerSigner
     )
 
-    const retiredGrace = protocolSeedConfig.protocol_config_seed?.protocol_config?.key_rotation_min_grace_wf_txs
-    protocolSeedConfig = buildEthereumDaProtocolSeedConfig(
+    const seedUpdate = updateEthereumDaProtocolSeedConfig(
       {
         configToml: protocolInputConfig,
         contractsConfig,
@@ -1903,10 +1920,16 @@ export class BridgeInitCommand extends Command {
         resolveDogecoinChainId: (dogecoinNetwork) => this.resolveDogecoinChainId(dogecoinNetwork),
       }
     )
+    protocolSeedConfig = seedUpdate.config
 
     fs.writeFileSync(protocolSeedPath, toml.stringify(protocolSeedConfig))
-    const graceNotice = retiredMinGraceNotice(retiredGrace, protocolSeedConfig.protocol_config_seed.protocol_config.key_rotation_min_grace_blocks)
-    if (graceNotice) this.jsonCtx.addWarning(graceNotice)
+    for (const warning of seedUpdate.warnings) {
+      this.jsonCtx.addWarning(warning)
+      // The seed is already rewritten and a rerun cannot see the dropped key again, so in JSON
+      // mode print it now too, rather than only in a success response a later step may not reach.
+      if (this.jsonCtx.isJsonEnabled) this.jsonCtx.info(`Warning: ${warning}`)
+    }
+
     this.jsonCtx.info(
       `Updated ${protocolSeedPath} for Dogecoin network ${network} ` +
       `with initial_system_signer = ${initialSystemSigner}`

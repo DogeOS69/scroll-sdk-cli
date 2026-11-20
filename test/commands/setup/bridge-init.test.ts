@@ -15,8 +15,10 @@ import BridgeInitCommand, {
   resolveBridgeTimelock,
   resolveInitialSystemSignerFromDogeConfig,
   retiredMinGraceNotice,
+  updateEthereumDaProtocolSeedConfig,
 } from '../../../src/commands/setup/bridge-init.js'
 import {KEY_ROTATION_MIN_GRACE_BLOCKS} from '../../../src/constants/deployment.js'
+import {JsonOutputContext} from '../../../src/utils/json-output.js'
 
 describe('bridge setup funding address', () => {
   it('uses the compressed public key required by the core setup transaction', () => {
@@ -283,9 +285,19 @@ describe('setup bridge-init protocol seed generation', () => {
     }
   })
 
-  it('warns when it drops the retired WF-count grace from the seed', () => {
+  const update = (protocolConfig: Record<string, unknown>) => updateEthereumDaProtocolSeedConfig(
+    {configToml, contractsConfig, existingProtocolSeedConfig: {protocol_config_seed: {protocol_config: protocolConfig}}, network: 'testnet'},
+    helpers
+  )
+
+  it('warns when it drops the retired WF-count grace from the seed, reading it before the build', () => {
+    const dropped = update({key_rotation_min_grace_wf_txs: 300})
+    expect(dropped.config.protocol_config_seed.protocol_config).to.include({key_rotation_min_grace_blocks: 1440}).and.not.have.property('key_rotation_min_grace_wf_txs')
+    expect(dropped.warnings).to.have.length(1)
+    expect(dropped.warnings[0]).to.contain('key_rotation_min_grace_wf_txs = 300').and.contain('key_rotation_min_grace_blocks is now 1440')
+    expect(update({key_rotation_min_grace_blocks: 2880, key_rotation_min_grace_wf_txs: 500}).warnings[0]).to.contain('is now 2880')
+    expect(update({key_rotation_min_grace_blocks: 2880}).warnings).to.deep.equal([])
     expect(retiredMinGraceNotice(undefined, 1440)).to.equal(undefined)
-    expect(retiredMinGraceNotice(300, 1440)).to.contain('key_rotation_min_grace_wf_txs = 300').and.contain('key_rotation_min_grace_blocks is now 1440')
   })
 
   it('preserves explicit protocol config policy values', () => {
@@ -418,6 +430,38 @@ describe('bridge genesis immutable image selection', () => {
     }
 
     expect(BridgeInitCommand.flags.image.exclusive).to.include('image-tag')
+  })
+})
+
+describe('setup bridge-init protocol seed retired grace warning', () => {
+  it('rewrites the seed and prints the warning at once in JSON mode, before any later step can fail', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'protocol-seed-grace-'))
+    const stderr: string[] = []
+    const originalError = console.error
+    console.error = (message?: unknown) => {stderr.push(String(message))}
+    try {
+      const seedFile = path.join(root, 'protocol_seed.toml')
+      fs.writeFileSync(seedFile, '[protocol_config_seed.protocol_config]\nkey_rotation_min_grace_wf_txs = 300\n')
+      const command = Object.create(BridgeInitCommand.prototype)
+      command.jsonCtx = new JsonOutputContext('setup bridge-init', true)
+      command.getRequiredTomlConfig = (file: string) => file.endsWith('config-contracts.toml')
+        ? {L1_SCROLL_MESSENGER_PROXY_ADDR: '0x01', L2_DOGEOS_MESSENGER_PROXY_ADDR: '0x02', L2_MOAT_PROXY_ADDR: '0x03'}
+        : {general: {CHAIN_ID_L2: 412_346}}
+      command.getRequiredDogeConfig = () => ({config: {ethereumDa: {chainId: 32_382}}, path: 'doge-config.toml'})
+      command.getRequiredInitialSystemSigner = () => '0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3'
+      command.selectProtocolSeedInitialSystemSigner = async () => '0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3'
+      command.getRequiredContractAddress = (config: Record<string, string>, name: string) => config[name]
+      command.getRequiredNumberValue = (source: Record<string, number>, key: string) => source[key]
+      command.resolveDogecoinChainId = () => 111_111
+
+      await command.updateProtocolSeed(root, 'testnet', 'config.toml')
+      const written = toml.parse(fs.readFileSync(seedFile, 'utf8')) as {protocol_config_seed: {protocol_config: Record<string, unknown>}}
+      expect(written.protocol_config_seed.protocol_config).to.include({key_rotation_min_grace_blocks: 1440}).and.not.have.property('key_rotation_min_grace_wf_txs')
+      expect(stderr.join('\n')).to.contain('key_rotation_min_grace_wf_txs = 300').and.contain('key_rotation_min_grace_blocks is now 1440')
+    } finally {
+      console.error = originalError
+      fs.rmSync(root, {force: true, recursive: true})
+    }
   })
 })
 

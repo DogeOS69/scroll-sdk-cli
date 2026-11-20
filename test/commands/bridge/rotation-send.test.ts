@@ -175,6 +175,8 @@ describe('bridge rotation send command', () => {
     const cases: [Record<string, unknown>, string][] = [
       [{deposit_cutoff_height: undefined}, 'deploy a WP that reports the deposit cutoff height'],
       [{deposit_cutoff_height: '20201'}, 'deploy a WP that reports the deposit cutoff height'],
+      [{deposit_cutoff_height: -1}, 'deploy a WP that reports the deposit cutoff height'],
+      [{deposit_cutoff_height: 2 ** 32}, 'deploy a WP that reports the deposit cutoff height'],
       [{deposit_cutoff_height: null}, 'bound but reports no deposit_cutoff_height'],
       [{status: 'retrying'}, 'upgrade the CLI'],
     ]
@@ -199,11 +201,14 @@ describe('bridge rotation send command', () => {
     expect(posts).to.deep.equal([])
   })
 
-  it('refuses a WP status whose deprecating key has no deposit cutoff height', async () => {
-    ;(status as Record<string, unknown>).deprecating = {key_hash: GOLDEN.current.key_hash}
-    let error: unknown
-    try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_} finally {status.deprecating = null}
-    expect((error as Error).message).to.contain('deprecating.deposit_cutoff_height')
+  it('refuses a WP status whose deprecating key has no valid deposit cutoff height', async () => {
+    for (const deprecating of [{key_hash: GOLDEN.current.key_hash}, {deposit_cutoff_height: -1, key_hash: GOLDEN.current.key_hash}]) {
+      ;(status as Record<string, unknown>).deprecating = deprecating
+      let error: unknown
+      try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_} finally {status.deprecating = null}
+      expect((error as Error).message).to.contain('deprecating.deposit_cutoff_height')
+    }
+
     expect(posts).to.deep.equal([])
   })
 })

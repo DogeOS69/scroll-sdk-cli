@@ -590,6 +590,11 @@ describe('bridge rotation send', () => {
     error = undefined
     try {await sendPinned(atCutoff(null, 'pending'))} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('not bound yet').and.contain('bare allowlist entry')
+    // Pending is refused even if the WP were to report the pinned height early.
+    error = undefined
+    try {await sendPinned(atCutoff(5_501_234, 'pending'))} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('not bound yet')
+    expect(await sendPinned(atCutoff(5_501_300, 'superseded'))).to.deep.include({exitCode: 1, kind: 'existing'})
     // A terminal intent is past signing: report it whatever the pin says.
     expect(await sendPinned(atCutoff(5_501_300, 'completed'))).to.deep.include({exitCode: 0, kind: 'existing'})
     expect(await sendPinned(atCutoff(null, 'failed_terminal'))).to.deep.include({exitCode: 1, kind: 'existing'})

@@ -181,7 +181,7 @@ export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyI
   // intent is past signing, so it is only reported.
   if (!isIntentStatus(intent.status)) throw new Error(`The WP reports rotate-key intent status ${JSON.stringify(intent.status)}, which this CLI does not know; upgrade the CLI before acting on it`)
   const pinned = ACTIVE_INTENT_STATUSES.has(intent.status) ? pinnedCutoffHeight(rotation) : null
-  if (pinned !== null && intent.deposit_cutoff_height === null) {
+  if (pinned !== null && (intent.status === 'pending' || intent.deposit_cutoff_height === null)) {
     throw new Error(`The export pins deposit cutoff height ${pinned}, but the intent is not bound yet; the WP fixes the cutoff only when it binds. Use a bare allowlist entry until then`)
   }
 
