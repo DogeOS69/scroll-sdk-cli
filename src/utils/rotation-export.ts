@@ -1,11 +1,13 @@
 import {address} from 'bitcoinjs-lib'
 import fs from 'node:fs'
 
+import {KEY_ROTATION_MAX_GRACE_BLOCKS} from '../constants/deployment.js'
 import {assertCompressedSecp256k1PublicKey} from './attestation-signer-descriptor.js'
 import {bridgeHash, parseBridgeScript} from './bridge-rotation.js'
 
 export const ROTATION_EXPORT_SCHEMA = 'dogeos/rotation-export/v1'
-export const MAX_ROTATION_GRACE = 260_000
+/** The largest stated grace, in Dogecoin blocks. */
+export const MAX_ROTATION_GRACE = KEY_ROTATION_MAX_GRACE_BLOCKS
 
 export interface RotationExportSigner {label: string; public_key: string; transport_pubkey: string}
 export interface RotateKeyRequest {grace_blocks: null | number; idempotency_key: string; new_bridge_redeem_script_hex: string; new_key_hash: string}
@@ -132,6 +134,12 @@ export function assertRoleSeparation(currentScript: string, targetScript: string
 export function validateRotationExport(input: unknown): RotationExport {
   const source = object(input, 'export')
   if (source.schema !== ROTATION_EXPORT_SCHEMA) throw new Error(`Rotation export: schema must be ${ROTATION_EXPORT_SCHEMA}`)
+  // An export from before the deposit cutoff height counts the grace in WF transactions, and its
+  // `:<n>` allowlist suffix is a grace, not a cutoff height. Say so instead of a range error.
+  if ('grace_wf_txs' in source || 'grace_wf_txs' in object(source.wp_rotate_key_request, 'wp_rotate_key_request')) {
+    throw new Error('Rotation export: grace_wf_txs is the retired WF-count grace; re-export the proposal with grace_blocks and deposit_cutoff_height')
+  }
+
   const proposal = text(source.proposal, /^DGP-\d{4,}-rev[1-9]\d*$/, 'proposal')
   if (source.network !== 'mainnet' && source.network !== 'testnet' && source.network !== 'regtest') throw new Error('Rotation export: network must be mainnet, testnet or regtest')
   const protocolInstanceId = text(source.protocol_instance_id, /^0x[\da-f]{64}$/, 'protocol_instance_id')

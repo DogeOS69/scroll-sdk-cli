@@ -148,6 +148,16 @@ describe('bridge rotation export: null grace, regtest and kept signers', () => {
     expect(() => validateRotationExport(zero)).to.throw('1..260000')
   })
 
+  it('names the retired grace_wf_txs instead of reporting a bad grace_blocks', () => {
+    for (const where of ['export', 'wp_rotate_key_request'] as const) {
+      const retired = golden() as Record<string, any>
+      const holder = where === 'export' ? retired : retired.wp_rotate_key_request
+      holder.grace_wf_txs = holder.grace_blocks
+      delete holder.grace_blocks
+      expect(() => validateRotationExport(retired)).to.throw('grace_wf_txs is the retired WF-count grace')
+    }
+  })
+
   it('matches a stored intent from a null-grace request whatever grace the WP resolved', () => {
     const rotation = validateRotationExport(nullGrace())
     const intent = (change: Partial<RotateKeyIntent['payload']>): RotateKeyIntent => ({activation_wf_tx_number: null, deposit_cutoff_height: null, job_status: null,
@@ -450,6 +460,7 @@ describe('bridge rotation send', () => {
     activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'completed',
     payload: {grace_blocks: 20_160, liveness_outpoint: OUTPOINT, new_bridge_redeem_script_hex: rotation.target.redeem_script_hex, new_key_hash: rotation.target.key_hash, ...change}, signed_txid: 'aa'.repeat(32), status: state,
   })
+  const atCutoff = (height: null | number, state: string): RotateKeyIntent => ({...stored({}, state), deposit_cutoff_height: height})
 
   function cluster(intent: RotateKeyIntent | null, post: (route: string) => Promise<{body: unknown; status: number}> = async () => ({body: {status: 'pending'}, status: 202})) {
     const posts: string[] = []
@@ -523,6 +534,24 @@ describe('bridge rotation send', () => {
     expect(existingIntentReport(rotation, stored({liveness_outpoint: {txid: `0x${'1F'.repeat(32)}`, vout: 1}}))).to.deep.include({idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, livenessOutpoint: `${'1f'.repeat(32)}:1`})
   })
 
+  it('says a terminal intent is not driven any further, and an active one is', () => {
+    expect(existingIntentReport(rotation, stored({}, 'bound')).note).to.contain('the WP drives it')
+    expect(existingIntentReport(rotation, stored({}, 'completed')).note).to.contain('completed')
+    for (const state of ['failed_terminal', 'superseded']) {
+      expect(existingIntentReport(rotation, stored({}, state)).note).to.contain('new idempotency key').and.not.contain('the WP drives it')
+    }
+  })
+
+  it('refuses an intent status it does not know instead of reading it as terminal', async () => {
+    for (const state of ['retrying', 'constructor']) {
+      const unknown = cluster(stored({}, state))
+      let error: unknown
+      try {await sendRotation({cluster: unknown.cluster, preview: false, rotation: validateRotationExport(EXACT_CUTOFF)})} catch (error_) {error = error_}
+      expect((error as Error).message).to.contain(`status ${JSON.stringify(state)}`).and.contain('upgrade the CLI')
+      expect(unknown.posts).to.deep.equal([])
+    }
+  })
+
   it('reports an existing intent and never resubmits it, even with --preview', async () => {
     for (const [state, exitCode] of [['completed', 0], ['pending', 2], ['bound', 2], ['failed_terminal', 1], ['superseded', 1]] as const) {
       for (const preview of [false, true]) {
@@ -548,28 +577,27 @@ describe('bridge rotation send', () => {
 
   it('checks a pinned export against the bound cutoff height of the stored intent', async () => {
     const pinned = validateRotationExport(EXACT_CUTOFF)
-    const intent = (height: null | number, state: string): RotateKeyIntent => ({...stored({}, state), deposit_cutoff_height: height})
     const sendPinned = async (stored_: RotateKeyIntent) => {
       const existing = cluster(stored_)
       try {return await sendRotation({cluster: existing.cluster, preview: false, rotation: pinned})} finally {expect(existing.posts).to.deep.equal([])}
     }
 
-    expect(await sendPinned(intent(5_501_234, 'bound'))).to.deep.include({exitCode: 2, kind: 'existing'})
+    expect(await sendPinned(atCutoff(5_501_234, 'bound'))).to.deep.include({exitCode: 2, kind: 'existing'})
     let error: unknown
-    try {await sendPinned(intent(5_501_300, 'bound'))} catch (error_) {error = error_}
+    try {await sendPinned(atCutoff(5_501_300, 'bound'))} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('bound to deposit cutoff height 5501300').and.contain('pins 5501234')
     // Not bound yet: the pin cannot have come from the WP.
     error = undefined
-    try {await sendPinned(intent(null, 'pending'))} catch (error_) {error = error_}
+    try {await sendPinned(atCutoff(null, 'pending'))} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('not bound yet').and.contain('bare allowlist entry')
     // A terminal intent is past signing: report it whatever the pin says.
-    expect(await sendPinned(intent(5_501_300, 'completed'))).to.deep.include({exitCode: 0, kind: 'existing'})
-    expect(await sendPinned(intent(null, 'failed_terminal'))).to.deep.include({exitCode: 1, kind: 'existing'})
+    expect(await sendPinned(atCutoff(5_501_300, 'completed'))).to.deep.include({exitCode: 0, kind: 'existing'})
+    expect(await sendPinned(atCutoff(null, 'failed_terminal'))).to.deep.include({exitCode: 1, kind: 'existing'})
 
     // Only the allowlist suffix pins: a bare entry carrying another height is not refused.
     const bare = structuredClone(EXACT_CUTOFF)
     bare.allowlist_entry = GOLDEN.target.key_hash
-    const existing = cluster(intent(5_501_300, 'bound'))
+    const existing = cluster(atCutoff(5_501_300, 'bound'))
     expect(await sendRotation({cluster: existing.cluster, preview: false, rotation: validateRotationExport(bare)})).to.deep.include({exitCode: 2, kind: 'existing'})
   })
 

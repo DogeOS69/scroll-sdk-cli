@@ -168,4 +168,31 @@ describe('bridge rotation send command', () => {
     expect((error as Error).message).to.contain('deploy a WP that reports the deposit cutoff height')
     expect(posts).to.deep.equal([])
   })
+
+  it('refuses each missing or inconsistent cutoff field of the WP intent', async () => {
+    const payload = {grace_blocks: GOLDEN.grace_blocks, liveness_outpoint: {txid: `0x${TXID}`, vout: 0}, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+    const base = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'running', payload, signed_txid: null, status: 'bound'}
+    const cases: [Record<string, unknown>, string][] = [
+      [{deposit_cutoff_height: undefined}, 'deploy a WP that reports the deposit cutoff height'],
+      [{deposit_cutoff_height: '20201'}, 'deploy a WP that reports the deposit cutoff height'],
+      [{deposit_cutoff_height: null}, 'bound but reports no deposit_cutoff_height'],
+      [{status: 'retrying'}, 'upgrade the CLI'],
+    ]
+    for (const [change, message] of cases) {
+      intent = {...base, ...change}
+      let error: unknown
+      try {await run()} catch (error_) {error = error_}
+      expect((error as Error).message, JSON.stringify(change)).to.contain(message)
+    }
+
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses a WP status whose deprecating key has no deposit cutoff height', async () => {
+    ;(status as Record<string, unknown>).deprecating = {key_hash: GOLDEN.current.key_hash}
+    let error: unknown
+    try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_} finally {status.deprecating = null}
+    expect((error as Error).message).to.contain('deprecating.deposit_cutoff_height')
+    expect(posts).to.deep.equal([])
+  })
 })

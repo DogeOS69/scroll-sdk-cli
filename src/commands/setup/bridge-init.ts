@@ -11,7 +11,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import { getSetupDefaultsPath } from '../../config/constants.js'
-import {KEY_ROTATION_MIN_GRACE_BLOCKS, PROTOCOL_VERSION} from '../../constants/deployment.js'
+import {KEY_ROTATION_MAX_GRACE_BLOCKS, KEY_ROTATION_MIN_GRACE_BLOCKS, PROTOCOL_VERSION} from '../../constants/deployment.js'
 import {assertGenesisSequencerAmount, coreHelperNetwork} from '../../utils/bridge-constants.js'
 import { hasEnvRef, resolveInlineEnvRefs } from '../../utils/deployment-spec-generator.js'
 import { loadDogeNetworkFromDogeConfig } from '../../utils/doge-config.js'
@@ -136,6 +136,31 @@ export function resolveBridgeTimelock(
   return { shouldUpdate: false, timelock }
 }
 
+/** The seed default of the retired `key_rotation_min_grace_wf_txs`. */
+const RETIRED_MIN_GRACE_WF_TXS_DEFAULT = 300
+
+/**
+ * Replace the retired WF-count `key_rotation_min_grace_wf_txs` with `key_rotation_min_grace_blocks`.
+ * The WF count has no block equivalent, and core refuses the unknown key. Only its old default is
+ * replaced silently; any other value was a choice the operator must restate in blocks.
+ */
+function normalizeMinGrace(protocolConfig: any): void {
+  const retiredGrace = protocolConfig.key_rotation_min_grace_wf_txs
+  if (retiredGrace !== undefined && retiredGrace !== RETIRED_MIN_GRACE_WF_TXS_DEFAULT && protocolConfig.key_rotation_min_grace_blocks === undefined) {
+    throw new Error(
+      `The protocol seed sets key_rotation_min_grace_wf_txs = ${retiredGrace}, a WF-count grace core no longer reads. `
+        + 'Set key_rotation_min_grace_blocks (Dogecoin blocks) in the seed and remove the old key'
+    )
+  }
+
+  delete protocolConfig.key_rotation_min_grace_wf_txs
+  protocolConfig.key_rotation_min_grace_blocks ??= KEY_ROTATION_MIN_GRACE_BLOCKS
+  const minGrace = protocolConfig.key_rotation_min_grace_blocks
+  if (!Number.isSafeInteger(minGrace) || minGrace < 1 || minGrace > KEY_ROTATION_MAX_GRACE_BLOCKS) {
+    throw new Error(`key_rotation_min_grace_blocks must be an integer in 1..${KEY_ROTATION_MAX_GRACE_BLOCKS}, got ${JSON.stringify(minGrace)}`)
+  }
+}
+
 export function buildEthereumDaProtocolSeedConfig(
   inputs: ProtocolSeedConfigInputs,
   helpers: {
@@ -179,9 +204,7 @@ export function buildEthereumDaProtocolSeedConfig(
   delete protocolConfig.celestia_namespace
   protocolConfig.l2_chain_id = l2ChainId
   protocolConfig.eth_chain_id = ethChainId
-  // The retired WF-count grace has no block equivalent, and core refuses the unknown key.
-  delete protocolConfig.key_rotation_min_grace_wf_txs
-  protocolConfig.key_rotation_min_grace_blocks ??= KEY_ROTATION_MIN_GRACE_BLOCKS
+  normalizeMinGrace(protocolConfig)
   protocolConfig.min_deposit_sats ??= 100_000_000
   protocolConfig.deposit_queue_transform ??= {}
   protocolConfig.deposit_queue_transform.l1_scroll_messenger_address = helpers.getContractAddress(

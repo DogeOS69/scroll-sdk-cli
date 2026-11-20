@@ -13,6 +13,8 @@ export const PROTOCOL_VERSION = 1
  * (about a day), as in the dogeos-core genesis seed.
  */
 export const KEY_ROTATION_MIN_GRACE_BLOCKS = 1440
+/** The largest RotateKey grace, in Dogecoin blocks, that core accepts (`KEY_ROTATION_MAX_GRACE_BLOCKS`). */
+export const KEY_ROTATION_MAX_GRACE_BLOCKS = 260_000
 
 /** Canonical genesis predeploys used by the contracts generator and Reth. */
 export const GENESIS_PREDEPLOYS = {

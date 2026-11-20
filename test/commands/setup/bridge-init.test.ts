@@ -265,6 +265,23 @@ describe('setup bridge-init protocol seed generation', () => {
     expect(result.protocol_config_seed.protocol_config).not.to.have.property('key_rotation_min_grace_wf_txs')
   })
 
+  const build = (protocolConfig: Record<string, unknown>) => () => buildEthereumDaProtocolSeedConfig(
+    {configToml, contractsConfig, existingProtocolSeedConfig: {protocol_config_seed: {protocol_config: protocolConfig}}, network: 'testnet'},
+    helpers
+  )
+
+  it('refuses a seed whose only grace is a non-default WF count, and an out-of-range block grace', () => {
+    expect(build({key_rotation_min_grace_wf_txs: 500})).to.throw('key_rotation_min_grace_wf_txs = 500')
+    // Once the operator states the block grace, the old key is dropped whatever it held.
+    expect(build({key_rotation_min_grace_blocks: 2880, key_rotation_min_grace_wf_txs: 500})().protocol_config_seed.protocol_config)
+      .to.include({key_rotation_min_grace_blocks: 2880}).and.not.have.property('key_rotation_min_grace_wf_txs')
+    expect(build({key_rotation_min_grace_blocks: 1})().protocol_config_seed.protocol_config.key_rotation_min_grace_blocks).to.equal(1)
+    expect(build({key_rotation_min_grace_blocks: 260_000})().protocol_config_seed.protocol_config.key_rotation_min_grace_blocks).to.equal(260_000)
+    for (const bad of [0, 260_001, 1.5, '1440']) {
+      expect(build({key_rotation_min_grace_blocks: bad})).to.throw('key_rotation_min_grace_blocks must be an integer in 1..260000')
+    }
+  })
+
   it('preserves explicit protocol config policy values', () => {
     const result = buildEthereumDaProtocolSeedConfig(
       {

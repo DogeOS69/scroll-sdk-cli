@@ -9,6 +9,13 @@ import {WP_VALUES_FILE} from './tso-signer-polls.js'
 /** The `/build` and `/propose` body: the export's request plus the operator's liveness outpoint. */
 export type RotateKeyIntentRequest = {liveness_outpoint: LivenessOutpoint} & RotateKeyRequest
 
+/** The WP's rotate-key intent states (`RotateKeyIntentStatus` in core). */
+export type RotateKeyIntentStatus = 'bound' | 'completed' | 'failed_terminal' | 'pending' | 'superseded'
+const INTENT_STATUSES: ReadonlySet<string> = new Set<RotateKeyIntentStatus>(['bound', 'completed', 'failed_terminal', 'pending', 'superseded'])
+export function isIntentStatus(status: unknown): status is RotateKeyIntentStatus {
+  return typeof status === 'string' && INTENT_STATUSES.has(status)
+}
+
 /** WP `GET /protocol-actions/rotate-key/intents/{key}` (dogeos-core #1535). */
 export interface RotateKeyIntent {
   activation_wf_tx_number: null | number
@@ -86,6 +93,9 @@ export class RotationCluster {
     if (!isOutpoint(intent?.payload?.liveness_outpoint)) throw new Error('WP rotate-key intent has no valid payload.liveness_outpoint')
     // A WP from before the deposit cutoff height lacks these; never read that as a different rotation.
     if (!Number.isSafeInteger(intent.payload.grace_blocks) || !(intent.deposit_cutoff_height === null || Number.isSafeInteger(intent.deposit_cutoff_height))) throw new Error('WP rotate-key intent has no payload.grace_blocks or deposit_cutoff_height; deploy a WP that reports the deposit cutoff height')
+    if (!isIntentStatus(intent.status)) throw new Error(`WP rotate-key intent has status ${JSON.stringify(intent.status)}, which this CLI does not know; upgrade the CLI before acting on it`)
+    // The WP sets the height in the same update that binds the intent.
+    if (intent.status === 'bound' && intent.deposit_cutoff_height === null) throw new Error('WP rotate-key intent is bound but reports no deposit_cutoff_height')
     return intent
   }
 

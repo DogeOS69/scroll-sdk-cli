@@ -5,10 +5,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import type {RotateKeyIntent, RotationCluster} from './rotation-cluster.js'
+import type {RotateKeyIntent, RotateKeyIntentStatus, RotationCluster} from './rotation-cluster.js'
 import type {LivenessOutpoint, RotateKeyStatus, RotationExport} from './rotation-export.js'
 
 import {canonicalDogecoinNetwork} from './dogecoin-network.js'
+import {isIntentStatus} from './rotation-cluster.js'
 import {assertDeploymentIdentity, assertPredecessor, formatOutpoint, isOutpoint, pinnedCutoffHeight, rotationSigners} from './rotation-export.js'
 import {WP_VALUES_FILE, isFreshPoll, parseLastPolls} from './tso-signer-polls.js'
 
@@ -146,9 +147,10 @@ export async function checkOnline(cluster: RotationCluster, rotation: RotationEx
 
 // ---------------------------------------------------------------- send
 
-export const INTENT_EXIT_CODES: Record<string, number> = {bound: 2, completed: 0, failed_terminal: 1, pending: 2, superseded: 1}
-/** Intents the WP scheduler still drives toward signing. */
-const ACTIVE_INTENT_STATUSES = new Set(['bound', 'pending'])
+/** The WP's five intent states and the exit code `send` reports for each. */
+export const INTENT_EXIT_CODES: Readonly<Record<RotateKeyIntentStatus, number>> = {bound: 2, completed: 0, failed_terminal: 1, pending: 2, superseded: 1}
+/** Intents the WP scheduler still drives toward signing; the other states are terminal. */
+const ACTIVE_INTENT_STATUSES: ReadonlySet<string> = new Set<RotateKeyIntentStatus>(['bound', 'pending'])
 
 /** The bridge-funding marker a liveness funding transaction carries as its only, zero-value OP_RETURN. */
 export const BRIDGE_FUNDING_MARKER_HEX = `6a4901${'00'.repeat(72)}`
@@ -177,6 +179,7 @@ export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyI
   // An exact allowlist entry pins the bound cutoff; attestors with that pin refuse any other.
   // Before binding the WP has not fixed H, so a pin cannot have been read from it yet. A terminal
   // intent is past signing, so it is only reported.
+  if (!isIntentStatus(intent.status)) throw new Error(`The WP reports rotate-key intent status ${JSON.stringify(intent.status)}, which this CLI does not know; upgrade the CLI before acting on it`)
   const pinned = ACTIVE_INTENT_STATUSES.has(intent.status) ? pinnedCutoffHeight(rotation) : null
   if (pinned !== null && intent.deposit_cutoff_height === null) {
     throw new Error(`The export pins deposit cutoff height ${pinned}, but the intent is not bound yet; the WP fixes the cutoff only when it binds. Use a bare allowlist entry until then`)
@@ -213,7 +216,7 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
   if (intent) {
     // A pending or bound intent is driven by the WP scheduler; re-running only reports.
     assertIntentMatches(rotation, intent, livenessOutpoint)
-    return {exitCode: INTENT_EXIT_CODES[intent.status] ?? 1, intent, kind: 'existing'}
+    return {exitCode: INTENT_EXIT_CODES[intent.status as RotateKeyIntentStatus], intent, kind: 'existing'}
   }
 
   // The WP fixes the cutoff height only when the intent binds, so a new intent cannot carry a pin.
@@ -251,9 +254,18 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
   return {kind: 'proposed', response: response.body, status: response.status}
 }
 
+const TERMINAL_RETRY = 'Nothing was resubmitted; a retry needs a new proposal revision, so a new idempotency key.'
+const INTENT_NOTES: Readonly<Record<RotateKeyIntentStatus, string>> = {
+  bound: 'Already stored; the WP drives it. Nothing was resubmitted.',
+  completed: 'Already stored and completed. Nothing was resubmitted.',
+  failed_terminal: `Already stored and failed terminally. ${TERMINAL_RETRY}`,
+  pending: 'Already stored; the WP drives it. Nothing was resubmitted.',
+  superseded: `Already stored and superseded. ${TERMINAL_RETRY}`,
+}
+
 /** What `send` prints for an intent already stored: the intent and its liveness outpoint as `<txid>:<vout>`. */
 export function existingIntentReport(rotation: RotationExport, intent: RotateKeyIntent): Record<string, unknown> {
-  return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: formatOutpoint(intent.payload.liveness_outpoint), note: 'Already stored; the WP drives it. Nothing was resubmitted.'}
+  return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: formatOutpoint(intent.payload.liveness_outpoint), note: INTENT_NOTES[intent.status as RotateKeyIntentStatus]}
 }
 
 /** Sibling file of the export, e.g. `rotation-export.send.json`. */
