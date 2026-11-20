@@ -542,6 +542,14 @@ describe('bridge rotation send', () => {
     }
   })
 
+  it('reports a pin mismatch on a terminal intent, which may be why it failed', () => {
+    const pinned = validateRotationExport(EXACT_CUTOFF)
+    expect(existingIntentReport(pinned, atCutoff(5_501_300, 'failed_terminal')).pinMismatch).to.contain('pins deposit cutoff height 5501234').and.contain('bound 5501300')
+    expect(existingIntentReport(pinned, atCutoff(null, 'superseded')).pinMismatch).to.contain('never bound one')
+    expect(existingIntentReport(pinned, atCutoff(5_501_234, 'completed'))).not.to.have.property('pinMismatch')
+    expect(existingIntentReport(rotation, atCutoff(5_501_300, 'failed_terminal'))).not.to.have.property('pinMismatch')
+  })
+
   it('refuses an intent status it does not know instead of reading it as terminal', async () => {
     for (const state of ['retrying', 'constructor']) {
       const unknown = cluster(stored({}, state))

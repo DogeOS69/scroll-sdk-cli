@@ -177,8 +177,9 @@ export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyI
   }
 
   // An exact allowlist entry pins the bound cutoff; attestors with that pin refuse any other.
-  // Before binding the WP has not fixed H, so a pin cannot have been read from it yet. The WP no
-  // longer drives a terminal intent, so a pin cannot matter and it is only reported.
+  // A pending intent has no H the pin could have been read from: either it never bound, or lineage
+  // repair unbound it and the next binding may choose another H. The WP no longer drives a
+  // terminal intent, so it is only reported, with any pin mismatch (existingIntentReport).
   if (!isIntentStatus(intent.status)) throw new Error(`The WP reports rotate-key intent status ${JSON.stringify(intent.status)}, which this CLI does not know; upgrade the CLI before acting on it`)
   const pinned = ACTIVE_INTENT_STATUSES.has(intent.status) ? pinnedCutoffHeight(rotation) : null
   if (pinned !== null && (intent.status === 'pending' || intent.deposit_cutoff_height === null)) {
@@ -214,7 +215,8 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
   assertDeploymentIdentity(rotation, status)
   const intent = await cluster.wpIntent(rotation.wp_rotate_key_request.idempotency_key)
   if (intent) {
-    // A stored intent is never resubmitted: send reports it, or refuses an export that pins a cutoff it does not have.
+    // A stored intent is never resubmitted. send reports it, or refuses an export that differs from it
+    // (target, grace or outpoint) or pins a cutoff the active intent has not bound.
     assertIntentMatches(rotation, intent, livenessOutpoint)
     return {exitCode: INTENT_EXIT_CODES[intent.status], intent, kind: 'existing'}
   }
@@ -265,7 +267,12 @@ const INTENT_NOTES: Readonly<Record<RotateKeyIntentStatus, string>> = {
 
 /** What `send` prints for an intent already stored: the intent and its liveness outpoint as `<txid>:<vout>`. */
 export function existingIntentReport(rotation: RotationExport, intent: RotateKeyIntent): Record<string, unknown> {
-  return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: formatOutpoint(intent.payload.liveness_outpoint), note: INTENT_NOTES[intent.status]}
+  // Active intents with a mismatched pin were refused before this; a terminal one may have failed for it.
+  const pinned = pinnedCutoffHeight(rotation)
+  const pinMismatch = pinned !== null && intent.deposit_cutoff_height !== pinned
+    ? `The export pins deposit cutoff height ${pinned}, but the intent ${intent.deposit_cutoff_height === null ? 'never bound one' : `bound ${intent.deposit_cutoff_height}`}; attestors with the pinned entry would not have signed it`
+    : undefined
+  return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: formatOutpoint(intent.payload.liveness_outpoint), note: INTENT_NOTES[intent.status], ...(pinMismatch && {pinMismatch})}
 }
 
 /** Sibling file of the export, e.g. `rotation-export.send.json`. */

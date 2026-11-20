@@ -141,16 +141,17 @@ const RETIRED_MIN_GRACE_WF_TXS_DEFAULT = 300
 
 /**
  * Replace the retired WF-count `key_rotation_min_grace_wf_txs` with `key_rotation_min_grace_blocks`.
- * The WF count has no block equivalent, and core refuses the unknown key. Only its old default is
- * replaced, with a warning ({@link retiredMinGraceNotice}); any other value was a choice the
- * operator must restate in blocks.
+ * The WF count has no block equivalent, and core refuses the unknown key, so it is always dropped.
+ * With no block grace set, only its old default is replaced by the block default; any other value
+ * was a choice the operator must restate in blocks. The caller warns about the drop
+ * ({@link retiredMinGraceNotice}).
  */
 function normalizeMinGrace(protocolConfig: any): void {
   const retiredGrace = protocolConfig.key_rotation_min_grace_wf_txs
   if (retiredGrace !== undefined && retiredGrace !== RETIRED_MIN_GRACE_WF_TXS_DEFAULT && protocolConfig.key_rotation_min_grace_blocks === undefined) {
     throw new Error(
       `The protocol seed sets key_rotation_min_grace_wf_txs = ${String(retiredGrace)}, a WF-count grace core no longer reads. `
-        + 'Set key_rotation_min_grace_blocks (Dogecoin blocks) in the seed and remove the old key'
+        + 'Set key_rotation_min_grace_blocks (Dogecoin blocks) in the seed; the old key is then dropped'
     )
   }
 

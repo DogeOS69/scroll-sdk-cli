@@ -27,7 +27,7 @@ function isBlockHeight(value: unknown): boolean {
   return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 0xFF_FF_FF_FF
 }
 
-/** WP `GET /protocol-actions/rotate-key/intents/{key}` (dogeos-core #1535). */
+/** WP `GET /protocol-actions/rotate-key/intents/{key}` (dogeos-core #1535; deposit cutoff fields #1911). */
 export interface RotateKeyIntent {
   activation_wf_tx_number: null | number
   /** The bound deposit cutoff height; null until the intent binds. */

@@ -461,11 +461,14 @@ describe('setup bridge-init protocol seed retired grace warning', () => {
   })
 
   /** Run updateProtocolSeed on a seed file with the given protocol_config body. */
+  let jsonCtx: JsonOutputContext
+
   async function updateSeed(protocolConfigToml: string, json: boolean): Promise<string> {
     const seedFile = path.join(root, 'protocol_seed.toml')
     fs.writeFileSync(seedFile, `[protocol_config_seed.protocol_config]\n${protocolConfigToml}`)
     const command = Object.create(BridgeInitCommand.prototype)
-    command.jsonCtx = new JsonOutputContext('setup bridge-init', json)
+    jsonCtx = new JsonOutputContext('setup bridge-init', json)
+    command.jsonCtx = jsonCtx
     command.getRequiredTomlConfig = (file: string) => file.endsWith('config-contracts.toml')
       ? {L1_SCROLL_MESSENGER_PROXY_ADDR: '0x01', L2_DOGEOS_MESSENGER_PROXY_ADDR: '0x02', L2_MOAT_PROXY_ADDR: '0x03'}
       : {general: {CHAIN_ID_L2: 412_346}}
@@ -486,6 +489,9 @@ describe('setup bridge-init protocol seed retired grace warning', () => {
     expect(stderr.join('\n')).to.contain('key_rotation_min_grace_blocks is now 1440')
     expect(occurrences(stderr, 'key_rotation_min_grace_wf_txs = 300')).to.equal(1)
     expect(stdout).to.deep.equal([])
+    // And it still lands in the final JSON response when the command succeeds.
+    jsonCtx.success({})
+    expect(JSON.parse(stdout[0]).warnings[0]).to.contain('key_rotation_min_grace_wf_txs = 300')
   })
 
   it('prints the warning exactly once outside JSON mode', async () => {

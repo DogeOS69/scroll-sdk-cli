@@ -7,7 +7,7 @@ import {ONLINE_CHECK_LIMITS, besideExport, existingIntentReport, sendRotation} f
 
 export default class RotationSend extends Command {
   static args = rotationArgs
-  static description = 'Submit the rotation export to the WP once (POST /propose), or report the intent already stored under its idempotency key; --preview only builds (POST /build) and stores nothing'
+  static description = 'Submit the rotation export to the WP once (POST /propose), or report the intent already stored under its idempotency key; --preview only builds (POST /build) and stores nothing. A stored intent exits 0 when completed, 2 when pending or bound, and 1 when failed or superseded; any refusal, such as a pinned export before the intent binds, also exits 1 with an error'
   static examples = [
     '<%= config.bin %> <%= command.id %> ./rotation-export.json --dir ./deployment --liveness-outpoint <txid>:<vout> --preview',
     '<%= config.bin %> <%= command.id %> ./rotation-export.json --dir ./deployment --liveness-outpoint <txid>:<vout>',
