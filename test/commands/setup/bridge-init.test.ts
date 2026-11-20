@@ -433,35 +433,72 @@ describe('bridge genesis immutable image selection', () => {
   })
 })
 
-describe('setup bridge-init protocol seed retired grace warning', () => {
-  it('rewrites the seed and prints the warning at once in JSON mode, before any later step can fail', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'protocol-seed-grace-'))
-    const stderr: string[] = []
-    const originalError = console.error
-    console.error = (message?: unknown) => {stderr.push(String(message))}
-    try {
-      const seedFile = path.join(root, 'protocol_seed.toml')
-      fs.writeFileSync(seedFile, '[protocol_config_seed.protocol_config]\nkey_rotation_min_grace_wf_txs = 300\n')
-      const command = Object.create(BridgeInitCommand.prototype)
-      command.jsonCtx = new JsonOutputContext('setup bridge-init', true)
-      command.getRequiredTomlConfig = (file: string) => file.endsWith('config-contracts.toml')
-        ? {L1_SCROLL_MESSENGER_PROXY_ADDR: '0x01', L2_DOGEOS_MESSENGER_PROXY_ADDR: '0x02', L2_MOAT_PROXY_ADDR: '0x03'}
-        : {general: {CHAIN_ID_L2: 412_346}}
-      command.getRequiredDogeConfig = () => ({config: {ethereumDa: {chainId: 32_382}}, path: 'doge-config.toml'})
-      command.getRequiredInitialSystemSigner = () => '0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3'
-      command.selectProtocolSeedInitialSystemSigner = async () => '0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3'
-      command.getRequiredContractAddress = (config: Record<string, string>, name: string) => config[name]
-      command.getRequiredNumberValue = (source: Record<string, number>, key: string) => source[key]
-      command.resolveDogecoinChainId = () => 111_111
+/** How often `text` appears in the printed lines. */
+function occurrences(lines: string[], text: string): number {
+  return lines.join('\n').split(text).length - 1
+}
 
-      await command.updateProtocolSeed(root, 'testnet', 'config.toml')
-      const written = toml.parse(fs.readFileSync(seedFile, 'utf8')) as {protocol_config_seed: {protocol_config: Record<string, unknown>}}
-      expect(written.protocol_config_seed.protocol_config).to.include({key_rotation_min_grace_blocks: 1440}).and.not.have.property('key_rotation_min_grace_wf_txs')
-      expect(stderr.join('\n')).to.contain('key_rotation_min_grace_wf_txs = 300').and.contain('key_rotation_min_grace_blocks is now 1440')
-    } finally {
-      console.error = originalError
-      fs.rmSync(root, {force: true, recursive: true})
-    }
+describe('setup bridge-init protocol seed retired grace warning', () => {
+  const SIGNER = '0x11ef0dA913139F4EDa64792e2EaC011DD9B8D1B3'
+  let root: string
+  let stderr: string[]
+  let stdout: string[]
+  const originalError = console.error
+  const originalLog = console.log
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'protocol-seed-grace-'))
+    stderr = []
+    stdout = []
+    console.error = (message?: unknown) => {stderr.push(String(message))}
+    console.log = (message?: unknown) => {stdout.push(String(message))}
+  })
+
+  afterEach(() => {
+    console.error = originalError
+    console.log = originalLog
+    fs.rmSync(root, {force: true, recursive: true})
+  })
+
+  /** Run updateProtocolSeed on a seed file with the given protocol_config body. */
+  async function updateSeed(protocolConfigToml: string, json: boolean): Promise<string> {
+    const seedFile = path.join(root, 'protocol_seed.toml')
+    fs.writeFileSync(seedFile, `[protocol_config_seed.protocol_config]\n${protocolConfigToml}`)
+    const command = Object.create(BridgeInitCommand.prototype)
+    command.jsonCtx = new JsonOutputContext('setup bridge-init', json)
+    command.getRequiredTomlConfig = (file: string) => file.endsWith('config-contracts.toml')
+      ? {L1_SCROLL_MESSENGER_PROXY_ADDR: '0x01', L2_DOGEOS_MESSENGER_PROXY_ADDR: '0x02', L2_MOAT_PROXY_ADDR: '0x03'}
+      : {general: {CHAIN_ID_L2: 412_346}}
+    command.getRequiredDogeConfig = () => ({config: {ethereumDa: {chainId: 32_382}}, path: 'doge-config.toml'})
+    command.getRequiredInitialSystemSigner = () => SIGNER
+    command.selectProtocolSeedInitialSystemSigner = async () => SIGNER
+    command.getRequiredContractAddress = (config: Record<string, string>, name: string) => config[name]
+    command.getRequiredNumberValue = (source: Record<string, number>, key: string) => source[key]
+    command.resolveDogecoinChainId = () => 111_111
+    await command.updateProtocolSeed(root, 'testnet', 'config.toml')
+    return seedFile
+  }
+
+  it('rewrites the seed and prints the warning at once in JSON mode, before any later step can fail', async () => {
+    const seedFile = await updateSeed('key_rotation_min_grace_wf_txs = 300\n', true)
+    const written = toml.parse(fs.readFileSync(seedFile, 'utf8')) as {protocol_config_seed: {protocol_config: Record<string, unknown>}}
+    expect(written.protocol_config_seed.protocol_config).to.include({key_rotation_min_grace_blocks: 1440}).and.not.have.property('key_rotation_min_grace_wf_txs')
+    expect(stderr.join('\n')).to.contain('key_rotation_min_grace_blocks is now 1440')
+    expect(occurrences(stderr, 'key_rotation_min_grace_wf_txs = 300')).to.equal(1)
+    expect(stdout).to.deep.equal([])
+  })
+
+  it('prints the warning exactly once outside JSON mode', async () => {
+    await updateSeed('key_rotation_min_grace_wf_txs = 300\n', false)
+    expect(occurrences([...stderr, ...stdout], 'key_rotation_min_grace_wf_txs = 300')).to.equal(1)
+  })
+
+  it('leaves a seed with a non-default WF-count grace byte for byte unchanged when it refuses it', async () => {
+    const seedFile = path.join(root, 'protocol_seed.toml')
+    let error: unknown
+    try {await updateSeed('key_rotation_min_grace_wf_txs = 500\n', false)} catch (error_) {error = error_}
+    expect((error as Error).message).to.contain('key_rotation_min_grace_wf_txs = 500')
+    expect(fs.readFileSync(seedFile, 'utf8')).to.equal('[protocol_config_seed.protocol_config]\nkey_rotation_min_grace_wf_txs = 500\n')
   })
 })
 

@@ -3,6 +3,7 @@ import {execFileSync, spawn} from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import {KEY_ROTATION_MAX_GRACE_BLOCKS} from '../constants/deployment.js'
 import {type LivenessOutpoint, type RotateKeyRequest, type RotateKeyStatus, isOutpoint} from './rotation-export.js'
 import {WP_VALUES_FILE} from './tso-signer-polls.js'
 
@@ -14,6 +15,11 @@ export type RotateKeyIntentStatus = 'bound' | 'completed' | 'failed_terminal' | 
 const INTENT_STATUSES: ReadonlySet<string> = new Set<RotateKeyIntentStatus>(['bound', 'completed', 'failed_terminal', 'pending', 'superseded'])
 export function isIntentStatus(status: unknown): status is RotateKeyIntentStatus {
   return typeof status === 'string' && INTENT_STATUSES.has(status)
+}
+
+/** A grace the WP stores: 1..=260,000 Dogecoin blocks. */
+function isStatedGrace(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= KEY_ROTATION_MAX_GRACE_BLOCKS
 }
 
 /** A Dogecoin block height as core stores it: a u32. */
@@ -97,7 +103,7 @@ export class RotationCluster {
     const intent = wpJson(response, 'intent') as RotateKeyIntent
     if (!isOutpoint(intent?.payload?.liveness_outpoint)) throw new Error('WP rotate-key intent has no valid payload.liveness_outpoint')
     // A WP from before the deposit cutoff height lacks these; never read that as a different rotation.
-    if (!Number.isSafeInteger(intent.payload.grace_blocks) || !(intent.deposit_cutoff_height === null || isBlockHeight(intent.deposit_cutoff_height))) throw new Error('WP rotate-key intent has no payload.grace_blocks or deposit_cutoff_height; deploy a WP that reports the deposit cutoff height')
+    if (!isStatedGrace(intent.payload.grace_blocks) || !(intent.deposit_cutoff_height === null || isBlockHeight(intent.deposit_cutoff_height))) throw new Error('WP rotate-key intent has no payload.grace_blocks or deposit_cutoff_height; deploy a WP that reports the deposit cutoff height')
     if (!isIntentStatus(intent.status)) throw new Error(`WP rotate-key intent has status ${JSON.stringify(intent.status)}, which this CLI does not know; upgrade the CLI before acting on it`)
     // The WP sets the height in the same update that binds the intent.
     if (intent.status === 'bound' && intent.deposit_cutoff_height === null) throw new Error('WP rotate-key intent is bound but reports no deposit_cutoff_height')

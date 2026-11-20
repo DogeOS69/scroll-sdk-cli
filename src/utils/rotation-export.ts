@@ -18,11 +18,16 @@ export interface RotationExport {
   allowlist_entry: string
   current: {key_hash: string; redeem_script_hex: string; signers: RotationExportSigner[]; threshold: number}
   /**
-   * The deposit cutoff height the bound intent committed, which an exact `allowlist_entry` pins.
-   * Null until the intent binds: the WP fixes it only then, from the live tip.
+   * The deposit cutoff height the portal recorded for the bound intent. It is required, and must
+   * match, only when `allowlist_entry` has a `:<H>` suffix. With a bare entry it is informational:
+   * signers ignore it and `send` does not compare it with the WP.
    */
   deposit_cutoff_height: null | number
-  /** Dogecoin blocks past the deposit scan anchor. Null asks the WP for the committed minimum. */
+  /**
+   * The requested grace in Dogecoin blocks; null asks for the committed minimum. At binding the WP
+   * sets H = max(live tip, deposit scan anchor) + max(grace, minimum) + a 120-block margin, clamped
+   * to the cutoff window.
+   */
   grace_blocks: null | number
   network: 'mainnet' | 'regtest' | 'testnet'
   proposal: string

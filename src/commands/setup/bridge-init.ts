@@ -142,13 +142,14 @@ const RETIRED_MIN_GRACE_WF_TXS_DEFAULT = 300
 /**
  * Replace the retired WF-count `key_rotation_min_grace_wf_txs` with `key_rotation_min_grace_blocks`.
  * The WF count has no block equivalent, and core refuses the unknown key. Only its old default is
- * replaced silently; any other value was a choice the operator must restate in blocks.
+ * replaced, with a warning ({@link retiredMinGraceNotice}); any other value was a choice the
+ * operator must restate in blocks.
  */
 function normalizeMinGrace(protocolConfig: any): void {
   const retiredGrace = protocolConfig.key_rotation_min_grace_wf_txs
   if (retiredGrace !== undefined && retiredGrace !== RETIRED_MIN_GRACE_WF_TXS_DEFAULT && protocolConfig.key_rotation_min_grace_blocks === undefined) {
     throw new Error(
-      `The protocol seed sets key_rotation_min_grace_wf_txs = ${retiredGrace}, a WF-count grace core no longer reads. `
+      `The protocol seed sets key_rotation_min_grace_wf_txs = ${String(retiredGrace)}, a WF-count grace core no longer reads. `
         + 'Set key_rotation_min_grace_blocks (Dogecoin blocks) in the seed and remove the old key'
     )
   }
@@ -157,7 +158,7 @@ function normalizeMinGrace(protocolConfig: any): void {
   protocolConfig.key_rotation_min_grace_blocks ??= KEY_ROTATION_MIN_GRACE_BLOCKS
   const minGrace = protocolConfig.key_rotation_min_grace_blocks
   if (!Number.isSafeInteger(minGrace) || minGrace < 1 || minGrace > KEY_ROTATION_MAX_GRACE_BLOCKS) {
-    throw new Error(`key_rotation_min_grace_blocks must be an integer in 1..${KEY_ROTATION_MAX_GRACE_BLOCKS}, got ${JSON.stringify(minGrace)}`)
+    throw new Error(`key_rotation_min_grace_blocks must be an integer in 1..${KEY_ROTATION_MAX_GRACE_BLOCKS}, got ${String(minGrace)}`)
   }
 }
 
@@ -167,8 +168,8 @@ function normalizeMinGrace(protocolConfig: any): void {
  */
 export function retiredMinGraceNotice(retiredGrace: unknown, minGraceBlocks: unknown): string | undefined {
   if (retiredGrace === undefined) return undefined
-  return `Dropped the retired key_rotation_min_grace_wf_txs = ${JSON.stringify(retiredGrace)} (a WF count) from the protocol seed; `
-    + `key_rotation_min_grace_blocks is now ${JSON.stringify(minGraceBlocks)} Dogecoin blocks. Edit it in the seed to choose another grace`
+  return `Dropped the retired key_rotation_min_grace_wf_txs = ${String(retiredGrace)} (a WF count) from the protocol seed; `
+    + `key_rotation_min_grace_blocks is now ${String(minGraceBlocks)} Dogecoin blocks. Edit it in the seed to choose another grace`
 }
 
 /**

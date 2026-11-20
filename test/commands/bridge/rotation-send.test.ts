@@ -176,6 +176,7 @@ describe('bridge rotation send command', () => {
       [{deposit_cutoff_height: undefined}, 'deploy a WP that reports the deposit cutoff height'],
       [{deposit_cutoff_height: '20201'}, 'deploy a WP that reports the deposit cutoff height'],
       [{deposit_cutoff_height: -1}, 'deploy a WP that reports the deposit cutoff height'],
+      [{payload: {...payload, grace_blocks: 0}}, 'deploy a WP that reports the deposit cutoff height'],
       [{deposit_cutoff_height: 2 ** 32}, 'deploy a WP that reports the deposit cutoff height'],
       [{deposit_cutoff_height: null}, 'bound but reports no deposit_cutoff_height'],
       [{status: 'retrying'}, 'upgrade the CLI'],

@@ -150,7 +150,7 @@ export async function checkOnline(cluster: RotationCluster, rotation: RotationEx
 /** The WP's five intent states and the exit code `send` reports for each. */
 export const INTENT_EXIT_CODES: Readonly<Record<RotateKeyIntentStatus, number>> = {bound: 2, completed: 0, failed_terminal: 1, pending: 2, superseded: 1}
 /** Intents the WP scheduler still drives toward signing; the other states are terminal. */
-const ACTIVE_INTENT_STATUSES: ReadonlySet<string> = new Set<RotateKeyIntentStatus>(['bound', 'pending'])
+const ACTIVE_INTENT_STATUSES: ReadonlySet<RotateKeyIntentStatus> = new Set<RotateKeyIntentStatus>(['bound', 'pending'])
 
 /** The bridge-funding marker a liveness funding transaction carries as its only, zero-value OP_RETURN. */
 export const BRIDGE_FUNDING_MARKER_HEX = `6a4901${'00'.repeat(72)}`
@@ -177,8 +177,8 @@ export function assertIntentMatches(rotation: RotationExport, intent: RotateKeyI
   }
 
   // An exact allowlist entry pins the bound cutoff; attestors with that pin refuse any other.
-  // Before binding the WP has not fixed H, so a pin cannot have been read from it yet. A terminal
-  // intent is past signing, so it is only reported.
+  // Before binding the WP has not fixed H, so a pin cannot have been read from it yet. The WP no
+  // longer drives a terminal intent, so a pin cannot matter and it is only reported.
   if (!isIntentStatus(intent.status)) throw new Error(`The WP reports rotate-key intent status ${JSON.stringify(intent.status)}, which this CLI does not know; upgrade the CLI before acting on it`)
   const pinned = ACTIVE_INTENT_STATUSES.has(intent.status) ? pinnedCutoffHeight(rotation) : null
   if (pinned !== null && (intent.status === 'pending' || intent.deposit_cutoff_height === null)) {
@@ -214,7 +214,7 @@ export async function sendRotation(options: SendOptions): Promise<SendOutcome> {
   assertDeploymentIdentity(rotation, status)
   const intent = await cluster.wpIntent(rotation.wp_rotate_key_request.idempotency_key)
   if (intent) {
-    // A pending or bound intent is driven by the WP scheduler; re-running only reports.
+    // A stored intent is never resubmitted: send reports it, or refuses an export that pins a cutoff it does not have.
     assertIntentMatches(rotation, intent, livenessOutpoint)
     return {exitCode: INTENT_EXIT_CODES[intent.status], intent, kind: 'existing'}
   }

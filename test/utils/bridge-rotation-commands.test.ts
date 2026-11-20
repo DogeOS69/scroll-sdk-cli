@@ -590,6 +590,8 @@ describe('bridge rotation send', () => {
     error = undefined
     try {await sendPinned(atCutoff(null, 'pending'))} catch (error_) {error = error_}
     expect((error as Error).message).to.contain('not bound yet').and.contain('bare allowlist entry')
+    // A bound intent without a height cannot be checked against the pin, so it is refused too.
+    expect(() => assertIntentMatches(validateRotationExport(EXACT_CUTOFF), atCutoff(null, 'bound'))).to.throw('not bound yet')
     // Pending is refused even if the WP were to report the pinned height early.
     error = undefined
     try {await sendPinned(atCutoff(5_501_234, 'pending'))} catch (error_) {error = error_}
