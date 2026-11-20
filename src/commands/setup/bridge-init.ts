@@ -140,11 +140,11 @@ export function resolveBridgeTimelock(
 const RETIRED_MIN_GRACE_WF_TXS_DEFAULT = 300
 
 /**
- * Replace the retired WF-count `key_rotation_min_grace_wf_txs` with `key_rotation_min_grace_blocks`.
- * The WF count has no block equivalent, and core refuses the unknown key, so it is always dropped.
- * With no block grace set, only its old default is replaced by the block default; any other value
- * was a choice the operator must restate in blocks. The caller warns about the drop
- * ({@link retiredMinGraceNotice}).
+ * Replace the retired WF-count `key_rotation_min_grace_wf_txs` with `key_rotation_min_grace_blocks`,
+ * which defaults to 1440 and must be in 1..260000. The WF count has no block equivalent, and core
+ * refuses the unknown key. It is dropped when it holds the old default 300 or a block grace is
+ * already set; any other value throws, so the operator restates it in blocks. The warning about the
+ * drop comes from {@link updateEthereumDaProtocolSeedConfig}.
  */
 function normalizeMinGrace(protocolConfig: any): void {
   const retiredGrace = protocolConfig.key_rotation_min_grace_wf_txs

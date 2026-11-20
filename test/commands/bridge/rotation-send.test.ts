@@ -190,11 +190,11 @@ describe('bridge rotation send command', () => {
     const base = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'running', payload, signed_txid: null, status: 'bound'}
     const cases: [Record<string, unknown>, string][] = [
       [{deposit_cutoff_height: undefined}, 'deploy a WP that reports the deposit cutoff height'],
-      [{deposit_cutoff_height: '20201'}, 'deploy a WP that reports the deposit cutoff height'],
-      [{deposit_cutoff_height: -1}, 'deploy a WP that reports the deposit cutoff height'],
-      [{payload: {...payload, grace_blocks: 0}}, 'deploy a WP that reports the deposit cutoff height'],
-      [{payload: {...payload, grace_blocks: 260_001}}, 'deploy a WP that reports the deposit cutoff height'],
-      [{deposit_cutoff_height: 2 ** 32}, 'deploy a WP that reports the deposit cutoff height'],
+      [{deposit_cutoff_height: '20201'}, 'outside the range core allows'],
+      [{deposit_cutoff_height: -1}, 'outside the range core allows'],
+      [{payload: {...payload, grace_blocks: 0}}, 'outside the range core allows'],
+      [{payload: {...payload, grace_blocks: 260_001}}, 'outside the range core allows'],
+      [{deposit_cutoff_height: 2 ** 32}, 'outside the range core allows'],
       [{deposit_cutoff_height: null}, 'bound but reports no deposit_cutoff_height'],
       [{status: 'retrying'}, 'upgrade the CLI'],
     ]
