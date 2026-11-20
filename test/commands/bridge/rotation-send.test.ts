@@ -208,6 +208,35 @@ describe('bridge rotation send command', () => {
     expect(posts).to.deep.equal([])
   })
 
+  it('accepts WP intents and status at the edges of the grace and height ranges', async () => {
+    for (const [grace, height] of [[1, 0], [260_000, 4_294_967_295]]) {
+      const edge = structuredClone(GOLDEN)
+      edge.grace_blocks = grace
+      edge.wp_rotate_key_request.grace_blocks = grace
+      fs.writeFileSync(exportFile, JSON.stringify(edge))
+      status.min_grace_blocks = grace
+      const payload = {grace_blocks: grace, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
+      intent = {activation_wf_tx_number: 41, deposit_cutoff_height: height, job_status: 'running', payload, signed_txid: null, status: 'bound'}
+      logs = []
+      await run()
+      expect(process.exitCode, `grace ${grace}, height ${height}`).to.equal(2)
+      expect(JSON.parse(logs[0]).intent.deposit_cutoff_height).to.equal(height)
+    }
+
+    expect(posts).to.deep.equal([])
+  })
+
+  it('refuses a WP status min_grace_blocks outside 1..260000', async () => {
+    for (const bad of [0, 260_001, null, 1.5]) {
+      ;(status as Record<string, unknown>).min_grace_blocks = bad
+      let error: unknown
+      try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_}
+      expect((error as Error | undefined)?.message, String(bad)).to.contain('status min_grace_blocks is').and.contain('outside the range core allows')
+    }
+
+    expect(posts).to.deep.equal([])
+  })
+
   it('accepts a WP status that reports a deprecating key with its cutoff height', async () => {
     // After a rotation the WP reports the old key for the whole grace window.
     ;(status as Record<string, unknown>).deprecating = {deposit_cutoff_height: 20_201, key_hash: GOLDEN.current.key_hash}
@@ -220,11 +249,15 @@ describe('bridge rotation send command', () => {
   })
 
   it('refuses a WP status whose deprecating key has no valid deposit cutoff height', async () => {
-    for (const deprecating of [{key_hash: GOLDEN.current.key_hash}, {deposit_cutoff_height: -1, key_hash: GOLDEN.current.key_hash}]) {
+    const cases: [Record<string, unknown>, string][] = [
+      [{key_hash: GOLDEN.current.key_hash}, 'deprecating.deposit_cutoff_height is missing'],
+      [{deposit_cutoff_height: -1, key_hash: GOLDEN.current.key_hash}, 'deprecating.deposit_cutoff_height is -1, outside the range'],
+    ]
+    for (const [deprecating, message] of cases) {
       ;(status as Record<string, unknown>).deprecating = deprecating
       let error: unknown
       try {await run('--liveness-outpoint', `${TXID}:0`)} catch (error_) {error = error_} finally {status.deprecating = null}
-      expect((error as Error).message).to.contain('deprecating.deposit_cutoff_height')
+      expect((error as Error | undefined)?.message).to.contain(message)
     }
 
     expect(posts).to.deep.equal([])

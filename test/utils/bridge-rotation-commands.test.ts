@@ -148,6 +148,12 @@ describe('bridge rotation export: null grace, regtest and kept signers', () => {
     expect(() => validateRotationExport(zero)).to.throw('1..260000')
   })
 
+  it('says a missing grace_blocks is missing, not out of range', () => {
+    const missing = golden() as Record<string, any>
+    delete missing.grace_blocks
+    expect(() => validateRotationExport(missing)).to.throw('grace_blocks is missing')
+  })
+
   it('names the retired grace_wf_txs instead of reporting a bad grace_blocks', () => {
     for (const where of ['export', 'wp_rotate_key_request'] as const) {
       const retired = golden() as Record<string, any>
@@ -546,6 +552,7 @@ describe('bridge rotation send', () => {
     const pinned = validateRotationExport(EXACT_CUTOFF)
     expect(existingIntentReport(pinned, atCutoff(5_501_300, 'failed_terminal')).pinMismatch).to.contain('pins deposit cutoff height 5501234').and.contain('bound 5501300')
     expect(existingIntentReport(pinned, atCutoff(null, 'superseded')).pinMismatch).to.contain('never bound one')
+    expect(existingIntentReport(pinned, atCutoff(5_501_300, 'completed')).pinMismatch).to.contain('completed with the bound height').and.not.contain('refused to sign')
     expect(existingIntentReport(pinned, atCutoff(5_501_234, 'completed'))).not.to.have.property('pinMismatch')
     expect(existingIntentReport(rotation, atCutoff(5_501_300, 'failed_terminal'))).not.to.have.property('pinMismatch')
   })

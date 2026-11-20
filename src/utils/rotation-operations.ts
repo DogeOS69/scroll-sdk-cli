@@ -267,10 +267,14 @@ const INTENT_NOTES: Readonly<Record<RotateKeyIntentStatus, string>> = {
 
 /** What `send` prints for an intent already stored: the intent and its liveness outpoint as `<txid>:<vout>`. */
 export function existingIntentReport(rotation: RotationExport, intent: RotateKeyIntent): Record<string, unknown> {
-  // Active intents with a mismatched pin were refused before this; a terminal one may have failed for it.
+  // Active intents with a mismatched pin were refused before this; a failed one may have failed for it.
   const pinned = pinnedCutoffHeight(rotation)
+  const bound = intent.deposit_cutoff_height === null ? 'never bound one' : `bound ${intent.deposit_cutoff_height}`
+  const consequence = intent.status === 'completed'
+    ? 'it completed with the bound height, so this export does not describe the signed rotation'
+    : 'attestors with the pinned entry would have refused to sign it'
   const pinMismatch = pinned !== null && intent.deposit_cutoff_height !== pinned
-    ? `The export pins deposit cutoff height ${pinned}, but the intent ${intent.deposit_cutoff_height === null ? 'never bound one' : `bound ${intent.deposit_cutoff_height}`}; attestors with the pinned entry would not have signed it`
+    ? `The export pins deposit cutoff height ${pinned}, but the intent ${bound}; ${consequence}`
     : undefined
   return {idempotencyKey: rotation.wp_rotate_key_request.idempotency_key, intent, livenessOutpoint: formatOutpoint(intent.payload.liveness_outpoint), note: INTENT_NOTES[intent.status], ...(pinMismatch && {pinMismatch})}
 }

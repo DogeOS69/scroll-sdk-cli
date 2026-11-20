@@ -13,7 +13,10 @@ export interface RotationExportSigner {label: string; public_key: string; transp
 export interface RotateKeyRequest {grace_blocks: null | number; idempotency_key: string; new_bridge_redeem_script_hex: string; new_key_hash: string}
 /** A Dogecoin outpoint as the WP takes it: `0x` and the txid in RPC (display) byte order. */
 export interface LivenessOutpoint {txid: string; vout: number}
-/** `dogeos/rotation-export/v1`, as the governance portal writes it. Unknown fields are ignored. */
+/**
+ * `dogeos/rotation-export/v1` with the deposit cutoff fields (`grace_blocks`, `deposit_cutoff_height`).
+ * Unknown fields are ignored, except the retired `grace_wf_txs`, which is refused.
+ */
 export interface RotationExport {
   allowlist_entry: string
   current: {key_hash: string; redeem_script_hex: string; signers: RotationExportSigner[]; threshold: number}
@@ -67,6 +70,7 @@ const SCRIPT = /^(?:[\da-f]{2})+$/
 /** The WP's range for a stated grace, in Dogecoin blocks: 1..=260,000. */
 function grace(value: unknown, label: string): null | number {
   if (value === null) return null
+  if (value === undefined) throw new Error(`Rotation export: ${label} is missing; re-export the proposal with grace_blocks and deposit_cutoff_height`)
   if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > MAX_ROTATION_GRACE) throw new Error(`Rotation export: ${label} must be null or an integer in 1..${MAX_ROTATION_GRACE}`)
   return value as number
 }
