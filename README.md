@@ -343,7 +343,7 @@ _See code: [src/commands/bridge/rotation/register.ts](https://github.com/dogeos6
 
 ## `scrollsdk bridge rotation send EXPORT`
 
-Submit the rotation export to the WP once (POST /propose), or report the intent already stored under its idempotency key; --preview only builds (POST /build) and stores nothing. A stored intent exits 0 when completed, 2 when pending or bound, and 1 when failed or superseded; any refusal, such as a pinned export before the intent binds, also exits 1 with an error
+Submit the rotation export to the WP once (POST /propose), or report the intent already stored under its idempotency key; --preview only builds (POST /build) and stores nothing. A stored intent exits 0 when completed, 2 when pending or bound, and 1 when failed or superseded (see pinMismatch); any refusal, such as a pinned export before the intent binds, also exits 1 with an error. A usage error, such as an unknown flag, exits 2 as in every oclif command, so read the printed intent before treating 2 as in progress
 
 ```
 USAGE
@@ -366,8 +366,9 @@ FLAGS
 DESCRIPTION
   Submit the rotation export to the WP once (POST /propose), or report the intent already stored under its idempotency
   key; --preview only builds (POST /build) and stores nothing. A stored intent exits 0 when completed, 2 when pending or
-  bound, and 1 when failed or superseded; any refusal, such as a pinned export before the intent binds, also exits 1
-  with an error
+  bound, and 1 when failed or superseded (see pinMismatch); any refusal, such as a pinned export before the intent
+  binds, also exits 1 with an error. A usage error, such as an unknown flag, exits 2 as in every oclif command, so read
+  the printed intent before treating 2 as in progress
 
 EXAMPLES
   $ scrollsdk bridge rotation send ./rotation-export.json --dir ./deployment --liveness-outpoint <txid>:<vout> --preview

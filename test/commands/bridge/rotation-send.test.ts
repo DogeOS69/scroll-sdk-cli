@@ -126,6 +126,22 @@ describe('bridge rotation send command', () => {
     expect(posts).to.deep.equal([])
   })
 
+  it('exits 2 for a bound intent, and 1 with pinMismatch for a failed intent the export pins differently', async () => {
+    const payload = {grace_blocks: EXACT_CUTOFF.wp_rotate_key_request.grace_blocks, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}, new_bridge_redeem_script_hex: EXACT_CUTOFF.target.redeem_script_hex, new_key_hash: EXACT_CUTOFF.target.key_hash}
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'running', payload, signed_txid: null, status: 'bound'}
+    await run()
+    expect(process.exitCode).to.equal(2)
+    expect(JSON.parse(logs[0])).to.not.have.property('pinMismatch')
+
+    fs.writeFileSync(exportFile, JSON.stringify(EXACT_CUTOFF))
+    intent = {activation_wf_tx_number: 41, deposit_cutoff_height: EXACT_CUTOFF.deposit_cutoff_height + 1, job_status: 'failed', payload, signed_txid: null, status: 'failed_terminal'}
+    logs = []
+    await run()
+    expect(process.exitCode).to.equal(1)
+    expect(JSON.parse(logs[0]).pinMismatch).to.contain(`pins deposit cutoff height ${EXACT_CUTOFF.deposit_cutoff_height}`)
+    expect(posts).to.deep.equal([])
+  })
+
   it('reports an existing intent with its stored outpoint, and refuses an intent response without one', async () => {
     const payload = {grace_blocks: GOLDEN.wp_rotate_key_request.grace_blocks, new_bridge_redeem_script_hex: GOLDEN.target.redeem_script_hex, new_key_hash: GOLDEN.target.key_hash}
     intent = {activation_wf_tx_number: 41, deposit_cutoff_height: 20_201, job_status: 'completed', payload: {...payload, liveness_outpoint: {txid: `0x${TXID}`, vout: 2}}, signed_txid: 'aa'.repeat(32), status: 'completed'}
