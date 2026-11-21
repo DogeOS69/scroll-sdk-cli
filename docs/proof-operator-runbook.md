@@ -31,7 +31,7 @@ The fields are independent:
 | `generation` | `mock`: Coordinator produces proofs internally; `real`: production Workers produce proofs. |
 | `enforcement` | Whether failed, missing, or mock proof outcomes are observed and allowed, or rejected. |
 
-Use these postures in order:
+On testnet and regtest, use these postures in order:
 
 | Stage | `mode` | `generation` | `enforcement` |
 |---|---|---|---|
@@ -54,9 +54,16 @@ fallback; enforce continues to reject mock material.
 The preserve-existing-bridge upgrade and its release-material prerequisite are
 recorded in the devnet environment's runbook.
 
-`observe` is a staging posture and Attestation Signer refuses it on Dogecoin
-mainnet. A mainnet deployment must not activate proof-conditioned signing until
-real generation is healthy and all enforcement/policy surfaces use `enforce`.
+`observe` is a staging posture for testnet and regtest. On Dogecoin mainnet
+dogeos-core refuses observe enforcement and mock generation in every mode: the
+Withdrawal Processor does not start with `enforcement = "observe"`, the topology
+compiler does not render observe or mock, and Attestation Signer refuses
+observe. Because the CLI accepts enforcement only with active real proving, a
+mainnet deployment runs `active`/`real`/`enforce` from its first start, with no
+disabled or observe stage. `setup doge-config --proof-topology` selects that
+posture on mainnet, and `prep-charts` refuses a mainnet deployment with any other
+posture or without a proof topology. Real proving, the signer deployment kits
+and the policy evidence must therefore be ready before the first mainnet start.
 
 Changing a switch means editing the one high-level value, rerunning
 `scrollsdk setup prep-charts`, reviewing the generated diff, and applying the

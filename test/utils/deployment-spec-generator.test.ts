@@ -904,6 +904,31 @@ describe('deployment-spec-generator', () => {
         error => error.message.includes('proofSystem has been removed'),
       )).to.equal(true);
     });
+
+    it('accepts only active real enforcing proof topology on Dogecoin mainnet', () => {
+      const mainnetProblems = (proofTopology?: DeploymentSpec['proofTopology']) => {
+        const spec = createMinimalSpec({proofCoordinator: {s3AuthMode: 'ambient'}, proofTopology});
+        spec.dogecoin.network = 'mainnet';
+        const result = validateDeploymentSpec(spec);
+        return {
+          errors: result.errors.filter(entry => entry.message.includes('Dogecoin mainnet')),
+          warnings: result.warnings.filter(entry => entry.message.includes('Dogecoin mainnet')),
+        };
+      };
+
+      for (const mode of ['disabled', 'mock'] as const) {
+        const {errors} = mainnetProblems(createProofTopology(mode));
+        expect(errors, mode).to.have.length(1);
+        expect(errors[0]).to.include({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', path: 'proofTopology'});
+        expect(errors[0].message).to.include('dogeos-core refuses observe enforcement and mock generation on mainnet');
+      }
+
+      expect(mainnetProblems(createProofTopology('production'))).to.deep.equal({errors: [], warnings: []});
+      expect(mainnetProblems()).to.satisfy(({errors, warnings}: {errors: unknown[]; warnings: unknown[]}) => errors.length === 0 && warnings.length === 1);
+
+      const testnet = createMinimalSpec({proofTopology: createProofTopology()});
+      expect(validateDeploymentSpec(testnet).errors.filter(error => error.message.includes('Dogecoin mainnet'))).to.have.length(0);
+    });
   });
 
   describe('generateConfigToml', () => {

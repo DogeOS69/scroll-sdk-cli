@@ -5,6 +5,7 @@ import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {validateExistingAlb} from './existing-alb.js'
 import {existingNlbEntries} from './existing-nlb.js'
 import {defaultEthereumExplorer, frontendExplorerUrlProblem} from './frontend-explorer-urls.js'
+import {isDogecoinMainnet, mainnetProofPostureProblem} from './mainnet-proof-posture.js'
 import {validateMonitoring} from './monitoring-slack.js'
 import {validateNetworkPolicyIntent} from './network-policy-preflight.js'
 import {specDstackController} from './spec-kubernetes-target.js'
@@ -1240,6 +1241,9 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
       errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proof enforcement requires active real proving', path: 'proofTopology.enforcement'})
     }
 
+    const mainnetProblem = mainnetProofPostureProblem(spec.dogecoin?.network, proofTopology)
+    if (mainnetProblem) errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: mainnetProblem, path: 'proofTopology'})
+
     if (!proofTopology.active) {
       errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'proofTopology.active must be staged even while disabled', path: 'proofTopology.active'})
     }
@@ -1255,6 +1259,14 @@ export function validateDeploymentSpec(rawSpec: DeploymentSpec): ValidationResul
     if (proofTopology.mode === 'active' && (!proofCoordinator || proofCoordinator.enabled === false)) {
       errors.push({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', message: 'active proof topology requires proofCoordinator infrastructure', path: 'proofCoordinator'})
     }
+  }
+
+  if (!proofTopology && isDogecoinMainnet(spec.dogecoin?.network)) {
+    warnings.push({
+      message: 'Dogecoin mainnet needs a proof topology with mode=active, generation=real and enforcement=enforce; prep-charts refuses a mainnet deployment without one',
+      path: 'proofTopology',
+      suggestion: 'Stage proofTopology here, or run scrollsdk setup doge-config --proof-topology before prep-charts.',
+    })
   }
 
   if (!proofTopology && proofCoordinator && proofCoordinator.enabled !== false) {
