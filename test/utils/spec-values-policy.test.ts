@@ -103,6 +103,21 @@ describe('spec values runtime policy across entry points', () => {
       spec.dogecoin.network = network
       spec.contracts.feeVaultDogeRecipientAddress = new bitcore.PrivateKey(null, network === 'mainnet' ? bitcore.Networks.livenet : bitcore.Networks.testnet).toAddress().toString()
       spec.bridge.cubesigner = {mode: 'production_verifier_key_policy'}
+      // Mainnet accepts only active/real/enforce, so the fixture's disabled/mock/observe topology is replaced.
+      if (network === 'mainnet') {
+        spec.proofTopology = {
+          ...spec.proofTopology!,
+          active: {...spec.proofTopology!.active!, profile: 'real_scroll_prover', workerLaunch: 'external'},
+          deployment: {...spec.proofTopology!.deployment, productionWorkerImage: {digest: `sha256:${'b'.repeat(64)}`, repository: 'example.invalid/prover-worker'}},
+          enforcement: 'enforce',
+          generation: 'real',
+          mode: 'active',
+        }
+
+        spec.proofCoordinator = {s3AuthMode: 'ambient'}
+        spec.proofArtifacts = {s3: {bucket: 'fixture-proof-artifacts', keyPrefix: 'proofs', region: 'us-east-2'}}
+      }
+
       const directory = path.join(root, 'deployment')
       await run('--bootstrap', directory, '--sdk-dir', sdk)
       expect(fs.existsSync(path.join(directory, 'config.toml'))).to.equal(true)

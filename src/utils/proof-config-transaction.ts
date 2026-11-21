@@ -16,6 +16,7 @@ import {cubesignerLiveEvidenceProjection, cubesignerPolicyEnvironment, resolveCu
 import {withoutPendingDeploymentKit} from './deployment-kit-record.js'
 import {dogeConfigToToml} from './doge-config.js'
 import {resolveDogecoinServiceRpcUrl} from './kubernetes-endpoints.js'
+import {assertMainnetProofPosture} from './mainnet-proof-posture.js'
 import {readProofAwsConfig} from './proof-aws-config.js'
 import {proofArtifactS3Endpoint} from './proof-aws-provisioner.js'
 import {validateProofDeploymentContract} from './proof-deployment-contract.js'
@@ -117,7 +118,7 @@ export function prepareProofConfig(options: {
 
     const configPath = path.join(stage, '.data/doge-config.toml')
     const config = toml.parse(fs.readFileSync(proofRegularFile(configPath), 'utf8')) as unknown as DogeConfig
-    if (config.network === 'mainnet' && request.enforcement !== 'enforce') throw new Error('Mainnet requires proof enforcement')
+    assertMainnetProofPosture(config.network, request)
     const runtime = {...request.runtime, observeRealProofDeadlineMs: request.runtime?.observeRealProofDeadlineMs ?? config.proof_topology?.observeRealProofDeadlineMs}
     if (!Number.isSafeInteger(runtime.observeRealProofDeadlineMs) || runtime.observeRealProofDeadlineMs! <= 0) throw new Error('runtime.observeRealProofDeadlineMs must be a positive safe integer, supplied in the request or existing proof topology')
     // Receipt dependencies stay in the deployment input root and are hash-checked

@@ -154,6 +154,11 @@ describe('PR #937 two-switch proof adapter', () => {
     expect(resolveProofIntent({deploymentDir: root, dogeConfigPath: configPath, required: true})?.intent)
       .to.deep.equal({enforcement: 'observe', generation: 'mock', mode: 'active'})
 
+    // dogeos-core refuses observe and mock on mainnet; the same intent fails there before compilation.
+    fs.writeFileSync(configPath, toml.stringify({network: 'mainnet', proof_topology: stagedRealProfile} as unknown as toml.JsonMap))
+    expect(() => resolveProofIntent({deploymentDir: root, dogeConfigPath: configPath, required: true}))
+      .to.throw('Dogecoin mainnet requires proof mode=active, generation=real and enforcement=enforce (configured active/mock/observe)')
+
     fs.writeFileSync(configPath, toml.stringify({
       network: 'testnet',
       proof_topology: {
