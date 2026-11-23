@@ -56,7 +56,13 @@ function inspectRethRpcNamespaces(valuesDir: string, result: DeploymentPreflight
   }
 }
 
+interface SubmitterValues {
+  configMaps?: {env?: {data?: Record<string, unknown>}}
+  env?: unknown
+}
+
 const DEFAULT_MAX_WITHDRAWALS_PER_DA_TX = 4500n
+const SUBMITTER_WITHDRAWAL_LIMIT_ENV = 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX'
 
 /** A parsed non-negative integer (TOML gives a bigint above 2^53), or undefined for any other value. */
 function parsedUnsigned(value: unknown): bigint | undefined {
@@ -72,13 +78,15 @@ function parsedUnsigned(value: unknown): bigint | undefined {
  */
 function resolveSubmitterWithdrawalLimit(envValue: unknown, result: DeploymentPreflight): bigint | undefined {
   if (envValue === undefined) return DEFAULT_MAX_WITHDRAWALS_PER_DA_TX
-  // YAML may have read an unquoted env value as a number. The submitter does
-  // not trim an env value, so neither does this check.
+  // YAML may have read an unquoted env value as a number. Like the
+  // submitter's env parser (figment), accept surrounding whitespace and a
+  // leading plus sign.
+  const digits = typeof envValue === 'string' ? /^\s*\+?(\d+)\s*$/.exec(envValue)?.[1] : undefined
   const limit = typeof envValue === 'string'
-    ? (/^\d+$/.test(envValue) ? BigInt(envValue) : undefined)
+    ? (digits === undefined ? undefined : BigInt(digits))
     : parsedUnsigned(envValue)
   if (limit === undefined || limit === 0n) {
-    result.blockers.push('eth-da-submitter DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX must be a positive integer')
+    result.blockers.push(`eth-da-submitter ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} must be a positive integer`)
     return undefined
   }
 
@@ -115,8 +123,18 @@ function inspectWpWithdrawalWarnCount(wp: toml.JsonMap, withdrawalLimit: bigint,
 }
 
 /** Compare both withdrawal alert levels with the submitter limit, once it resolves. */
-function inspectWithdrawalLimits(root: string, submitterEnvValue: unknown, wp: toml.JsonMap, result: DeploymentPreflight): void {
-  const withdrawalLimit = resolveSubmitterWithdrawalLimit(submitterEnvValue, result)
+function inspectWithdrawalLimits(root: string, values: SubmitterValues, wp: toml.JsonMap, result: DeploymentPreflight): void {
+  // A container env entry overrides the ConfigMap that envFrom loads, and the
+  // last of duplicate entries wins.
+  const entry = Array.isArray(values.env)
+    ? [...(values.env as Array<{name?: unknown; value?: unknown} | null>)].reverse().find(item => item?.name === SUBMITTER_WITHDRAWAL_LIMIT_ENV)
+    : undefined
+  if (entry && entry.value === undefined) {
+    result.warnings.push(`eth-da-submitter env ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} has no literal value, so its withdrawal limit is not compared with the scroll-monitor and WP alert levels`)
+    return
+  }
+
+  const withdrawalLimit = resolveSubmitterWithdrawalLimit(entry ? entry.value : values.configMaps?.env?.data?.[SUBMITTER_WITHDRAWAL_LIMIT_ENV], result)
   if (withdrawalLimit === undefined) return
   inspectWithdrawalAlertLimit(path.join(root, 'values'), withdrawalLimit, result)
   inspectWpWithdrawalWarnCount(wp, withdrawalLimit, result)
@@ -163,14 +181,14 @@ export function inspectDeployment(options: {
   if (inbox && (!Array.isArray(inbox.expected_batchers) || inbox.expected_batchers.length === 0)) result.blockers.push('WP ethereum_da.inbox_worker.expected_batchers must be nonempty, even when disabled; regenerate from the submitter signer via prep-charts')
 
   const genesis = JSON.parse(fs.readFileSync(path.join(root, '.data/genesis.json'), 'utf8')) as {gasLimit?: number | string}
-  const values = yaml.load(fs.readFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), 'utf8')) as {configMaps?: {env?: {data?: Record<string, unknown>}}}
+  const values = yaml.load(fs.readFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), 'utf8')) as SubmitterValues
   const limit = values.configMaps?.env?.data?.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK
   // An omitted chart/env override is resolved by the current native default.
   const chunkGas = Number(limit ?? 20_000_000)
   const blockGas = Number(genesis.gasLimit)
   if (!Number.isSafeInteger(blockGas) || blockGas <= 0 || !Number.isSafeInteger(chunkGas) || chunkGas <= blockGas) result.blockers.push('eth-da-submitter max_l2_gas_per_chunk must be strictly greater than the genesis gasLimit; set a valid explicit limit')
 
-  inspectWithdrawalLimits(root, values.configMaps?.env?.data?.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX, wp, result)
+  inspectWithdrawalLimits(root, values, wp, result)
   inspectRethRpcNamespaces(path.join(root, 'values'), result)
 
   result.dstack.configured = Boolean(config.dstackController && config.dstackController.enabled !== false)
