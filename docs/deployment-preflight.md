@@ -97,16 +97,21 @@ It also reads the Reth values for their HTTP and WebSocket API namespaces. The
 public RPC values may enable only `eth`, `net`, `web3` and `rpc`; any other
 namespace there is an error. Sequencer and bootnode values get a warning for
 anything beyond those four, and the internal RPC values for anything beyond
-those and `debug`, which proof materialization and explorer tracing call. A
-second warning reports a `withdrawalBoundAlerts.maxWithdrawalsPerDaTx` in the
-scroll-monitor values that differs from the eth-da-submitter
-`max_withdrawals_per_da_tx`; an omitted value counts as 4500 on both sides.
-A third warning reports a Withdrawal Processor `pending_withdrawal_warn_count`
-that differs from the same submitter limit. The WP exports it as the alert
-level for its pending-withdrawal count, and an omitted value is its default,
-4500. Only Withdrawal Processor images from the dogeos-core release that adds
-the key accept it, so set it only with such an image. A value that is not a
-non-negative integer is an error.
+those and `debug`, which proof materialization and explorer tracing call.
+
+Two more warnings compare withdrawal alert levels with the eth-da-submitter
+`max_withdrawals_per_da_tx`. In Kubernetes the submitter reads that limit only
+from `DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX` in its values,
+and an omitted value is its default, 4500. A limit that is not a positive
+integer is an error, and neither comparison runs.
+
+- A `withdrawalBoundAlerts.maxWithdrawalsPerDaTx` in the scroll-monitor values
+  that differs from the limit. An omitted value counts as 4500.
+- A Withdrawal Processor `pending_withdrawal_warn_count` that differs from the
+  limit. The WP exports it as the alert level for its pending-withdrawal count,
+  and an omitted value is its default, 4500. Only Withdrawal Processor images
+  from the dogeos-core release that adds the key accept it, so set it only with
+  such an image. A value that is not a non-negative integer is an error.
 
 Optional runtime probes are described below. Kubernetes operations are read-only;
 the signer and Reth probes create disposable local Docker containers.
