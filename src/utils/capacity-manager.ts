@@ -11,7 +11,7 @@ import type {ProofProgramPublicationV1} from '../types/proof-program-publication
 import type {ProofWorkerImageCheckV1} from '../types/proof-worker-image-check.js'
 import type {ProverWorkerContractV1} from './proof-topology-compiler.js'
 
-import {applyCapacityDocument, readCapacityDocument} from './capacity-document.js'
+import {CAPACITY_PROVIDERS, applyCapacityDocument, readCapacityDocument} from './capacity-document.js'
 import {capacityConnectionUrl, validateCapacityConnection} from './capacity-manager-network.js'
 import {workerLaunch} from './capacity-manager-worker.js'
 import {DSTACK_CONTROLLER_IMAGE} from './dstack-controller-values.js'
@@ -94,11 +94,11 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
   const runtimeEstimates = {bridgeStateSeconds: 1800, l2RangeAggregationSeconds: 1800, scrollBatchSeconds: 300, scrollChunkSeconds: 60, ...input.runtimeEstimates}
   for (const value of Object.values(runtimeEstimates)) if (!Number.isSafeInteger(value) || value < 1) throw new Error('capacityManager.runtimeEstimates must contain positive integer seconds')
   const fleet = {action: input.fleet?.action ?? 'create', cpus: input.fleet?.cpus ?? 16, diskSizeGiB: input.fleet?.diskSizeGiB ?? 200, idleDurationSeconds: input.fleet?.idleDurationSeconds ?? 600, memoryGiB: input.fleet?.memoryGiB ?? (input.gpu === 'L40S' ? 128 : 64)}
-  const maxPricePerHourUsd = input.maxPricePerHourUsd ?? (input.provider === 'aws' ? 1.5 : 0.8)
+  const maxPricePerHourUsd = input.maxPricePerHourUsd ?? (input.provider === 'vastai' ? 0.8 : 1.5)
   // The estimate must cover every fleet a worker can run in; see the check below.
   const workerBudgetUsdPerHour = input.workerBudgetUsdPerHour ?? Math.max(maxPricePerHourUsd, input.fallback?.maxPricePerHourUsd ?? 0)
-  const config = {...input, fleet, instanceTypes: input.instanceTypes ?? [], maxHourlyCostUsd: input.maxHourlyCostUsd ?? (input.provider === 'aws' ? 3 : 1.6), maxPricePerHourUsd, maxWorkers: input.maxWorkers ?? 2, minReliability: input.minReliability ?? 0.95, minWorkers: input.minWorkers ?? 1, runtimeEstimates, scaleDownTtlSeconds: input.scaleDownTtlSeconds ?? 300, steadyStateFloor: input.steadyStateFloor ?? 1, targetDrainSeconds: input.targetDrainSeconds ?? 600, workerBudgetUsdPerHour, workerIdPrefix: input.workerIdPrefix ?? `cm-${digest(spec.metadata.name).slice(0, 16)}`}
-  if (!['aws', 'vastai'].includes(config.provider) || !Object.hasOwn(architectures, config.gpu)) throw new Error('Unsupported capacityManager provider/GPU')
+  const config = {...input, fleet, instanceTypes: input.instanceTypes ?? [], maxHourlyCostUsd: input.maxHourlyCostUsd ?? (input.provider === 'vastai' ? 1.6 : 3), maxPricePerHourUsd, maxWorkers: input.maxWorkers ?? 2, minReliability: input.minReliability ?? 0.95, minWorkers: input.minWorkers ?? 1, runtimeEstimates, scaleDownTtlSeconds: input.scaleDownTtlSeconds ?? 300, steadyStateFloor: input.steadyStateFloor ?? 1, targetDrainSeconds: input.targetDrainSeconds ?? 600, workerBudgetUsdPerHour, workerIdPrefix: input.workerIdPrefix ?? `cm-${digest(spec.metadata.name).slice(0, 16)}`}
+  if (!CAPACITY_PROVIDERS.includes(config.provider) || !Object.hasOwn(architectures, config.gpu)) throw new Error('Unsupported capacityManager provider/GPU')
   if (!config.image?.repository || !/^[\w./:-]+$/.test(config.image.repository) || !/^sha256:[\da-f]{64}$/.test(config.image.digest)) throw new Error('capacityManager.image must select a published immutable capacity-manager binary image')
   if (!/^[a-z][\da-z-]{0,29}$/.test(config.workerIdPrefix)) throw new Error('capacityManager.workerIdPrefix must be a lowercase resource prefix, at most 30 characters')
   for (const [key, values] of Object.entries({fleets: config.fleets, instanceTypes: config.instanceTypes, project: [config.project], regions: config.regions})) {
@@ -135,7 +135,7 @@ export function resolveCapacityManager(spec: DeploymentSpec): {fleet: Required<N
   if (config.maxHourlyCostUsd < config.workerBudgetUsdPerHour * config.minWorkers) throw new Error('capacityManager hourly budget cannot fund its minimum workers at the per-worker budget estimate')
   if (config.fallback) {
     const {fallback} = config
-    if (!['aws', 'vastai'].includes(fallback.provider)) throw new Error('capacityManager.fallback.provider must be aws or vastai')
+    if (!CAPACITY_PROVIDERS.includes(fallback.provider)) throw new Error('capacityManager.fallback.provider must be aws, gcp or vastai')
     if (config.fleets.includes(fallback.fleet)) throw new Error('Fallback fleet must be distinct from primary fleets')
     if (!Number.isFinite(fallback.maxPricePerHourUsd) || fallback.maxPricePerHourUsd <= 0) throw new Error('capacityManager.fallback.maxPricePerHourUsd must be positive and finite')
     // Core keeps one per-worker cost estimate for both fleets.

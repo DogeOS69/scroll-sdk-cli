@@ -1243,7 +1243,17 @@ For Vast, retain `providers: [vastai]` and `vastaiApiKeyEnv: VASTAI_API_KEY` in
 `capacityManager.minReliability` defaults to `0.95` and accepts values from `0.95`
 to `1`. It is projected to Vast fleet `backend_options.min_reliability`, with
 `offer_order: price`. Explicitly carry over any stricter reliability floor when
-switching from bounded Workers. AWS fleets do not receive Vast backend options.
+switching from bounded Workers. AWS and GCP fleets do not receive Vast backend options.
+
+For GCP, set `providers: [gcp]` and `gcpServiceAccountFile` in
+`preparation.dstack`; `gcpProjectId` selects a project other than the key's own.
+The key is imported into the private credential state and the
+`dstack-gcp-credentials` Secret, which the generated controller values mount.
+`capacityManager.regions` are GCP regions such as `us-central1`. The backend
+keeps dstack's defaults: public instance addresses in the `default` VPC network,
+with a dstack firewall rule that allows SSH from any address to its instances.
+The service account's permissions and the GPU quota are managed outside the CLI.
+This needs capacity-manager chart 0.1.10 or later.
 For AWS, import the provider with explicit existing VPCs; the controller role and its permissions are prepared externally.
 See [AWS preparation and manual prerequisites](dstack-aws-preparation.md) for
 create/reuse behavior, operator permissions and network checks:

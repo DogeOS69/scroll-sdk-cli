@@ -11,7 +11,7 @@ import {localPath} from './preparation-io.js'
 
 /** Runtime capacity of a prepared deployment, next to `values/`. */
 export const CAPACITY_DOCUMENT = 'capacity.yaml'
-export const CAPACITY_PROVIDERS = ['aws', 'vastai'] as const
+export const CAPACITY_PROVIDERS = ['aws', 'gcp', 'vastai'] as const
 export type CapacityProvider = typeof CAPACITY_PROVIDERS[number]
 
 type Mapping = Record<string, unknown>
@@ -36,7 +36,7 @@ function price(value: unknown, label: string): void {
 
 function validatePool(value: unknown, label: string, document: CapacityDocument): CapacityPool {
   const pool = mapping(value, label, ['fleet', 'gpu', 'instanceTypes', 'maxPricePerHourUsd', 'minReliability', 'provider', 'regions'], ['fleet', 'gpu', 'maxPricePerHourUsd', 'provider', 'regions']) as unknown as CapacityPool
-  if (!CAPACITY_PROVIDERS.includes(pool.provider)) throw new Error(`${label}.provider must be aws or vastai`)
+  if (!CAPACITY_PROVIDERS.includes(pool.provider)) throw new Error(`${label}.provider must be aws, gcp or vastai`)
   if (!Array.isArray(pool.regions) || pool.regions.length === 0 || pool.regions.some(region => typeof region !== 'string')) throw new Error(`${label}.regions must list at least one region`)
   if (!document.providers[pool.provider]) throw new Error(`${label}.provider ${pool.provider} is not configured under providers`)
   if (pool.provider === 'aws') {
@@ -64,6 +64,12 @@ export function validateCapacityDocument(input: unknown): CapacityDocument {
   if (providers.aws !== undefined) {
     mapping(providers.aws, 'providers.aws', ['iamInstanceProfile', 'publicIps', 'vpcIds'], ['vpcIds'])
     validateDstackAwsBackend(document.providers.aws)
+  }
+
+  if (providers.gcp !== undefined) {
+    const gcp = mapping(providers.gcp, 'providers.gcp', ['projectId', 'serviceAccountFile'])
+    if (gcp.projectId !== undefined && (typeof gcp.projectId !== 'string' || !/^[a-z][\d.:a-z-]{0,61}[\da-z]$/.test(gcp.projectId))) throw new Error('providers.gcp.projectId must be a GCP project ID')
+    if (gcp.serviceAccountFile !== undefined && (typeof gcp.serviceAccountFile !== 'string' || !gcp.serviceAccountFile.trim())) throw new Error('providers.gcp.serviceAccountFile must be the path of a service-account JSON key')
   }
 
   const primary = validatePool(document.primary, 'primary', document)
@@ -99,7 +105,7 @@ export function writeCapacityDocument(root: string, document: CapacityDocument):
   validateCapacityDocument(document)
   const ordered = Object.fromEntries(DOCUMENT_ORDER.filter(key => key in document).map(key => [key, document[key as keyof CapacityDocument]]))
   fs.writeFileSync(localPath(root, CAPACITY_DOCUMENT), '# Runtime GPU capacity. Edit, then run scrollsdk capacity deploy (docs/capacity.md).\n'
-    + '# Holds environment variable names only; credential values stay in the private environment file.\n'
+    + '# Holds environment variable names and file paths only; credential values stay in private files.\n'
     + yaml.dump(ordered, {lineWidth: -1, noRefs: true}), {mode: 0o644})
 }
 

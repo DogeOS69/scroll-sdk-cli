@@ -15,12 +15,14 @@ import {CAPACITY_DOCUMENT, CAPACITY_PROVIDERS, applyCapacityDocument, readCapaci
 import {CAPACITY_MANAGER_VALUES, type CapacityPreparationOptions, capacityIntentSpec, capacitySpec, inCapacityDocumentTerms, parseCapacityInput, prepareCapacityManager, resolveCapacityManager} from './capacity-manager.js'
 import {savedDeploymentEnvFile} from './deployment-paths.js'
 import {DSTACK_SERVER_CONFIG_CHECKSUM_ANNOTATION, dumpDstackControllerValues} from './dstack-controller-values.js'
-import {DSTACK_CREDENTIALS_FILE, checkPrivatePath, configureDstackCredentialRefs, dstackSecretRefs, dstackServerConfigChecksum, readDstackCredentials, renderDstackSecrets, validateDstackCredentials, writeDstackCredentialSecrets, writePrivateFile} from './dstack-credentials.js'
+import {DSTACK_CREDENTIALS_FILE, checkPrivatePath, configureDstackCredentialRefs, dstackSecretRefs, dstackServerConfigChecksum, readDstackCredentials, renderDstackSecrets, validateDstackCredentials, validateGcpServiceAccount, writeDstackCredentialSecrets, writePrivateFile} from './dstack-credentials.js'
 import {readDstackControllerConfig} from './dstack-database.js'
 import {loadPreparationEnv, localPath} from './preparation-io.js'
 import {validateProofDeploymentContract} from './proof-deployment-contract.js'
 
 const CONTROLLER_VALUES = 'values/dstack-controller-production.yaml'
+/** The controller configuration recorded at preparation; `setup push-secrets` and `setup gen-secrets` read it. */
+export const RECORDED_CONTROLLER_CONFIG = '.data/doge-config.toml'
 
 export interface CapacityRenderOptions {
   /** Checks a new or changed Vast.ai API key with Vast.ai before anything is written. */
@@ -132,6 +134,8 @@ export interface CapacityRenderResult {
   addedProviders: string[]
   /** Against the previously rendered capacity-manager values. */
   fleets: FleetChanges
+  /** The GCP service-account key differs from the one in the controller credential state. */
+  gcpKeyRotated: boolean
   /** The Vast.ai key differs from the one in the controller credential state. */
   keyRotated: boolean
   providers: string[]
@@ -146,11 +150,11 @@ function readYaml(root: string, file: string): any {
 }
 
 /**
- * The controller configuration for credential references, with its AWS identity taken from the controller values:
- * after preparation those values belong to the operator, so a day-2 identity change is made there.
+ * The controller configuration for credential references, with its AWS identity and its credential mounts taken
+ * from the controller values: after preparation those values belong to the operator, so a day-2 change is made there.
  */
-function readControllerContext(root: string) {
-  const recorded = readDstackControllerConfig(localPath(root, '.data/doge-config.toml'))
+export function readControllerContext(root: string): {controller: DstackControllerConfig; state: DstackCredentials; values: any} {
+  const recorded = readDstackControllerConfig(localPath(root, RECORDED_CONTROLLER_CONFIG))
   if (!recorded || recorded.enabled === false) throw new Error('This deployment has no enabled dstack controller')
   const state = readDstackCredentials(root)
   if (!state) throw new Error(`Missing ${DSTACK_CREDENTIALS_FILE}; restore the controller credential state from backup`)
@@ -160,7 +164,42 @@ function readControllerContext(root: string) {
   else controller.defaultCredentialsEnabled = values.defaultCredentialsEnabled
   if (values.serviceAccount === undefined) delete controller.serviceAccount
   else controller.serviceAccount = values.serviceAccount
+  if (values.credentialSecrets === undefined) delete controller.credentialSecrets
+  else controller.credentialSecrets = values.credentialSecrets
   return {controller, state, values}
+}
+
+/** The controller reads the service-account key from a mounted Secret; the operator's values must mount it. */
+function checkGcpMount(values: any, next: DstackCredentials): void {
+  if (!next.providers.includes('gcp')) return
+  const mounts = (values.credentialSecrets ?? []) as Array<{name?: string; secretName?: string}>
+  if (!Array.isArray(mounts) || !mounts.some(mount => mount?.name === 'gcp' && mount.secretName)) {
+    throw new Error(`A GCP provider needs its service-account Secret mounted: add credentialSecrets [{name: gcp, secretName: dstack-gcp-credentials}] to ${CONTROLLER_VALUES} (see docs/capacity.md, GCP providers)`)
+  }
+}
+
+/**
+ * Saves the GCP Secret mount in the recorded controller configuration, as `setup dstack-config` does at
+ * preparation, so that the other commands that upload or generate the dstack Secrets find the same reference.
+ * Only the `gcp` entry is added, replaced or removed; the file is left alone when that entry is already right.
+ */
+function recordGcpMount(root: string, controller: DstackControllerConfig): void {
+  const file = localPath(root, RECORDED_CONTROLLER_CONFIG)
+  const document = parseCapacityInput(fs.readFileSync(file, 'utf8'), RECORDED_CONTROLLER_CONFIG, toml.parse) as any
+  const recorded: Array<{name: string; secretName: string}> = document.dstackController.credentialSecrets ?? []
+  const mount = controller.credentialSecrets?.find(ref => ref.name === 'gcp')
+  if (recorded.find(ref => ref.name === 'gcp')?.secretName === mount?.secretName) return
+  document.dstackController.credentialSecrets = [...recorded.filter(ref => ref.name !== 'gcp'), ...(mount ? [{name: mount.name, secretName: mount.secretName}] : [])]
+  writePrivateFile(file, toml.stringify(document))
+}
+
+/** The service-account JSON key at `file`, absolute or relative to the deployment directory. Its content is never printed. */
+function readGcpServiceAccount(root: string, file: string): string {
+  const target = path.resolve(root, file)
+  if (!fs.existsSync(target) || !fs.statSync(target).isFile()) throw new Error('providers.gcp.serviceAccountFile must name an existing service-account JSON key file')
+  const content = fs.readFileSync(target, 'utf8')
+  validateGcpServiceAccount(content)
+  return content
 }
 
 /** Workload credentials must not fall back to the node's instance role (as generated by prep-charts). */
@@ -177,10 +216,10 @@ function checkAwsIdentity(values: any, next: DstackCredentials, podIdentity: boo
   }
 }
 
-/** The controller credential state with capacity.yaml's providers; GCP is not managed here and stays as it is. */
-function nextCredentials(state: DstackCredentials, document: CapacityDocument, env: NodeJS.ProcessEnv): DstackCredentials {
+/** The controller credential state with capacity.yaml's providers. */
+function nextCredentials(root: string, state: DstackCredentials, document: CapacityDocument, env: NodeJS.ProcessEnv): DstackCredentials {
   const next: DstackCredentials = structuredClone(state)
-  next.providers = [...CAPACITY_PROVIDERS.filter(provider => document.providers[provider]), ...state.providers.filter(provider => provider === 'gcp')] as DstackProvider[]
+  next.providers = CAPACITY_PROVIDERS.filter(provider => document.providers[provider]) as DstackProvider[]
   if (document.providers.aws) next.aws = structuredClone(document.providers.aws)
   else delete next.aws
   if (document.providers.vastai) {
@@ -189,6 +228,13 @@ function nextCredentials(state: DstackCredentials, document: CapacityDocument, e
     if (!key || /\s/.test(key)) throw new Error(`Set ${name} to the Vast.ai API key in the deployment environment file, then retry`)
     next.vastaiApiKey = key
   } else delete next.vastaiApiKey
+  if (document.providers.gcp) {
+    const {projectId, serviceAccountFile} = document.providers.gcp
+    // Without a file the imported key stays; with one it is imported or rotated.
+    const serviceAccount = serviceAccountFile ? readGcpServiceAccount(root, serviceAccountFile) : state.gcp?.serviceAccount
+    if (!serviceAccount) throw new Error('providers.gcp needs serviceAccountFile: this deployment has no imported GCP service-account key')
+    next.gcp = {projectId: projectId ?? validateGcpServiceAccount(serviceAccount), serviceAccount}
+  } else delete next.gcp
   validateDstackCredentials(next)
   return next
 }
@@ -222,8 +268,9 @@ async function renderCapacityDocument(root: string, options: CapacityRenderOptio
   }
 
   // Validate everything before writing anything.
-  const next = nextCredentials(state, document, env)
+  const next = nextCredentials(root, state, document, env)
   checkAwsIdentity(values, next, controller.awsWorkloadIdentity === 'pod-identity')
+  checkGcpMount(values, next)
   const refs = configureDstackCredentialRefs(controller, next)
   const spec = capacitySpec(root)
   resolveCapacityManager(spec)
@@ -240,6 +287,7 @@ async function renderCapacityDocument(root: string, options: CapacityRenderOptio
   await (options.prepare ?? ((directory, preparation) => prepareCapacityManager(directory, contractRoot => validateProofDeploymentContract(contractRoot, undefined, {componentValues: false}), undefined, preparation)))(root, {fleetUpdate: true})
   if (!isDeepStrictEqual(next, state)) writePrivateFile(localPath(root, DSTACK_CREDENTIALS_FILE), JSON.stringify(next, null, 2) + '\n')
   writeDstackCredentialSecrets(refs, root)
+  recordGcpMount(root, refs)
   const checksum = dstackServerConfigChecksum(next)
   const serverConfigChanged = values.podAnnotations?.[DSTACK_SERVER_CONFIG_CHECKSUM_ANNOTATION] !== checksum
   if (serverConfigChanged) {
@@ -250,6 +298,7 @@ async function renderCapacityDocument(root: string, options: CapacityRenderOptio
   return {
     addedProviders: next.providers.filter(provider => !state.providers.includes(provider)),
     fleets: fleetChanges(previousFleets, readYaml(root, CAPACITY_MANAGER_VALUES).initialization?.fleets ?? []),
+    gcpKeyRotated: Boolean(next.gcp && state.gcp && next.gcp.serviceAccount !== state.gcp.serviceAccount),
     keyRotated,
     providers: next.providers,
     removedProviders: state.providers.filter(provider => !next.providers.includes(provider)),
@@ -315,7 +364,8 @@ export function createCapacityDocument(rootInput: string): {document: CapacityDo
   const providers: CapacityDocument['providers'] = {}
   if (state.providers.includes('vastai')) providers.vastai = {apiKeyEnv: intent.preparation?.dstack?.vastaiApiKeyEnv ?? 'VASTAI_API_KEY'}
   if (state.providers.includes('aws')) providers.aws = structuredClone(state.aws!)
-  if (state.providers.includes('gcp')) warnings.push('The GCP backend is not managed by capacity.yaml and stays as it is')
+  // The key itself stays in the private credential state.
+  if (state.providers.includes('gcp')) providers.gcp = {projectId: state.gcp!.projectId}
   const family = policy.families ?? {}
   const document: CapacityDocument = {
     apiVersion: CAPACITY_API_VERSION, ...(fallback ? {fallback} : {}), primary, project: state.project, providers,

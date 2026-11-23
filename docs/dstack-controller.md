@@ -6,7 +6,7 @@ dstack `0.21.5`). This manages the controller's deployment configuration;
 Worker fleet/task generation and GPU provisioning are separate operations.
 
 Core Capacity Manager owns GPU lifecycle after service installation. Declare
-`capacityManager.provider` (`aws` or `vastai`), its project/fleets and explicit
+`capacityManager.provider` (`aws`, `gcp` or `vastai`), its project/fleets and explicit
 cost/capacity limits in the spec. Use the [AWS preparation workflow](dstack-aws-preparation.md)
 for controller provisioning permissions. Configuration preparation does not rent
 GPUs; the installed Core manager submits runs and mints per-worker credentials.
