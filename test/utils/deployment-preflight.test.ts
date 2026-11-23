@@ -71,7 +71,8 @@ describe('current deployment preflight', () => {
   })
 
   const mismatch = () => inspectDeployment(options()).warnings.filter(warning => warning.includes('withdrawalBoundAlerts'))
-  const submitterWithEnv = (env: unknown[]) => fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({configMaps: {env: {data: {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: '15000000', DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: '4500'}}}, env}))
+  const submitterLimit = (limit: unknown) => fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({configMaps: {env: {data: {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: '15000000', DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: limit}}}}))
+  const submitterWithEnv = (env: unknown) => fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({configMaps: {env: {data: {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: '15000000', DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: '4500'}}}, env}))
   const limits = () => inspectDeployment(options()).warnings.filter(warning => warning.includes('max_withdrawals_per_da_tx ('))
   const reth = (file: string, http: string, ws: string, wsEnabled = true) =>
     fs.writeFileSync(path.join(root, 'values', file), yaml.dump({reth: {http: {api: http, enabled: true}, ws: {api: ws, enabled: wsEnabled}}}))
@@ -114,14 +115,13 @@ describe('current deployment preflight', () => {
 
   it('warns when the WP pending-withdrawal alert level differs from the submitter limit', () => {
     const warnCount = () => inspectDeployment(options()).warnings.filter(warning => warning.includes('pending_withdrawal_warn_count'))
-    const submitter = (limit: string) => fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({configMaps: {env: {data: {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: '15000000', DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: limit}}}}))
     expect(warnCount()).to.deep.equal([])
-    submitter('6000')
+    submitterLimit('6000')
     expect(warnCount()).to.have.length(1)
     expect(warnCount()[0]).to.include('(unset, default 4500)').and.to.include('(6000)')
     fs.writeFileSync(wp(), 'fee_rate_sat_per_kvb=1000000\npending_withdrawal_warn_count=6000\n')
     expect(warnCount()).to.deep.equal([])
-    submitter('4500')
+    submitterLimit('4500')
     expect(warnCount()).to.have.length(1)
     expect(warnCount()[0]).to.include('(6000)').and.to.include('(4500)')
     fs.writeFileSync(wp(), 'fee_rate_sat_per_kvb=1000000\npending_withdrawal_warn_count="6000"\n')
@@ -131,24 +131,27 @@ describe('current deployment preflight', () => {
   })
 
   it('refuses a submitter limit that is not a positive integer instead of comparing it', () => {
-    const submitter = (limit: string) => fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({configMaps: {env: {data: {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: '15000000', DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: limit}}}}))
     for (const limit of ['0', 'many', '-1', '', '6_000', '6000.0', '-0']) {
-      submitter(limit)
+      submitterLimit(limit)
       const report = inspectDeployment(options())
       expect(report.blockers, limit).to.deep.equal(['eth-da-submitter DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX must be a positive integer'])
       expect(report.warnings.join(' '), limit).not.to.include('max_withdrawals_per_da_tx (')
     }
 
     for (const limit of [' 6000 ', '+6000']) {
-      submitter(limit)
+      submitterLimit(limit)
       expect(inspectDeployment(options()).blockers, limit).to.deep.equal([])
       expect(limits(), limit).to.have.length(1)
       expect(limits()[0], limit).to.include('max_withdrawals_per_da_tx (6000)')
     }
 
-    fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({configMaps: {env: {data: {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: '15000000', DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: 6000}}}}))
+    submitterLimit(6000)
     expect(inspectDeployment(options()).blockers).to.deep.equal([])
     expect(limits()).to.have.length(1)
+    submitterLimit('{{ .Values.limit }}')
+    expect(inspectDeployment(options()).blockers).to.deep.equal([])
+    expect(limits()).to.deep.equal([])
+    expect(inspectDeployment(options()).warnings.join(' ')).to.include('has no literal value')
   })
 
   it('takes the submitter limit from the last container env entry before its env ConfigMap', () => {
@@ -160,6 +163,25 @@ describe('current deployment preflight', () => {
     expect(report.blockers).to.deep.equal([])
     expect(limits()).to.deep.equal([])
     expect(report.warnings.join(' ')).to.include('has no literal value')
+  })
+
+  it('reads the map form of the submitter container env', () => {
+    for (const env of [{DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: '6000'}, {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: 6000}, {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: {value: '6000'}}]) {
+      submitterWithEnv(env)
+      expect(limits(), JSON.stringify(env)).to.have.length(1)
+      expect(limits()[0], JSON.stringify(env)).to.include('max_withdrawals_per_da_tx (6000)')
+    }
+
+    for (const env of [{DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: {secretKeyRef: {key: 'limit', name: 'other'}}}, {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: '{{ .Values.limit }}'}, [{name: 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX', value: '{{ .Values.limit }}'}]]) {
+      submitterWithEnv(env)
+      const report = inspectDeployment(options())
+      expect(report.blockers, JSON.stringify(env)).to.deep.equal([])
+      expect(limits(), JSON.stringify(env)).to.deep.equal([])
+      expect(report.warnings.join(' '), JSON.stringify(env)).to.include('has no literal value')
+    }
+
+    submitterWithEnv({RUST_LOG: 'info'})
+    expect(limits()).to.deep.equal([])
   })
 
   it('compares a WP alert level above 2^53 exactly', () => {

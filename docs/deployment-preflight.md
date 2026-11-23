@@ -102,10 +102,12 @@ those and `debug`, which proof materialization and explorer tracing call.
 Two more warnings compare withdrawal alert levels with the eth-da-submitter
 `max_withdrawals_per_da_tx`. In Kubernetes the submitter reads that limit only
 from `DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX` in its values: a
-container `env` entry first, then the env ConfigMap. An omitted value is its
-default, 4500. A limit that is not a positive integer is an error, and neither
-comparison runs. An `env` entry without a literal value (`valueFrom`) gets a
-warning instead of the comparisons.
+container `env` entry first, in the list or map form the chart accepts, then the
+env ConfigMap. An omitted value is its default, 4500. A limit that is not a
+positive integer is an error, and neither comparison runs. A value that is not
+literal gets a warning instead of the comparisons: an `env` entry with
+`valueFrom` or a bare source, or a `{{ }}` template in either place, since the
+chart renders both through `tpl`.
 
 - A `withdrawalBoundAlerts.maxWithdrawalsPerDaTx` in the scroll-monitor values
   that differs from the limit. An omitted value counts as 4500.

@@ -122,19 +122,41 @@ function inspectWpWithdrawalWarnCount(wp: toml.JsonMap, withdrawalLimit: bigint,
   result.warnings.push(`WP pending_withdrawal_warn_count (${setting}) differs from eth-da-submitter max_withdrawals_per_da_tx (${withdrawalLimit}); set pending_withdrawal_warn_count = ${withdrawalLimit} in withdrawal-processor/WithdrawalProcessor.toml so the pending-withdrawal alert uses the real limit. Withdrawal Processor images before the release that adds this key refuse it`)
 }
 
+/**
+ * The chart's container env entry for a name, as the common chart renders
+ * `env`: a list of {name, value | valueFrom}, where the last duplicate wins, or
+ * a map from name to a scalar, {value}, {valueFrom} or a bare source.
+ * `found: false` means no entry; `value: undefined` means no literal value.
+ */
+function containerEnvEntry(env: unknown, name: string): {found: boolean; value?: unknown} {
+  let entry: unknown
+  if (Array.isArray(env)) {
+    const item = [...env].reverse().find(candidate => (candidate as {name?: unknown} | null)?.name === name) as {value?: unknown} | undefined
+    if (!item) return {found: false}
+    entry = item.value
+  } else if (env && typeof env === 'object' && Object.hasOwn(env, name)) {
+    const raw = (env as Record<string, unknown>)[name]
+    entry = raw && typeof raw === 'object' ? (raw as {value?: unknown}).value : raw
+  } else {
+    return {found: false}
+  }
+
+  return {found: true, value: entry}
+}
+
 /** Compare both withdrawal alert levels with the submitter limit, once it resolves. */
 function inspectWithdrawalLimits(root: string, values: SubmitterValues, wp: toml.JsonMap, result: DeploymentPreflight): void {
-  // A container env entry overrides the ConfigMap that envFrom loads, and the
-  // last of duplicate entries wins.
-  const entry = Array.isArray(values.env)
-    ? [...(values.env as Array<{name?: unknown; value?: unknown} | null>)].reverse().find(item => item?.name === SUBMITTER_WITHDRAWAL_LIMIT_ENV)
-    : undefined
-  if (entry && entry.value === undefined) {
+  // A container env entry overrides the ConfigMap that envFrom loads.
+  const entry = containerEnvEntry(values.env, SUBMITTER_WITHDRAWAL_LIMIT_ENV)
+  const envValue = entry.found ? entry.value : values.configMaps?.env?.data?.[SUBMITTER_WITHDRAWAL_LIMIT_ENV]
+  // The chart renders env values and ConfigMap data through tpl, so a template
+  // is not a literal value either.
+  if ((entry.found && (envValue === undefined || envValue === null)) || (typeof envValue === 'string' && envValue.includes('{{'))) {
     result.warnings.push(`eth-da-submitter env ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} has no literal value, so its withdrawal limit is not compared with the scroll-monitor and WP alert levels`)
     return
   }
 
-  const withdrawalLimit = resolveSubmitterWithdrawalLimit(entry ? entry.value : values.configMaps?.env?.data?.[SUBMITTER_WITHDRAWAL_LIMIT_ENV], result)
+  const withdrawalLimit = resolveSubmitterWithdrawalLimit(envValue, result)
   if (withdrawalLimit === undefined) return
   inspectWithdrawalAlertLimit(path.join(root, 'values'), withdrawalLimit, result)
   inspectWpWithdrawalWarnCount(wp, withdrawalLimit, result)
