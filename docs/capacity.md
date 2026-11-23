@@ -44,7 +44,8 @@ afterwards.
    When the Vast.ai API key is new or changed, it first sends the request dstack
    uses to validate a Vast backend to Vast.ai, and stops without writing
    anything if Vast.ai rejects the key; dstack itself would only log a warning
-   and keep the previous key. Offline, pass `--skip-provider-check`.
+   and keep the previous key. Offline, pass `--skip-provider-check`. A GCP
+   service-account key is checked for its form only, not with GCP.
 2. **Summarize** the changes against the running deployment, not against the
    previous render: backends added or removed (from the controller's live
    `config.yml` Secret), a rotated key, controller values that differ from the
@@ -54,7 +55,8 @@ afterwards.
    change is shown as `field old -> new`; long values such as certificates
    and digests only as `(changed)`. Secret data is never shown: a new
    Vast.ai key appears as "API key rotated (...ab12 -> ...cd34)", the last
-   four characters of the running and the new key.
+   four characters of the running and the new key, and a new GCP key as
+   "service-account key changed".
    Errors about `capacity.yaml` name its fields.
 3. **Confirm.** Interactive runs ask; non-interactive runs need `--yes`; with
    `--json`, the refusal carries the summary in its error `context`. When
@@ -67,7 +69,8 @@ afterwards.
 5. **Upgrade dstack-controller** (`make install-dstack-controller`) and wait for
    the rollout. dstack reads `config.yml` only at startup; the changed
    `checksum/server-config` annotation restarts it when the providers or keys
-   changed. On startup dstack creates or updates the listed backends and
+   changed. A GCP service-account key is a separate Secret, so deploy restarts
+   the controller itself when only that key changed. On startup dstack creates or updates the listed backends and
    deletes the backend types the file no longer lists. Running instances keep
    running; the dstack API is unavailable during the restart. After a restart,
    deploy reads the controller log: dstack only logs a backend it cannot create
@@ -104,14 +107,16 @@ render. It changes nothing in the cluster.
 
 | File | Content |
 |---|---|
-| `.data/dstack/credentials.json` | The providers and their credentials, read from the environment file. Private |
-| `secrets/dstack-controller-config.yaml` (and the other dstack Secret files) | The controller's `config.yml`, listing every backend. Private |
+| `.data/dstack/credentials.json` | The providers and their credentials, read from the environment file or the GCP key file. Private |
+| `secrets/dstack-controller-config.yaml` (and the other dstack Secret files) | The controller's `config.yml`, listing every backend, and the GCP service-account key in `secrets/dstack-gcp-credentials.yaml`. Private |
 | `values/dstack-controller-production.yaml` | Only the pod annotation `checksum/server-config`, the digest of `config.yml`; the rest of this file is the operator's |
 | `values/capacity-manager-production.yaml` | Fleets, prices, policy, worker launch and the `initialization` fleets |
 | `.scrollsdk/capacity-manager/` | The prepared plan and fleet files used by `capacity-manager probe` |
+| `.data/doge-config.toml` | Only the controller's `credentialSecrets`, when a GCP provider is added or removed, so that `setup push-secrets` finds the same Secret reference |
 
 Provider credentials come from the deployment environment file: the file saved
-by `setup plan`, `./deployment.env`, or `--env-file`. `setup render` and
+by `setup plan`, `./deployment.env`, or `--env-file`. A GCP service-account key
+comes from the file that `providers.gcp.serviceAccountFile` names. `setup render` and
 `setup prep-charts` read `capacity.yaml` too, so they do not revert a change.
 `setup dstack-config` refuses once `capacity.yaml` exists, and `secrets sync`
 does not deploy dstack provider keys: it points to `capacity deploy` when the
@@ -128,6 +133,9 @@ providers:
     publicIps: false
   vastai:
     apiKeyEnv: VASTAI_API_KEY      # the value stays in the environment file
+  # gcp:                           # see GCP providers
+  #   projectId: example-project   # default: the key's own project
+  #   serviceAccountFile: /private/service-account.json   # to import or rotate the key
 primary:
   fleet: aws-l4
   provider: aws
@@ -158,13 +166,20 @@ The rules are the same as for `capacityManager` in the deployment spec: both
 GPU architectures must be in the checked Worker image, `workerBudgetUsdPerHour`
 must cover both pool prices, `maxHourlyCostUsd` must fund `minWorkers`, and
 every AWS region needs a VPC ID. Any provider pair is accepted for the primary
-and the fallback, for example a Vast primary with an on-demand AWS fallback. See
+and the fallback, for example a Vast primary with an on-demand AWS or GCP
+fallback. See
 [activation](capacity-manager-activation.md#optional-fallback-fleet) for the
-fallback semantics. A GCP backend imported earlier is not managed by
-`capacity.yaml` and stays in `config.yml`.
+fallback semantics.
 
-The file holds environment variable names only. Keep it in the private
-deployment repository with the rest of the deployment directory.
+`providers` lists every backend of the dstack project, GCP included: a provider
+that is not listed is deleted from the project. A `capacity.yaml` written by an
+earlier CLI release does not list an imported GCP backend; add
+`providers.gcp` to keep it. The summary shows the deletion before anything
+changes.
+
+The file holds environment variable names and file paths, never credential
+values. Keep it in the private deployment repository with the rest of the
+deployment directory.
 
 ## Common changes
 
@@ -172,6 +187,8 @@ deployment repository with the rest of the deployment directory.
 |---|---|---|---|
 | Add Vast.ai | API key in the environment file | `providers.vastai` and a pool | The controller restarts with the new backend; the new fleet is created |
 | Add AWS | Controller IAM role, VPCs, GPU quota (see [AWS providers](#aws-providers)) | Controller values identity; `providers.aws` and a pool | As above |
+| Add GCP | Service account, its key file, GPU quota (see [GCP providers](#gcp-providers)) | Controller values Secret mount; `providers.gcp` with `serviceAccountFile` and a pool | As above. Needs capacity-manager chart 0.1.10 |
+| Rotate the GCP key | New key file | `providers.gcp.serviceAccountFile` | Only the controller restarts. Delete the old key in GCP after deploy reports success |
 | Rotate the Vast.ai key | New key in the environment file | — | Only the controller restarts. After deploy reports success it names the key dstack now uses and the one no longer configured, by their last four characters; revoke the latter then. If deploy fails, revoke nothing |
 | Remove a provider | — | Remove it from `providers` and the pools | The summary marks the backend deletion and the fleets left in dstack |
 | Workers, budget, steady-state floor, runtime estimates | — | `scaling`, `runtimeEstimates` | Only the manager changes |
@@ -250,3 +267,51 @@ For a deployment prepared for EKS Pod Identity (`awsWorkloadIdentity:
 pod-identity`), name the ServiceAccount (`serviceAccount.name`) bound by
 the Pod Identity association instead of the annotation. `capacity deploy`
 refuses an AWS provider until these values are present.
+
+## GCP providers
+
+A GCP backend uses a service-account JSON key, which the controller reads from
+a mounted Secret. The service account, its permissions (the ones the dstack
+documentation lists for its GCP backend) and the GPU quota are managed outside
+the CLI. The generated backend keeps dstack's defaults: instances get public
+addresses in the project's `default` VPC network, and dstack adds one firewall
+rule to that network, which allows SSH (TCP 22) from any address to the
+instances it creates.
+
+On a prepared deployment the controller values belong to the operator, so mount
+the Secret there, in `values/dstack-controller-production.yaml`, before adding
+GCP to `capacity.yaml`:
+
+```yaml
+credentialSecrets:
+  - name: gcp
+    secretName: dstack-gcp-credentials
+```
+
+Then list the provider and use it in a pool:
+
+```yaml
+providers:
+  gcp:
+    serviceAccountFile: /private/service-account.json
+fallback:
+  fleet: gcp-l4
+  provider: gcp
+  gpu: L4
+  regions: [us-central1]           # regions, not zones
+  instanceTypes: [g2-standard-16]  # optional
+  maxPricePerHourUsd: 1.50
+```
+
+`serviceAccountFile` is absolute or relative to the deployment directory. Keep
+the key file outside any repository. Render copies the key into the private
+credential state and `secrets/dstack-gcp-credentials.yaml`; after that the
+field can be removed, and the imported key stays. Name a file again to rotate
+the key. `projectId` selects a project other than the key's own.
+`capacity deploy` refuses a GCP provider until the Secret mount is present, and
+a GCP pool needs capacity-manager chart 0.1.10 or later
+(`CAPACITY_MANAGER_CHART_VERSION` in the `Makefile`).
+
+Removing `providers.gcp` deletes the backend from the project and the key from
+the private credential state. `secrets/dstack-gcp-credentials.yaml` and the
+Kubernetes Secret stay until you delete them.

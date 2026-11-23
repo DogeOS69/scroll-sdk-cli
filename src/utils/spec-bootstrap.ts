@@ -99,6 +99,11 @@ export function assertCapacityChartVersions(makefile: string, spec: DeploymentSp
       if (options.fleetUpdate) throw new Error('scrollsdk capacity deploy and render require capacity-manager chart >= 0.1.9, which updates existing fleets in place; set CAPACITY_MANAGER_CHART_VERSION in the Makefile')
       if (spec.capacityManager.fallback?.provider === 'aws') throw new Error('An AWS fallback requires capacity-manager chart >= 0.1.9; set CAPACITY_MANAGER_CHART_VERSION in the Makefile')
     }
+
+    // Older charts reject the provider in their values schema, at helm install.
+    if (chart === 'CAPACITY_MANAGER' && chartBelow(version, 10) && [spec.capacityManager.fallback?.provider, spec.capacityManager.provider].includes('gcp')) {
+      throw new Error('A GCP provider requires capacity-manager chart >= 0.1.10; set CAPACITY_MANAGER_CHART_VERSION in the Makefile')
+    }
   }
 }
 
