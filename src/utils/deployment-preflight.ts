@@ -62,6 +62,7 @@ interface SubmitterValues {
 }
 
 const DEFAULT_MAX_WITHDRAWALS_PER_DA_TX = 4500n
+const MAX_U64 = 2n ** 64n - 1n
 const SUBMITTER_WITHDRAWAL_LIMIT_ENV = 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX'
 
 /** A parsed non-negative integer (TOML gives a bigint above 2^53), or undefined for any other value. */
@@ -76,17 +77,29 @@ function parsedUnsigned(value: unknown): bigint | undefined {
  * values (the compiler projects no [batch] table), so an omitted
  * max_withdrawals_per_da_tx is its default, 4500.
  */
-function resolveSubmitterWithdrawalLimit(envValue: unknown, result: DeploymentPreflight): bigint | undefined {
+function resolveSubmitterWithdrawalLimit(envValue: unknown, fromContainerEnv: boolean, result: DeploymentPreflight): bigint | undefined {
   if (envValue === undefined) return DEFAULT_MAX_WITHDRAWALS_PER_DA_TX
-  // YAML may have read an unquoted env value as a number. Like the
-  // submitter's env parser (figment), accept surrounding whitespace and a
-  // leading plus sign.
+  if (typeof envValue === 'number' && !fromContainerEnv) {
+    // The chart copies ConfigMap data as YAML, and Kubernetes accepts only strings there.
+    result.blockers.push(`eth-da-submitter configMaps.env.data ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} must be a quoted string; Kubernetes refuses a ConfigMap value that is a number`)
+    return undefined
+  }
+
+  if (typeof envValue === 'number' && envValue >= 1_000_000) {
+    // Helm formats a container env number with Go's %v, so 1000000 becomes 1e+06, which the submitter refuses.
+    result.blockers.push(`eth-da-submitter env ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} must be quoted; Helm renders a number of 1000000 or more in exponent form, which the submitter refuses`)
+    return undefined
+  }
+
+  // Like the submitter's env parser (figment), accept surrounding whitespace
+  // and a leading plus sign. figment reads digits past u64 as a float, which a
+  // usize refuses.
   const digits = typeof envValue === 'string' ? /^\s*\+?(\d+)\s*$/.exec(envValue)?.[1] : undefined
   const limit = typeof envValue === 'string'
     ? (digits === undefined ? undefined : BigInt(digits))
     : parsedUnsigned(envValue)
-  if (limit === undefined || limit === 0n) {
-    result.blockers.push(`eth-da-submitter ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} must be a positive integer`)
+  if (limit === undefined || limit === 0n || limit > MAX_U64) {
+    result.blockers.push(`eth-da-submitter ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} must be a positive 64-bit integer`)
     return undefined
   }
 
@@ -156,7 +169,7 @@ function inspectWithdrawalLimits(root: string, values: SubmitterValues, wp: toml
     return
   }
 
-  const withdrawalLimit = resolveSubmitterWithdrawalLimit(envValue, result)
+  const withdrawalLimit = resolveSubmitterWithdrawalLimit(envValue, entry.found, result)
   if (withdrawalLimit === undefined) return
   inspectWithdrawalAlertLimit(path.join(root, 'values'), withdrawalLimit, result)
   inspectWpWithdrawalWarnCount(wp, withdrawalLimit, result)

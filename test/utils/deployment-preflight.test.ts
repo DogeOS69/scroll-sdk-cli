@@ -130,11 +130,11 @@ describe('current deployment preflight', () => {
     expect(warnCount()).to.deep.equal([])
   })
 
-  it('refuses a submitter limit that is not a positive integer instead of comparing it', () => {
-    for (const limit of ['0', 'many', '-1', '', '6_000', '6000.0', '-0']) {
+  it('refuses a submitter limit that is not a positive 64-bit integer instead of comparing it', () => {
+    for (const limit of ['0', 'many', '-1', '', '6_000', '6000.0', '-0', '18446744073709551616']) {
       submitterLimit(limit)
       const report = inspectDeployment(options())
-      expect(report.blockers, limit).to.deep.equal(['eth-da-submitter DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX must be a positive integer'])
+      expect(report.blockers, limit).to.deep.equal(['eth-da-submitter DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX must be a positive 64-bit integer'])
       expect(report.warnings.join(' '), limit).not.to.include('max_withdrawals_per_da_tx (')
     }
 
@@ -145,9 +145,22 @@ describe('current deployment preflight', () => {
       expect(limits()[0], limit).to.include('max_withdrawals_per_da_tx (6000)')
     }
 
-    submitterLimit(6000)
+    submitterLimit('18446744073709551615')
     expect(inspectDeployment(options()).blockers).to.deep.equal([])
-    expect(limits()).to.have.length(1)
+    expect(limits()[0]).to.include('max_withdrawals_per_da_tx (18446744073709551615)')
+    // Helm copies a ConfigMap number as a YAML number, which Kubernetes refuses.
+    submitterLimit(6000)
+    expect(inspectDeployment(options()).blockers).to.deep.equal(['eth-da-submitter configMaps.env.data DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX must be a quoted string; Kubernetes refuses a ConfigMap value that is a number'])
+    expect(limits()).to.deep.equal([])
+    // Helm renders a container env number of 1000000 or more as 1e+06, which the submitter refuses; the string form is fine.
+    for (const env of [{DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: 1_000_000}, [{name: 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX', value: 2_500_000}], {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: {value: 1_000_000}}, {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: 1e16}]) {
+      submitterWithEnv(env)
+      expect(inspectDeployment(options()).blockers, JSON.stringify(env)).to.deep.equal(['eth-da-submitter env DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX must be quoted; Helm renders a number of 1000000 or more in exponent form, which the submitter refuses'])
+    }
+
+    submitterWithEnv({DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: '1000000'})
+    expect(inspectDeployment(options()).blockers).to.deep.equal([])
+    expect(limits()[0]).to.include('max_withdrawals_per_da_tx (1000000)')
     submitterLimit('{{ .Values.limit }}')
     expect(inspectDeployment(options()).blockers).to.deep.equal([])
     expect(limits()).to.deep.equal([])

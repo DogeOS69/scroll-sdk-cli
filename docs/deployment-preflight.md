@@ -104,7 +104,10 @@ Two more warnings compare withdrawal alert levels with the eth-da-submitter
 from `DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX` in its values: a
 container `env` entry first, in the list or map form the chart accepts, then the
 env ConfigMap. An omitted value is its default, 4500. A limit that is not a
-positive integer is an error, and neither comparison runs. A value that is not
+positive 64-bit integer is an error, and neither comparison runs. So is an
+unquoted number that Helm would break: Kubernetes refuses a number in the
+ConfigMap, and Helm renders a container `env` number of 1000000 or more in
+exponent form (`1e+06`), which the submitter refuses. A value that is not
 literal gets a warning instead of the comparisons: an `env` entry with
 `valueFrom` or a bare source, or a `{{ }}` template in either place, since the
 chart renders both through `tpl`.
