@@ -68,6 +68,25 @@ function inspectWithdrawalAlertLimit(valuesDir: string, submitterLimit: unknown,
   } catch {result.blockers.push('Cannot read valid YAML: values/scroll-monitor-production.yaml; contents omitted')}
 }
 
+/**
+ * The WP exports pending_withdrawal_warn_count beside the pending-withdrawal
+ * count as its alert level. Its default (4500) is the submitter's default
+ * max_withdrawals_per_da_tx, so a changed submitter limit needs it too.
+ */
+function inspectWpWithdrawalWarnCount(wp: toml.JsonMap, submitterLimit: unknown, result: DeploymentPreflight): void {
+  const configured = wp.pending_withdrawal_warn_count
+  if (configured !== undefined && (typeof configured !== 'number' || !Number.isSafeInteger(configured) || configured < 0)) {
+    result.blockers.push('WP pending_withdrawal_warn_count must be a non-negative integer')
+    return
+  }
+
+  const withdrawalLimit = Number(submitterLimit ?? 4500)
+  const warnCount = configured ?? 4500
+  if (warnCount === withdrawalLimit) return
+  const setting = configured === undefined ? `is unset (default ${warnCount})` : `(${warnCount})`
+  result.warnings.push(`WP pending_withdrawal_warn_count ${setting} differs from eth-da-submitter max_withdrawals_per_da_tx (${withdrawalLimit}); set it to ${withdrawalLimit} in the WP native input so the pending-withdrawal alert uses the real limit. Withdrawal Processor images before the release that adds this key refuse it`)
+}
+
 /** Read-only checks for the currently supported configuration and deployment. */
 export function inspectDeployment(options: {
   deploymentDir: string; dogeConfig?: string; requireDstack?: boolean
@@ -116,7 +135,9 @@ export function inspectDeployment(options: {
   const blockGas = Number(genesis.gasLimit)
   if (!Number.isSafeInteger(blockGas) || blockGas <= 0 || !Number.isSafeInteger(chunkGas) || chunkGas <= blockGas) result.blockers.push('eth-da-submitter max_l2_gas_per_chunk must be strictly greater than the genesis gasLimit; set a valid explicit limit')
 
-  inspectWithdrawalAlertLimit(path.join(root, 'values'), values.configMaps?.env?.data?.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX, result)
+  const submitterWithdrawalLimit = values.configMaps?.env?.data?.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX
+  inspectWithdrawalAlertLimit(path.join(root, 'values'), submitterWithdrawalLimit, result)
+  inspectWpWithdrawalWarnCount(wp, submitterWithdrawalLimit, result)
   inspectRethRpcNamespaces(path.join(root, 'values'), result)
 
   result.dstack.configured = Boolean(config.dstackController && config.dstackController.enabled !== false)

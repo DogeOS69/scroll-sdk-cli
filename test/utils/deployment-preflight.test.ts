@@ -110,4 +110,22 @@ describe('current deployment preflight', () => {
     expect(mismatch()).to.have.length(1)
   })
 
+  it('warns when the WP pending-withdrawal alert level differs from the submitter limit', () => {
+    const warnCount = () => inspectDeployment(options()).warnings.filter(warning => warning.includes('pending_withdrawal_warn_count'))
+    const submitter = (limit: string) => fs.writeFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), yaml.dump({configMaps: {env: {data: {DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK: '15000000', DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX: limit}}}}))
+    expect(warnCount()).to.deep.equal([])
+    submitter('6000')
+    expect(warnCount()).to.have.length(1)
+    expect(warnCount()[0]).to.include('is unset (default 4500)').and.to.include('(6000)')
+    fs.writeFileSync(wp(), 'fee_rate_sat_per_kvb=1000000\npending_withdrawal_warn_count=6000\n')
+    expect(warnCount()).to.deep.equal([])
+    submitter('4500')
+    expect(warnCount()).to.have.length(1)
+    expect(warnCount()[0]).to.include('(6000)').and.to.include('(4500)')
+    fs.writeFileSync(wp(), 'fee_rate_sat_per_kvb=1000000\npending_withdrawal_warn_count="6000"\n')
+    const report = inspectDeployment(options())
+    expect(report.blockers).to.deep.equal(['WP pending_withdrawal_warn_count must be a non-negative integer'])
+    expect(warnCount()).to.deep.equal([])
+  })
+
 })

@@ -101,6 +101,12 @@ those and `debug`, which proof materialization and explorer tracing call. A
 second warning reports a `withdrawalBoundAlerts.maxWithdrawalsPerDaTx` in the
 scroll-monitor values that differs from the eth-da-submitter
 `max_withdrawals_per_da_tx`; an omitted value counts as 4500 on both sides.
+A third warning reports a Withdrawal Processor `pending_withdrawal_warn_count`
+that differs from the same submitter limit. The WP exports it as the alert
+level for its pending-withdrawal count, and an omitted value is its default,
+4500. Only Withdrawal Processor images from the dogeos-core release that adds
+the key accept it, so set it only with such an image. A value that is not a
+non-negative integer is an error.
 
 Optional runtime probes are described below. Kubernetes operations are read-only;
 the signer and Reth probes create disposable local Docker containers.
