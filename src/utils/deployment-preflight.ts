@@ -56,16 +56,123 @@ function inspectRethRpcNamespaces(valuesDir: string, result: DeploymentPreflight
   }
 }
 
-/** The withdrawal backlog alerts page at the submitter's limit; an omitted value is 4500 on both sides. */
-function inspectWithdrawalAlertLimit(valuesDir: string, submitterLimit: unknown, result: DeploymentPreflight): void {
+interface SubmitterValues {
+  configMaps?: {env?: {data?: Record<string, unknown>}}
+  env?: unknown
+}
+
+const DEFAULT_MAX_WITHDRAWALS_PER_DA_TX = 4500n
+const MAX_U64 = 2n ** 64n - 1n
+const SUBMITTER_WITHDRAWAL_LIMIT_ENV = 'DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX'
+
+/** A parsed non-negative integer (TOML gives a bigint above 2^53), or undefined for any other value. */
+function parsedUnsigned(value: unknown): bigint | undefined {
+  if (typeof value === 'bigint') return value >= 0n ? value : undefined
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : undefined
+  return undefined
+}
+
+/**
+ * In Kubernetes the submitter reads its batch limits only from the env in its
+ * values (the compiler projects no [batch] table), so an omitted
+ * max_withdrawals_per_da_tx is its default, 4500.
+ */
+function resolveSubmitterWithdrawalLimit(envValue: unknown, fromContainerEnv: boolean, result: DeploymentPreflight): bigint | undefined {
+  if (envValue === undefined) return DEFAULT_MAX_WITHDRAWALS_PER_DA_TX
+  if (typeof envValue === 'number' && !fromContainerEnv) {
+    // The chart copies ConfigMap data as YAML, and Kubernetes accepts only strings there.
+    result.blockers.push(`eth-da-submitter configMaps.env.data ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} must be a quoted string; Kubernetes refuses a ConfigMap value that is a number`)
+    return undefined
+  }
+
+  if (typeof envValue === 'number' && envValue >= 1_000_000) {
+    // Helm formats a container env number with Go's %v, so 1000000 becomes 1e+06, which the submitter refuses.
+    result.blockers.push(`eth-da-submitter env ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} must be quoted; Helm renders a number of 1000000 or more in exponent form, which the submitter refuses`)
+    return undefined
+  }
+
+  // Like the submitter's env parser (figment), accept surrounding whitespace
+  // and a leading plus sign. figment reads digits past u64 as a float, which a
+  // usize refuses.
+  const digits = typeof envValue === 'string' ? /^\s*\+?(\d+)\s*$/.exec(envValue)?.[1] : undefined
+  const limit = typeof envValue === 'string'
+    ? (digits === undefined ? undefined : BigInt(digits))
+    : parsedUnsigned(envValue)
+  if (limit === undefined || limit === 0n || limit > MAX_U64) {
+    result.blockers.push(`eth-da-submitter ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} must be a positive 64-bit integer`)
+    return undefined
+  }
+
+  return limit
+}
+
+/** The withdrawal backlog alerts page at the submitter's limit; an omitted alert limit is 4500. */
+function inspectWithdrawalAlertLimit(valuesDir: string, withdrawalLimit: bigint, result: DeploymentPreflight): void {
   const file = path.join(valuesDir, 'scroll-monitor-production.yaml')
   if (!fs.existsSync(file)) return
   try {
     const monitor = yaml.load(fs.readFileSync(file, 'utf8')) as {withdrawalBoundAlerts?: {maxWithdrawalsPerDaTx?: unknown}} | undefined
-    const withdrawalLimit = Number(submitterLimit ?? 4500)
     const alertLimit = Number(monitor?.withdrawalBoundAlerts?.maxWithdrawalsPerDaTx ?? 4500)
-    if (withdrawalLimit !== alertLimit) result.warnings.push(`scroll-monitor withdrawalBoundAlerts.maxWithdrawalsPerDaTx (${alertLimit}) differs from eth-da-submitter max_withdrawals_per_da_tx (${withdrawalLimit}); set them equal so the withdrawal backlog alerts use the real limit`)
+    if (Number(withdrawalLimit) !== alertLimit) result.warnings.push(`scroll-monitor withdrawalBoundAlerts.maxWithdrawalsPerDaTx (${alertLimit}) differs from eth-da-submitter max_withdrawals_per_da_tx (${withdrawalLimit}); set them equal so the withdrawal backlog alerts use the real limit`)
   } catch {result.blockers.push('Cannot read valid YAML: values/scroll-monitor-production.yaml; contents omitted')}
+}
+
+/**
+ * The WP exports pending_withdrawal_warn_count beside the pending-withdrawal
+ * count as its alert level. Its default (4500) is the submitter's default
+ * max_withdrawals_per_da_tx, so a changed submitter limit needs it too.
+ */
+function inspectWpWithdrawalWarnCount(wp: toml.JsonMap, withdrawalLimit: bigint, result: DeploymentPreflight): void {
+  const configured = wp.pending_withdrawal_warn_count
+  const warnCount = configured === undefined ? DEFAULT_MAX_WITHDRAWALS_PER_DA_TX : parsedUnsigned(configured)
+  if (warnCount === undefined) {
+    result.blockers.push('WP pending_withdrawal_warn_count must be a non-negative integer')
+    return
+  }
+
+  if (warnCount === withdrawalLimit) return
+  const setting = configured === undefined ? `unset, default ${warnCount}` : String(warnCount)
+  result.warnings.push(`WP pending_withdrawal_warn_count (${setting}) differs from eth-da-submitter max_withdrawals_per_da_tx (${withdrawalLimit}); set pending_withdrawal_warn_count = ${withdrawalLimit} in withdrawal-processor/WithdrawalProcessor.toml so the pending-withdrawal alert uses the real limit. Withdrawal Processor images before the release that adds this key refuse it`)
+}
+
+/**
+ * The chart's container env entry for a name, as the common chart renders
+ * `env`: a list of {name, value | valueFrom}, where the last duplicate wins, or
+ * a map from name to a scalar, {value}, {valueFrom} or a bare source.
+ * `found: false` means no entry; `value: undefined` means no literal value.
+ */
+function containerEnvEntry(env: unknown, name: string): {found: boolean; value?: unknown} {
+  let entry: unknown
+  if (Array.isArray(env)) {
+    const item = [...env].reverse().find(candidate => (candidate as {name?: unknown} | null)?.name === name) as {value?: unknown} | undefined
+    if (!item) return {found: false}
+    entry = item.value
+  } else if (env && typeof env === 'object' && Object.hasOwn(env, name)) {
+    const raw = (env as Record<string, unknown>)[name]
+    entry = raw && typeof raw === 'object' ? (raw as {value?: unknown}).value : raw
+  } else {
+    return {found: false}
+  }
+
+  return {found: true, value: entry}
+}
+
+/** Compare both withdrawal alert levels with the submitter limit, once it resolves. */
+function inspectWithdrawalLimits(root: string, values: SubmitterValues, wp: toml.JsonMap, result: DeploymentPreflight): void {
+  // A container env entry overrides the ConfigMap that envFrom loads.
+  const entry = containerEnvEntry(values.env, SUBMITTER_WITHDRAWAL_LIMIT_ENV)
+  const envValue = entry.found ? entry.value : values.configMaps?.env?.data?.[SUBMITTER_WITHDRAWAL_LIMIT_ENV]
+  // The chart renders env values and ConfigMap data through tpl, so a template
+  // is not a literal value either.
+  if ((entry.found && (envValue === undefined || envValue === null)) || (typeof envValue === 'string' && envValue.includes('{{'))) {
+    result.warnings.push(`eth-da-submitter env ${SUBMITTER_WITHDRAWAL_LIMIT_ENV} has no literal value, so its withdrawal limit is not compared with the scroll-monitor and WP alert levels`)
+    return
+  }
+
+  const withdrawalLimit = resolveSubmitterWithdrawalLimit(envValue, entry.found, result)
+  if (withdrawalLimit === undefined) return
+  inspectWithdrawalAlertLimit(path.join(root, 'values'), withdrawalLimit, result)
+  inspectWpWithdrawalWarnCount(wp, withdrawalLimit, result)
 }
 
 /** Read-only checks for the currently supported configuration and deployment. */
@@ -109,14 +216,14 @@ export function inspectDeployment(options: {
   if (inbox && (!Array.isArray(inbox.expected_batchers) || inbox.expected_batchers.length === 0)) result.blockers.push('WP ethereum_da.inbox_worker.expected_batchers must be nonempty, even when disabled; regenerate from the submitter signer via prep-charts')
 
   const genesis = JSON.parse(fs.readFileSync(path.join(root, '.data/genesis.json'), 'utf8')) as {gasLimit?: number | string}
-  const values = yaml.load(fs.readFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), 'utf8')) as {configMaps?: {env?: {data?: Record<string, unknown>}}}
+  const values = yaml.load(fs.readFileSync(path.join(root, 'values/eth-da-submitter-production.yaml'), 'utf8')) as SubmitterValues
   const limit = values.configMaps?.env?.data?.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_L2_GAS_PER_CHUNK
   // An omitted chart/env override is resolved by the current native default.
   const chunkGas = Number(limit ?? 20_000_000)
   const blockGas = Number(genesis.gasLimit)
   if (!Number.isSafeInteger(blockGas) || blockGas <= 0 || !Number.isSafeInteger(chunkGas) || chunkGas <= blockGas) result.blockers.push('eth-da-submitter max_l2_gas_per_chunk must be strictly greater than the genesis gasLimit; set a valid explicit limit')
 
-  inspectWithdrawalAlertLimit(path.join(root, 'values'), values.configMaps?.env?.data?.DOGEOS_ETH_DA_SUBMITTER_BATCH__MAX_WITHDRAWALS_PER_DA_TX, result)
+  inspectWithdrawalLimits(root, values, wp, result)
   inspectRethRpcNamespaces(path.join(root, 'values'), result)
 
   result.dstack.configured = Boolean(config.dstackController && config.dstackController.enabled !== false)
