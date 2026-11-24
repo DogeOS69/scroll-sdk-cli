@@ -48,6 +48,7 @@ import {
   resolveDogecoinKubernetesEndpoints,
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
+import {isDogecoinMainnet} from '../../utils/mainnet-proof-posture.js'
 import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
 import {reconcileMonitoringSlack} from '../../utils/monitoring-slack.js'
 import {reconcileMonitoringStatusPage} from '../../utils/monitoring-status-page.js'
@@ -1789,6 +1790,15 @@ export default class SetupPrepCharts extends Command {
       throw new Error(
         'proof topology source is missing while generated proof state exists; restore '
         + '.data/doge-config.toml [proof_topology] or DeploymentSpec proofTopology before prep-charts',
+      )
+    }
+
+    if (!this.proofIntent && isDogecoinMainnet(this.dogeConfig.network)) {
+      // Without a topology the Withdrawal Processor keeps the template's
+      // disabled/observe proof block, which it refuses to start with on mainnet.
+      throw new Error(
+        'Dogecoin mainnet requires a proof topology with mode=active, generation=real and enforcement=enforce; '
+        + 'run scrollsdk setup doge-config --proof-topology before prep-charts',
       )
     }
 

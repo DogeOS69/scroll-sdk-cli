@@ -14,6 +14,7 @@ import {
   resolveEnvRefsDeep,
   validateDeploymentSpec,
 } from './deployment-spec-generator.js'
+import {assertMainnetProofPosture} from './mainnet-proof-posture.js'
 import {resolveSpecProofStorage} from './spec-proof-storage.js'
 
 export const DEFAULT_DEPLOYMENT_SPEC_FILES = ['deployment-spec.yaml', 'deployment-spec.yml'] as const
@@ -115,7 +116,7 @@ function assertImage(value: {digest?: string; repository?: string} | undefined, 
   }
 }
 
-function validateTopology(topology: ProofTopologySpec, source: string): void {
+function validateTopology(topology: ProofTopologySpec, source: string, network: Network): void {
   if (!Number.isSafeInteger(topology.observeRealProofDeadlineMs) || topology.observeRealProofDeadlineMs! <= 0) {
     throw new Error(`${source}: observeRealProofDeadlineMs must be an explicit positive safe integer`)
   }
@@ -136,6 +137,8 @@ function validateTopology(topology: ProofTopologySpec, source: string): void {
   if (topology.enforcement === 'enforce' && topology.generation !== 'real') {
     throw new Error(`${source}: enforcement=enforce requires generation=real`)
   }
+
+  assertMainnetProofPosture(network, topology, source)
 
   assertImage(topology.compiler?.image, `${source}: compiler.image`)
   if (!topology.compiler?.identityFilePath?.trim()) {
@@ -164,7 +167,7 @@ function fromDogeConfig(configPath: string, config: DogeConfig): ResolvedProofIn
   if (!raw) throw new Error(`${configPath}: [proof_topology] is required`)
   validateShape(raw, configPath)
   const topology = resolveEnvRefsDeep(raw) as ProofTopologySpec
-  validateTopology(topology, configPath)
+  validateTopology(topology, configPath, config.network)
   const coordinator = topology.deployment.coordinatorId
   return {
     deploymentName: config.proofDeployment?.name ?? (coordinator?.endsWith('-proof-coordinator')
@@ -186,7 +189,7 @@ function fromDeploymentSpec(specPath: string): ResolvedProofIntent {
   if (!validation.valid) throw new Error(`${specPath}: ${validation.errors.map(error => `${error.path}: ${error.message}`).join('; ')}`)
   if (!spec.proofTopology) throw new Error(`${specPath}: proofTopology is required`)
   const resolved = resolveSpecProofStorage(spec)
-  validateTopology(resolved.proofTopology!, specPath)
+  validateTopology(resolved.proofTopology!, specPath, spec.dogecoin.network)
   const host = spec.frontend.hosts.proofCoordinator
   return {
     deploymentName: spec.metadata.name,

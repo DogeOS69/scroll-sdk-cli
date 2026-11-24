@@ -722,7 +722,8 @@ The contract should bind at least:
 | `active` | `real` | `enforce` | Everything required by real/observe plus matching partner-signer validation receipts. CubeSigner policy release/attachment/live-evidence readiness is required when `production_verifier_key_policy` is selected; non-mainnet may select `transport_only` independently. |
 
 All other combinations fail validation. In particular, mock/enforce and
-disabled/enforce are invalid. CubeSigner `transport_only` is allowed with either
+disabled/enforce are invalid. Dogecoin mainnet accepts only active/real/enforce,
+because dogeos-core refuses observe enforcement and mock generation there. CubeSigner `transport_only` is allowed with either
 enforcement setting on non-mainnet, and remains forbidden on mainnet.
 
 ## Worker and compute-provider boundary
