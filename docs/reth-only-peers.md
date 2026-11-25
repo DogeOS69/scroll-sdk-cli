@@ -111,8 +111,9 @@ signer rotation does not require resetting chain data.
 
 `gen-rpc-package` reads the L1 endpoint and network ID from
 `l2-reth-rpc-production.yaml`. External peers come from Reth bootnodes, or from
-Reth trustedPeers if no bootnodes are configured. It no longer requires Geth RPC
-values for native genesis. `L2RETH_VALID_SIGNER` comes only from
+Reth trustedPeers if no bootnodes are configured. It no longer uses Geth RPC
+values for any genesis; the Reth start block comes from the genesis or from
+`--start-l1-block`. `L2RETH_VALID_SIGNER` comes only from
 `sequencerReth.instances[index=0].signer.address`; malformed, zero, duplicated,
 or missing index 0 among configured sequencers causes an error. With no
 sequencers configured, it warns and removes any stale signer from the exported

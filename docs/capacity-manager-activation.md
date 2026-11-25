@@ -144,7 +144,10 @@ capacityManager:
 
 An AWS-primary layout with a Vast fallback works the same way with the providers
 swapped; `fallback.minReliability` (default: the primary value) applies to Vast
-offers.
+offers. GCP is selected the same way, as the primary or the fallback: `provider:
+gcp`, region names such as `us-central1` and, optionally, instance types such as
+`g2-standard-16` (one L4). Without explicit prices a GCP pool uses the AWS
+defaults, USD 1.50 per worker and USD 3.00 in total per hour.
 
 For imported backends, list both providers in `preparation.dstack.providers`,
 with their credentials: `preparation.dstack.vastaiApiKeyEnv: VASTAI_API_KEY` for
@@ -154,7 +157,10 @@ file. The controller must provide both backends before manager installation; the
 Helm initialization Job checks both backends. Fleet names must differ from primary fleet names.
 An AWS fallback needs capacity-manager chart 0.1.9 or later, whose values
 schema accepts `aws` for `initialization.fallbackProvider`; preparation refuses
-an older `CAPACITY_MANAGER_CHART_VERSION` pin.
+an older `CAPACITY_MANAGER_CHART_VERSION` pin. A GCP primary or fallback needs
+chart 0.1.10 or later for the same reason. For an imported GCP backend, list
+`gcp` in `preparation.dstack.providers` and name the service-account key in
+`preparation.dstack.gcpServiceAccountFile`.
 
 Preparation generates a separate fallback fleet in the same project. It inherits
 primary fleet CPU/RAM/disk/idle settings, node maximum and create/reuse action;

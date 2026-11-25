@@ -25,13 +25,13 @@ export interface CapacityManagerConfig {
   fallback?: {
     fleet: string
     gpu: 'A10G' | 'A100' | 'A6000' | 'L4' | 'L40S' | 'RTX3090' | 'RTX4090'
-    /** Restrict the fallback fleet to these instance types (AWS); omit to match on GPU and resources. */
+    /** Restrict the fallback fleet to these instance types (AWS, GCP); omit to match on GPU and resources. */
     instanceTypes?: string[]
     /** The fallback fleet's own `max_price`, independent of the primary price. */
     maxPricePerHourUsd: number
     /** Vast offer reliability floor; defaults to the primary value. */
     minReliability?: number
-    provider: 'aws' | 'vastai'
+    provider: 'aws' | 'gcp' | 'vastai'
     regions: string[]
   }
   /** Created empty by the install preflight, or checked without mutation when reusing. */
@@ -55,7 +55,7 @@ export interface CapacityManagerConfig {
   minWorkers?: number
   /** Dedicated dstack project; defaults the imported controller project to this name. */
   project: string
-  provider: 'aws' | 'vastai'
+  provider: 'aws' | 'gcp' | 'vastai'
   regions: string[]
   /** Measured estimates used by Core's planner, not execution time limits. */
   runtimeEstimates?: {

@@ -11,7 +11,7 @@ export interface CapacityPool {
   maxPricePerHourUsd: number
   /** Vast offer reliability floor, 0.95 to 1 (default 0.95). */
   minReliability?: number
-  provider: 'aws' | 'vastai'
+  provider: 'aws' | 'gcp' | 'vastai'
   regions: string[]
 }
 
@@ -19,7 +19,7 @@ export interface CapacityPool {
  * Runtime GPU capacity of a prepared deployment (`capacity.yaml`). Not part of
  * the frozen intent: `scrollsdk capacity deploy` (or `render`) turns it into the dstack
  * config.yml and the chart values that change a running deployment.
- * Holds environment variable names, never credential values.
+ * Holds environment variable names and file paths, never credential values.
  */
 export interface CapacityDocument {
   apiVersion: typeof CAPACITY_API_VERSION
@@ -31,6 +31,11 @@ export interface CapacityDocument {
   providers: {
     /** Uses the controller's workload role; requires the controller's AWS identity. */
     aws?: {iamInstanceProfile?: string; publicIps?: boolean; vpcIds: Record<string, string>}
+    /**
+     * `serviceAccountFile`: a service-account JSON key to import or rotate, absolute or relative to the
+     * deployment directory; omit it to keep the imported key. `projectId` defaults to the key's own project.
+     */
+    gcp?: {projectId?: string; serviceAccountFile?: string}
     vastai?: {apiKeyEnv: string}
   }
   /** Shared by every fleet. */

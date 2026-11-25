@@ -27,6 +27,7 @@ import {sanitizeName} from '../../utils/kms-signer-provisioner.js'
 import {
   resolveDogecoinServiceRpcUrl,
 } from '../../utils/kubernetes-endpoints.js'
+import {MAINNET_PROOF_POSTURE, assertMainnetProofPosture, isDogecoinMainnet} from '../../utils/mainnet-proof-posture.js'
 import {
   createNonInteractiveContext,
   resolveConfirm,
@@ -166,7 +167,7 @@ export class DogeConfigCommand extends Command {
     }),
     'proof-enforcement': Flags.string({
       dependsOn: ['proof-topology'],
-      description: 'Proof enforcement switch; keep observe until real proofs are validated',
+      description: 'Proof enforcement switch; on testnet and regtest keep observe until real proofs are validated. Mainnet requires enforce',
       options: ['observe', 'enforce'],
     }),
     'proof-force-path-style': Flags.boolean({
@@ -886,7 +887,10 @@ export class DogeConfigCommand extends Command {
       publicEndpoint = options.publicS3Endpoint || store.endpointUrl
     }
 
-    const mode = await resolveFlagOrPrompt(
+    // Mainnet has one valid posture; the switches are fixed rather than prompted.
+    const mainnet = isDogecoinMainnet(options.config.network)
+    if (mainnet) options.log(chalk.blue(`Dogecoin mainnet: proof mode, generation and enforcement default to ${MAINNET_PROOF_POSTURE.mode}/${MAINNET_PROOF_POSTURE.generation}/${MAINNET_PROOF_POSTURE.enforcement}, the only posture dogeos-core runs on mainnet.`))
+    const mode = mainnet ? options.mode ?? MAINNET_PROOF_POSTURE.mode : await resolveFlagOrPrompt(
       options.mode,
       options.nonInteractive,
       existing?.mode === 'active' || existing?.mode === 'disabled' ? existing.mode : 'disabled',
@@ -899,7 +903,7 @@ export class DogeConfigCommand extends Command {
         message: 'Should proof generation services be active?',
       }),
     ) as 'active' | 'disabled'
-    const generation = await resolveFlagOrPrompt(
+    const generation = mainnet ? options.generation ?? MAINNET_PROOF_POSTURE.generation : await resolveFlagOrPrompt(
       options.generation,
       options.nonInteractive,
       existing?.generation || 'mock',
@@ -918,7 +922,7 @@ export class DogeConfigCommand extends Command {
       throw new Error('real generation requires full software/Bridge materials and a production Worker image; rerun setup proof-materials --generation real')
     }
 
-    const enforcement = await resolveFlagOrPrompt(
+    const enforcement = mainnet ? options.enforcement ?? MAINNET_PROOF_POSTURE.enforcement : await resolveFlagOrPrompt(
       options.enforcement,
       options.nonInteractive,
       existing?.enforcement || 'observe',
@@ -933,6 +937,7 @@ export class DogeConfigCommand extends Command {
         message: 'Select proof enforcement:',
       }),
     ) as 'enforce' | 'observe'
+    assertMainnetProofPosture(options.config.network, {enforcement, generation, mode})
     if (enforcement === 'enforce' && (mode !== 'active' || generation !== 'real')) {
       throw new Error('proof enforcement can be enabled only after active real proving is validated')
     }

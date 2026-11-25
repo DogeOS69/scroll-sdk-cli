@@ -31,8 +31,12 @@ a source running an L1 Interface image that includes #1627.
 
 The inputs are `genesis.yaml`, `protocol_context.yaml`,
 `l1-interface-production.yaml`, and `l2-reth-rpc-production.yaml` under
-`--values-dir`, plus the deployment's DogeConfig. Legacy genesis conversion also
-requires `l2-rpc-production.yaml`. Peer discovery reuses the existing exporter:
+`--values-dir`, plus the deployment's DogeConfig. The L1 block the Reth node
+starts scanning from is taken from `config.scroll.l1Config.startL1Block` in the
+genesis. A legacy genesis (one that still has `config.systemContract`) may lack
+that field; add it to the genesis, or pass `--start-l1-block`. When both are
+given they must agree. The l2geth values file `l2-rpc-production.yaml` is no
+longer used. Peer discovery reuses the existing exporter:
 Service-owned public endpoints come from Kubernetes, and independent NLBs come
 from AWS using `--spec` (and optional `--aws-profile`). Already-public peers can
 be exported without Kubernetes discovery. An unresolved or empty peer list is

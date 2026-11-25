@@ -16,7 +16,7 @@ import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
 import {discoverExistingNlb} from '../../utils/existing-nlb.js'
-import {normalizeNativeRethGenesis} from '../../utils/native-reth-genesis.js'
+import {dropRetiredL1DataFeeBufferCheck} from '../../utils/native-reth-genesis.js'
 import { buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import { deriveBootnodeRethEnodeUrl } from '../setup/l2-bootnode-reth.js'
 
@@ -737,23 +737,17 @@ function requireGenesisAddress(value: unknown, fieldPath: string): string {
 // values/genesis.yaml is canonical and must remain unchanged.
 // Adapt a deep copy at the RPC-package boundary to the stricter Scroll-Reth
 // chainspec schema. Keep this transformation deliberately narrow: normalize
-// integer representations, retain the legacy buffer flag only for legacy inputs, bind the system
+// integer representations, drop the retired buffer flag, bind the system
 // contract address already present in the legacy metadata, and bind the L1
-// deployment block supplied by l2-rpc-production.yaml.
-export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1Block?: unknown): Record<string, any> {
+// start block from --start-l1-block or from the genesis itself.
+export function normalizeGenesisForReth(sourceGenesis: unknown, startL1BlockOption?: number): Record<string, any> {
   const source = requireGenesisObject(sourceGenesis, '<root>')
   const normalized = JSON.parse(JSON.stringify(source)) as Record<string, any>
   const config = requireGenesisObject(normalized.config, 'config')
   const scroll = requireGenesisObject(config.scroll, 'config.scroll')
   const l1Config = requireGenesisObject(scroll.l1Config, 'config.scroll.l1Config')
 
-  if (scroll.l1DataFeeBufferCheck === undefined) {
-    scroll.l1DataFeeBufferCheck = false
-  } else if (typeof scroll.l1DataFeeBufferCheck !== 'boolean') {
-    throw new TypeError(
-      `genesis field config.scroll.l1DataFeeBufferCheck must be a boolean, got: ${JSON.stringify(scroll.l1DataFeeBufferCheck)}`,
-    )
-  }
+  dropRetiredL1DataFeeBufferCheck(scroll)
 
   for (const field of ['l1ChainId', 'numL1MessagesPerBlock']) {
     l1Config[field] = normalizeGenesisInteger(l1Config[field], `config.scroll.l1Config.${field}`)
@@ -778,7 +772,8 @@ export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1B
       l1Config.startL1Block,
       'config.scroll.l1Config.startL1Block',
     )
-    return normalizeNativeRethGenesis(normalized)
+    resolveStartL1Block(l1Config.startL1Block, startL1BlockOption)
+    return normalized
   }
 
   const systemContract = requireGenesisObject(config.systemContract, 'config.systemContract')
@@ -802,25 +797,32 @@ export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1B
 
   l1Config.systemContractAddress = systemContractAddress
 
-  const startL1Block = normalizeGenesisInteger(
-    requiredStartL1Block,
-    'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK',
-  )
-  if (l1Config.startL1Block !== undefined) {
-    const existingStartL1Block = normalizeGenesisInteger(
-      l1Config.startL1Block,
-      'config.scroll.l1Config.startL1Block',
+  const existingStartL1Block = l1Config.startL1Block === undefined
+    ? undefined
+    : normalizeGenesisInteger(l1Config.startL1Block, 'config.scroll.l1Config.startL1Block')
+  const startL1Block = resolveStartL1Block(existingStartL1Block, startL1BlockOption)
+  if (startL1Block === undefined) {
+    throw new Error(
+      'legacy genesis has no config.scroll.l1Config.startL1Block; add it to the genesis or pass --start-l1-block',
     )
-    if (existingStartL1Block !== startL1Block) {
-      throw new Error(
-        'genesis field config.scroll.l1Config.startL1Block conflicts with ' +
-        'L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK',
-      )
-    }
   }
 
   l1Config.startL1Block = startL1Block
   return normalized
+}
+
+// The genesis value and --start-l1-block must agree when both are given.
+function resolveStartL1Block(existing: number | undefined, option: number | undefined): number | undefined {
+  if (option === undefined) return existing
+  if (!Number.isSafeInteger(option) || option < 0) {
+    throw new TypeError(`--start-l1-block must be a non-negative integer, got: ${JSON.stringify(option)}`)
+  }
+
+  if (existing !== undefined && existing !== option) {
+    throw new Error('--start-l1-block conflicts with genesis field config.scroll.l1Config.startL1Block')
+  }
+
+  return option
 }
 
 export default class SetupGenRpcPackage extends Command {
@@ -858,6 +860,10 @@ export default class SetupGenRpcPackage extends Command {
       description: 'Kubernetes namespace',
     }),
     spec: Flags.string({description: 'Deployment spec required when values reference independent bootnode NLBs'}),
+    'start-l1-block': Flags.integer({
+      description: 'L1 block the Reth node starts scanning from, for a legacy genesis without config.scroll.l1Config.startL1Block; must agree with the genesis value when both exist',
+      min: 0,
+    }),
     'values-dir': Flags.string({
       default: './values',
       description: 'Directory containing Helm values files (must include genesis.yaml)',
@@ -865,9 +871,8 @@ export default class SetupGenRpcPackage extends Command {
     }),
   }
 
-  protected extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string): string {
+  protected extractGenesisJson(valuesDir: string, rpcPackageDir: string, network: string, startL1Block?: number): string {
     const genesisYamlPath = path.resolve(valuesDir, 'genesis.yaml')
-    const l2RpcYamlPath = path.resolve(valuesDir, 'l2-rpc-production.yaml')
 
     if (!fs.existsSync(genesisYamlPath)) {
       throw new Error(`genesis.yaml not found at: ${genesisYamlPath}`)
@@ -901,24 +906,6 @@ export default class SetupGenRpcPackage extends Command {
       } else {
         // If no 'genesis' key, assume the entire YAML is the genesis data
         genesisJson = genesisYaml
-      }
-
-      const sourceConfig = requireGenesisObject(
-        requireGenesisObject(genesisJson, '<root>').config, 'config',
-      )
-      let startL1Block: unknown
-      if (sourceConfig.systemContract !== undefined) {
-        if (!fs.existsSync(l2RpcYamlPath)) {
-          throw new Error(`l2-rpc-production.yaml not found at: ${l2RpcYamlPath}`)
-        }
-
-        startL1Block = this.loadConfigMapEnvData(l2RpcYamlPath).L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK
-        if (startL1Block === undefined) {
-          throw new Error(
-            'l2-rpc-production.yaml configMaps.env.data.L2GETH_L1_CONTRACT_DEPLOYMENT_BLOCK ' +
-            'is required for legacy genesis config.scroll.l1Config.startL1Block',
-          )
-        }
       }
 
       const rethGenesis = normalizeGenesisForReth(genesisJson, startL1Block)
@@ -1246,7 +1233,7 @@ export default class SetupGenRpcPackage extends Command {
 
       // Step 7: Extract genesis.json from genesis.yaml
       this.log(chalk.blue('Step 3: Extracting genesis.json from genesis.yaml...'))
-      const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network)
+      const genesisJsonPath = this.extractGenesisJson(flags['values-dir'], rpcPackageDir, network, flags['start-l1-block'])
       this.log(chalk.green(`✓ Extracted genesis.json at: ${genesisJsonPath}`))
 
       // Step 7b: Extract protocol_context.json from protocol_context.yaml.

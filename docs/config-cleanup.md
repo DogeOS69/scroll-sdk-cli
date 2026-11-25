@@ -1,6 +1,6 @@
 # DogeOS configuration cleanup and retired services
 
-Updated 2026-10-24. This is the current configuration procedure for the local
+Updated 2026-11-25. This is the current configuration procedure for the local
 CLI and the matching `scroll-contracts` workspace. Existing deployment status
 reports describe their historical deployments; use this page for the supported
 configuration fields and prompts.
@@ -22,8 +22,14 @@ tsuki-v0.13 and core refuse a genesis that sets `tsukiTime` without
 same as rc.11.
 
 Release rc.10 removes the retired `config.scroll.l1DataFeeBufferCheck` field
-from the genesis template for native Reth compatibility. The CLI keeps its
-normalization for explicitly selected older generator images.
+from the genesis template for native Reth compatibility. A genesis from an older
+generator image may still carry the field. The CLI drops it when it is `false`
+and refuses any other value: `setup genesis` does this for a native genesis and
+leaves a legacy one unchanged, and RPC package export does it for either kind.
+Earlier CLI versions always wrote the field into a legacy export, adding `false`
+when the source lacked it, so re-exporting a legacy genesis changes the bytes of
+`l2reth-genesis.json` even when the source does not carry the field. RPC package
+snapshot groups, which record that file's hash, must be republished with it.
 
 `CONTRACTS_DOCKER_DEFAULT_TAG` supplies the common tag. Explicit image overrides
 and existing deployment values should be reviewed when upgrading. The original

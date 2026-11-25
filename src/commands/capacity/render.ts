@@ -25,6 +25,7 @@ export default class CapacityRender extends Command {
         for (const fleet of updated) output.info(`  fleet ~ ${fleet.name}: ${fleet.changes.map(change => formatValueChange(change)).join('; ')}`)
         for (const fleet of undeclared) output.info(`  fleet ! ${fleet} no longer declared`)
         output.info(`  config.yml ${result.serverConfigChanged ? 'changed' : 'unchanged'}`)
+        if (result.gcpKeyRotated) output.info('  GCP service-account key changed')
         output.info(`Review with git diff, then deploy with scrollsdk capacity deploy --dir ${flags.dir}`)
       }
 

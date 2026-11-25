@@ -5,9 +5,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {CAPACITY_MANAGER_PLAN, CAPACITY_MANAGER_VALUES, capacitySpec, parseCapacityInput} from './capacity-manager.js'
-import {type CapacityRenderOptions, type FleetChanges, type ValueChange, fixedFleetChanges, fleetChanges, formatValueChange, renderCapacity, valueChanges} from './capacity-runtime.js'
-import {DSTACK_CREDENTIALS_FILE, dstackSecretRefs, readDstackCredentials} from './dstack-credentials.js'
-import {readDstackControllerConfig} from './dstack-database.js'
+import {type CapacityRenderOptions, type FleetChanges, RECORDED_CONTROLLER_CONFIG, type ValueChange, fixedFleetChanges, fleetChanges, formatValueChange, readControllerContext, renderCapacity, valueChanges} from './capacity-runtime.js'
+import {DSTACK_CREDENTIALS_FILE, dstackSecretRefs} from './dstack-credentials.js'
 import {publishDstackSecrets, runSecretKubectl} from './dstack-secret-publisher.js'
 import {localPath} from './preparation-io.js'
 import {specKubernetesTarget} from './spec-kubernetes-target.js'
@@ -46,6 +45,8 @@ export interface CapacityDeploySummary {
   /** The controller restarts: config.yml or its values changed, or --restart-controller. */
   controllerRestart: boolean
   fleets: FleetChanges
+  /** The GCP service-account key differs from the one in the running Secret; dstack reads it only at startup. */
+  gcpKeyRotated: boolean
   keyRotated: boolean
   /** Last four characters of the Vast.ai key in the running config.yml and in the rendered one, so the operator knows which key is which. */
   keySuffixes?: {after: string; before: string}
@@ -116,12 +117,13 @@ function describeValues(changes: ValueChange[]): string[] {
   return [...new Set(changes.map(change => change.before === undefined && change.after === undefined ? change.path : formatValueChange({...change, path: change.path.replace(/^policy\.families\.[^.]+\./, 'policy.families.*.')})))].map(line => `      ${line}`)
 }
 
-/** Human-readable summary lines. Secret data is never shown: only the Vast.ai key's rotation is reported. */
+/** Human-readable summary lines. Secret data is never shown: only that a provider key was rotated. */
 export function describeCapacityChanges(summary: CapacityDeploySummary, target: string): string[] {
   const lines = [`Changes against the running deployment (${target}):`]
   for (const backend of summary.backends.added) lines.push(`  backend  + ${backend}`)
   for (const backend of summary.backends.removed) lines.push(`  backend  - ${backend}  deleted from the dstack project when the controller restarts`)
   if (summary.keyRotated) lines.push(`  backend  ~ vastai  API key rotated${summary.keySuffixes ? ` (${summary.keySuffixes.before} -> ${summary.keySuffixes.after})` : ''}`)
+  if (summary.gcpKeyRotated) lines.push('  backend  ~ gcp  service-account key changed')
   // The checksum annotation is how config.yml changes restart the controller; name it as such.
   const controllerChanges = summary.controllerChanges.map(change => change.path === `podAnnotations.${CHECKSUM}` ? {path: 'config.yml checksum annotation (restarts the controller)'} : change)
   if (controllerChanges.length > 0) lines.push('  dstack-controller values:', ...describeValues(controllerChanges))
@@ -139,11 +141,11 @@ export function describeCapacityChanges(summary: CapacityDeploySummary, target: 
 
 function hasChanges(summary: CapacityDeploySummary): boolean {
   return summary.controllerRestart || summary.managerChanges.length > 0 || summary.backends.added.length + summary.backends.removed.length > 0
-    || summary.fleets.created.length + summary.fleets.updated.length > 0 || summary.keyRotated
+    || summary.fleets.created.length + summary.fleets.updated.length > 0 || summary.keyRotated || summary.gcpKeyRotated
 }
 
 /** Files and directories render writes, relative to the deployment directory. */
-const RENDERED = [DSTACK_CREDENTIALS_FILE, 'Makefile', 'secrets', 'values', '.scrollsdk/capacity-manager']
+const RENDERED = [DSTACK_CREDENTIALS_FILE, RECORDED_CONTROLLER_CONFIG, 'Makefile', 'secrets', 'values', '.scrollsdk/capacity-manager']
 
 function renderedFiles(root: string): string[] {
   const walk = (file: string): string[] => {
@@ -199,15 +201,19 @@ async function deployRendered(root: string, options: CapacityDeployOptions, deps
   const {namespace} = recorded
   const dstackNamespace: string = plan.dstack?.namespace ?? namespace
   const dstackDeployment: string = plan.dstack?.deployment ?? 'dstack-controller'
-  const controller = readDstackControllerConfig(localPath(root, '.data/doge-config.toml'))!
-  const state = readDstackCredentials(root)!
-  const {server} = dstackSecretRefs(controller, state)
+  // As rendered: the credential mounts come from the operator's controller values.
+  const {controller, state} = readControllerContext(root)
+  const {gcp, server} = dstackSecretRefs(controller, state)
   const nextServer = (yaml.load(fs.readFileSync(localPath(root, path.join('secrets', `${server.name}.yaml`)), 'utf8')) as any).stringData[server.key] as string
 
   // The running deployment, not the previous render: an earlier render may not have been deployed.
   const liveText = await deps.kubectl(['--context', context, '--namespace', dstackNamespace, '--request-timeout=30s', 'get', 'secret', server.name, '--ignore-not-found', '-o', 'json'])
   const liveServer = liveText.trim() ? Buffer.from(JSON.parse(liveText).data?.[server.key] ?? '', 'base64').toString('utf8') : undefined
   const live = liveServer ? yaml.load(liveServer) : undefined
+  // The key is not in config.yml, so its change is read from its own Secret. A new Secret comes with a new backend.
+  const liveGcpText = gcp ? await deps.kubectl(['--context', context, '--namespace', dstackNamespace, '--request-timeout=30s', 'get', 'secret', gcp.name, '--ignore-not-found', '-o', 'json']) : ''
+  const liveGcpKey = liveGcpText.trim() ? Buffer.from(JSON.parse(liveGcpText).data?.[gcp!.key] ?? '', 'base64').toString('utf8') : undefined
+  const gcpKeyRotated = liveGcpKey !== undefined && liveGcpKey !== state.gcp!.serviceAccount
   const next = yaml.load(nextServer)
   const installed = await deps.helmValues('capacity-manager', context, namespace)
   const installedController = await deps.helmValues('dstack-controller', context, dstackNamespace)
@@ -231,8 +237,9 @@ async function deployRendered(root: string, options: CapacityDeployOptions, deps
   const summary: CapacityDeploySummary = {
     backends: {added: backendTypes(next).filter(type => !backendTypes(live).includes(type)), removed: backendTypes(live).filter(type => !backendTypes(next).includes(type))},
     controllerChanges,
-    controllerRestart: liveServer !== nextServer || controllerChanges.length > 0 || Boolean(options.restartController),
+    controllerRestart: liveServer !== nextServer || controllerChanges.length > 0 || gcpKeyRotated || Boolean(options.restartController),
     fleets: fleetChanges(installed?.initialization?.fleets ?? [], values.initialization?.fleets ?? []),
+    gcpKeyRotated,
     keyRotated: Boolean(liveKey && nextKey && liveKey !== nextKey),
     ...(liveKey && nextKey && liveKey !== nextKey ? {keySuffixes: {after: keySuffix(nextKey), before: keySuffix(liveKey)}} : {}),
     managerChanges: installed ? valueChanges(strip(installed), strip(values)) : NEW_RELEASE,
@@ -274,7 +281,8 @@ async function deployRendered(root: string, options: CapacityDeployOptions, deps
   const restartedAt = new Date().toISOString()
   await step('Upgrading dstack-controller', `The previous capacity manager keeps running. Check ${logs}, then rerun scrollsdk capacity deploy.`, async () => {
     await deps.make('install-dstack-controller', variables, root)
-    if (options.restartController && liveServer === nextServer && controllerChanges.length === 0) await deps.kubectl(['--context', context, '--namespace', dstackNamespace, 'rollout', 'restart', `deployment/${dstackDeployment}`])
+    // Neither an explicit restart nor a rotated GCP key changes the controller's pod template.
+    if ((options.restartController || gcpKeyRotated) && liveServer === nextServer && controllerChanges.length === 0) await deps.kubectl(['--context', context, '--namespace', dstackNamespace, 'rollout', 'restart', `deployment/${dstackDeployment}`])
     await deps.kubectl(['--context', context, '--namespace', dstackNamespace, 'rollout', 'status', `deployment/${dstackDeployment}`, '--timeout', '5m'])
   })
   if (summary.controllerRestart) {

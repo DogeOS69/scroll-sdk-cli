@@ -156,7 +156,7 @@ describe('Core capacity manager', () => {
     if (failure === 'region') config.fallback.regions = []
     if (failure === 'gpu') (config.fallback as any).gpu = 'unknown'
     if (failure === 'reliability') config.fallback.minReliability = 0.5
-    if (failure === 'provider') (config.fallback as any).provider = 'gcp'
+    if (failure === 'provider') (config.fallback as any).provider = 'unknown-cloud'
 
     expect(() => resolveCapacityManager(input.spec)).throw()
   })
@@ -292,6 +292,35 @@ describe('Core capacity manager', () => {
     spec.capacityManager!.fallback = {fleet: 'aws-l4', gpu: 'L4', maxPricePerHourUsd: 1.5, provider: 'aws', regions: ['us-east-1']}
     expect(() => assertCapacityChartVersions(pin('0.1.8'), spec)).throw('An AWS fallback requires capacity-manager chart >= 0.1.9')
     expect(() => assertCapacityChartVersions(pin('0.1.9'), spec, {fleetUpdate: true})).not.throw()
+  })
+
+  it('prepares a GCP fleet and policy, as primary or fallback, with the imported backend and chart 0.1.10', () => {
+    const input = fixture()
+    const config = input.spec.capacityManager!
+    Object.assign(config, {fleets: ['gcp-l4'], instanceTypes: ['g2-standard-16'], project: 'isolated-gcp', provider: 'gcp', regions: ['us-central1']})
+    assertDeploymentSpecFields({capacityManager: config})
+    expect(resolveCapacityManager(input.spec)).include({maxHourlyCostUsd: 3, maxPricePerHourUsd: 1.5})
+    const [fleet] = capacityManagerFleets(input.spec).configurations
+    expect(fleet).deep.include({backends: ['gcp'], instance_types: ['g2-standard-16'], max_price: 1.5, name: 'gcp-l4', regions: ['us-central1'], spot_policy: 'on-demand'})
+    expect(fleet).not.have.property('backend_options')
+    const values = buildCapacityManagerValues(input.spec, input.worker, input.publication, input.imageCheck)
+    expect(toml.parse(values.manager.policy) as any).nested.include({'pool.gpu_class': 'L4', 'pool.provider': 'gcp', 'pool.vram_gib': 22})
+    expect(values.manager.dstack).deep.include({instanceTypes: ['g2-standard-16'], regions: ['us-central1']})
+
+    // An imported controller project must carry the backend of every selected provider.
+    input.spec.preparation!.dstack = {mode: 'import', providers: ['vastai'], vastaiApiKeyEnv: 'TEST_VASTAI_KEY'}
+    expect(() => resolveCapacityManager(input.spec)).throw('preparation.dstack.providers must include the capacityManager provider')
+    input.spec.preparation!.dstack = {gcpServiceAccountFile: 'service-account.json', mode: 'import', providers: ['gcp']}
+    expect(() => resolveCapacityManager(input.spec)).not.throw()
+
+    const pin = (version: string) => `CAPACITY_MANAGER_CHART_VERSION ?= ${version}\n`
+    expect(() => assertCapacityChartVersions(pin('0.1.9'), input.spec)).throw('A GCP provider requires capacity-manager chart >= 0.1.10')
+    expect(() => assertCapacityChartVersions(pin('0.1.10'), input.spec, {fleetUpdate: true})).not.throw()
+    const fallback = fixture().spec
+    fallback.capacityManager!.fallback = {fleet: 'gcp-l4', gpu: 'L4', maxPricePerHourUsd: 1.5, provider: 'gcp', regions: ['us-central1']}
+    expect(capacityManagerFleets(fallback).configurations.map(item => item.backends)).deep.equal([['aws'], ['gcp']])
+    expect(() => assertCapacityChartVersions(pin('0.1.9'), fallback)).throw('A GCP provider requires capacity-manager chart >= 0.1.10')
+    expect(() => assertCapacityChartVersions(pin('0.1.10'), fallback)).not.throw()
   })
 
   it('uses an explicit dstack role reference', () => {

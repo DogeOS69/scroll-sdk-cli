@@ -2,6 +2,7 @@
 import * as toml from '@iarna/toml'
 import {expect} from 'chai'
 import * as yaml from 'js-yaml'
+import {generateKeyPairSync} from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -19,6 +20,10 @@ const VAST_KEY = 'NONFUNCTIONAL-VAST-KEY-0123456789'
 const ROTATED_KEY = 'NONFUNCTIONAL-ROTATED-KEY-9876543210'
 const CONTEXT = 'saved-cluster-context'
 const ROLE = 'arn:aws:iam::123456789012:role/example-dstack-controller'
+// A disposable key generated for this run; never a real credential.
+const GCP_PRIVATE_KEY = generateKeyPairSync('rsa', {modulusLength: 2048}).privateKey.export({format: 'pem', type: 'pkcs8'}).toString()
+const gcpServiceAccount = (keyId = 'key-one') => JSON.stringify({client_email: 'dstack@example-project.iam.gserviceaccount.com', private_key: GCP_PRIVATE_KEY, private_key_id: keyId, project_id: 'example-project', type: 'service_account'})
+const GCP_KEY_FILE = 'gcp-service-account.json'
 
 describe('capacity.yaml creation and render', function () {
   this.timeout(30_000)
@@ -54,6 +59,18 @@ describe('capacity.yaml creation and render', function () {
   const allowAws = (extraEnv = [{name: 'AWS_EC2_METADATA_DISABLED', value: 'true'}]) => {
     const controller = values('dstack-controller')
     fs.writeFileSync(path.join(root, 'values/dstack-controller-production.yaml'), yaml.dump({...controller, defaultCredentialsEnabled: true, extraEnv, serviceAccount: {annotations: {'eks.amazonaws.com/role-arn': ROLE}}}))
+  }
+
+  /** The service-account Secret mount, edited in the controller values as on a prepared deployment. */
+  const mountGcp = () => fs.writeFileSync(path.join(root, 'values/dstack-controller-production.yaml'), yaml.dump({...values('dstack-controller'), credentialSecrets: [{name: 'gcp', secretName: 'dstack-gcp-credentials'}]}))
+  /** Keep the Vast primary and add a GCP fallback fleet, importing the key from a file. */
+  const addGcpFallback = (keyId?: string) => {
+    fs.writeFileSync(path.join(root, GCP_KEY_FILE), gcpServiceAccount(keyId), {mode: 0o600})
+    editDocument(document => {
+      document.providers.gcp = {serviceAccountFile: GCP_KEY_FILE}
+      document.fallback = {fleet: 'gcp-l4', gpu: 'L4', instanceTypes: ['g2-standard-16'], maxPricePerHourUsd: 1.5, provider: 'gcp', regions: ['us-central1']}
+      document.scaling.maxHourlyCostUsd = 3
+    })
   }
 
   const createDocument = (directory: string) => createCapacityDocument(directory)!
@@ -255,6 +272,83 @@ describe('capacity.yaml creation and render', function () {
     expect(values('capacity-manager').initialization).to.include({provider: 'aws'}).and.not.have.property('fallbackProvider')
   })
 
+  it('adds a GCP provider from a service-account key file, keeps the imported key, rotates and removes it', async () => {
+    createDocument(root)
+    addGcpFallback()
+    const credentials = read(DSTACK_CREDENTIALS_FILE)
+    // Nothing is imported yet, so the key file must be named.
+    editDocument(document => {document.providers.gcp = {}})
+    await rejects(render(), 'providers.gcp needs serviceAccountFile')
+    editDocument(document => {document.providers.gcp = {serviceAccountFile: 'missing.json'}})
+    await rejects(render(), 'must name an existing service-account JSON key file')
+    // The controller reads the key from a Secret that its values must mount first; nothing is written.
+    editDocument(document => {document.providers.gcp = {serviceAccountFile: GCP_KEY_FILE}})
+    await rejects(render(), 'credentialSecrets')
+    expect(read(DSTACK_CREDENTIALS_FILE)).to.equal(credentials)
+    mountGcp()
+    // Another mount recorded at preparation stays as it is.
+    setController({credentialSecrets: [{name: 'other', secretName: 'other-credentials'}]})
+    const controllerValues = values('dstack-controller')
+    const result = await render()
+    expect(result).to.deep.include({addedProviders: ['gcp'], gcpKeyRotated: false, providers: ['gcp', 'vastai'], removedProviders: [], serverConfigChanged: true})
+    expect(result.fleets).to.deep.include({created: ['gcp-l4'], unchanged: ['vast-rtx3090']})
+    expect(serverConfig().projects[0].backends).to.deep.equal([
+      {creds: {api_key: VAST_KEY, type: 'api_key'}, type: 'vastai'},
+      {creds: {filename: '/etc/dstack/credentials/gcp/service-account.json', type: 'service_account'}, project_id: 'example-project', type: 'gcp'},
+    ])
+    expect((yaml.load(read('secrets/dstack-gcp-credentials.yaml')) as any).stringData).to.deep.equal({'service-account.json': gcpServiceAccount()})
+    // The recorded controller configuration gets the mount, for the setup commands that handle the dstack Secrets.
+    const recorded = () => (toml.parse(read('.data/doge-config.toml')) as any).dstackController
+    expect(recorded()).to.deep.equal({credentialSecrets: [{name: 'other', secretName: 'other-credentials'}, {name: 'gcp', secretName: 'dstack-gcp-credentials'}], database: {type: 'sqlite'}, enabled: true})
+    // The file is written only when the GCP entry changes.
+    fs.writeFileSync(path.join(root, '.data/doge-config.toml'), `# kept\n${read('.data/doge-config.toml')}`)
+    await render()
+    expect(read('.data/doge-config.toml')).to.match(/^# kept\n/)
+    // Only the checksum annotation changes in the operator's controller values.
+    expect({...values('dstack-controller'), podAnnotations: undefined}).to.deep.equal({...controllerValues, podAnnotations: undefined})
+    const manager = values('capacity-manager')
+    expect(manager.initialization).to.include({fallbackProvider: 'gcp', provider: 'vastai'})
+    const fleet = manager.initialization.fleets.find((item: any) => item.name === 'gcp-l4')
+    expect(fleet).to.deep.include({backends: ['gcp'], instance_types: ['g2-standard-16'], max_price: 1.5, regions: ['us-central1']})
+    expect(fleet).not.to.have.property('backend_options')
+    for (const file of [CAPACITY_DOCUMENT, 'values/dstack-controller-production.yaml', 'values/capacity-manager-production.yaml', 'secrets/dstack-controller-config.yaml']) expect(read(file)).not.to.include('PRIVATE KEY')
+
+    // Without the file the imported key stays; the project can still change.
+    fs.rmSync(path.join(root, GCP_KEY_FILE))
+    editDocument(document => {document.providers.gcp = {projectId: 'other-project'}})
+    expect(await render()).to.deep.include({gcpKeyRotated: false, serverConfigChanged: true})
+    expect(readDstackCredentials(root)!.gcp).to.deep.equal({projectId: 'other-project', serviceAccount: gcpServiceAccount()})
+
+    // A key is not part of config.yml: its rotation is reported on its own.
+    fs.writeFileSync(path.join(root, GCP_KEY_FILE), gcpServiceAccount('key-two'), {mode: 0o600})
+    editDocument(document => {document.providers.gcp.serviceAccountFile = GCP_KEY_FILE})
+    expect(await render()).to.deep.include({gcpKeyRotated: true, serverConfigChanged: false})
+    expect((yaml.load(read('secrets/dstack-gcp-credentials.yaml')) as any).stringData['service-account.json']).to.equal(gcpServiceAccount('key-two'))
+
+    editDocument(document => {delete document.fallback; delete document.providers.gcp})
+    expect(await render()).to.deep.include({providers: ['vastai'], removedProviders: ['gcp'], serverConfigChanged: true})
+    expect(readDstackCredentials(root)).not.to.have.property('gcp')
+    expect(recorded().credentialSecrets).to.deep.equal([{name: 'other', secretName: 'other-credentials'}])
+    expect(serverConfig().projects[0].backends.map((backend: any) => backend.type)).to.deep.equal(['vastai'])
+  })
+
+  it('lists an imported GCP backend by its project and refuses a malformed provider entry', async () => {
+    const state = readDstackCredentials(root)!
+    fs.writeFileSync(path.join(root, DSTACK_CREDENTIALS_FILE), JSON.stringify({...state, gcp: {projectId: 'example-project', serviceAccount: gcpServiceAccount()}, providers: ['vastai', 'gcp']}), {mode: 0o600})
+    const {document, warnings} = createDocument(root)
+    expect(document.providers).to.deep.equal({gcp: {projectId: 'example-project'}, vastai: {apiKeyEnv: 'TEST_VASTAI_KEY'}})
+    expect(warnings).to.deep.equal([])
+    expect(read(CAPACITY_DOCUMENT)).not.to.include('PRIVATE KEY')
+    for (const [entry, message] of [[{projectId: 'Not A Project'}, 'providers.gcp.projectId'], [{serviceAccountFile: ''}, 'providers.gcp.serviceAccountFile'], [{keyFile: 'x'}, 'providers.gcp has unsupported fields']] as const) {
+      editDocument(next => {next.providers.gcp = entry})
+      await rejects(render(), message)
+    }
+
+    // A fleet may only use a provider that is listed.
+    editDocument(next => {delete next.providers.gcp; next.primary.provider = 'gcp'})
+    await rejects(render(), 'primary.provider gcp is not configured under providers')
+  })
+
   it('rotates a provider key from the environment file without writing it to public files', async () => {
     createDocument(root)
     env.TEST_VASTAI_KEY = ROTATED_KEY
@@ -325,6 +419,7 @@ describe('capacity.yaml creation and render', function () {
     let installed: any
     let installedController: any
     let liveConfig: string | undefined
+    let liveGcpKey: string | undefined
     let failMake: string | undefined
     let shown: string[] = []
     let controllerLog = ''
@@ -338,6 +433,7 @@ describe('capacity.yaml creation and render', function () {
         const verb = args.findIndex(arg => arg === 'get' || arg === 'rollout' || arg === 'logs')
         const end = args.findIndex((arg, index) => index > verb && arg.startsWith('-'))
         calls.push(`kubectl ${args.slice(verb, end === -1 ? undefined : end).join(' ')}`)
+        if (args.includes('get') && args.includes('dstack-gcp-credentials')) return liveGcpKey === undefined ? '' : JSON.stringify({data: {'service-account.json': Buffer.from(liveGcpKey).toString('base64')}})
         if (args.includes('get')) return liveConfig === undefined ? '' : JSON.stringify({data: {'config.yml': Buffer.from(liveConfig).toString('base64')}})
         if (args.includes('logs')) return controllerLog
         return ''
@@ -378,6 +474,33 @@ describe('capacity.yaml creation and render', function () {
       expect(result).to.deep.include({applied: false, context: CONTEXT, namespace: 'chain'})
       expect(result.summary).to.deep.include({controllerRestart: false, keyRotated: false, managerChanges: []})
       expect(calls).to.deep.equal(['kubectl get secret dstack-controller-config'])
+    })
+
+    it('restarts the controller for a rotated GCP key, which no values or config.yml change shows', async () => {
+      mountGcp()
+      addGcpFallback()
+      await settle()
+      liveGcpKey = gcpServiceAccount()
+      expect((await deploy()).summary).to.deep.include({controllerRestart: false, gcpKeyRotated: false})
+      addGcpFallback('key-two')
+      await rejects(deploy(), 'rerun with --yes')
+      expect(shown.join('\n')).to.include('~ gcp  service-account key changed').and.include('dstack-controller restarts')
+      // A refused deployment puts the rendered files back, the imported key included.
+      expect(readDstackCredentials(root)!.gcp!.serviceAccount).to.equal(gcpServiceAccount())
+      calls = []
+      const result = await deploy({yes: true})
+      expect(result.summary).to.deep.include({backends: {added: [], removed: []}, controllerChanges: [], controllerRestart: true, gcpKeyRotated: true})
+      expect(calls).to.deep.equal([
+        'kubectl get secret dstack-controller-config',
+        'kubectl get secret dstack-gcp-credentials',
+        'publish chain',
+        'make install-dstack-controller',
+        'kubectl rollout restart deployment/dstack-controller',
+        'kubectl rollout status deployment/dstack-controller',
+        'kubectl logs deployment/dstack-controller',
+        'make install-capacity-manager',
+      ])
+      expect(JSON.stringify(result)).not.to.include('PRIVATE KEY')
     })
 
     it('summarizes against the running deployment, asks, then deploys in order', async () => {

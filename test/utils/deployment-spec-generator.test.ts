@@ -905,6 +905,31 @@ describe('deployment-spec-generator', () => {
         error => error.message.includes('proofSystem has been removed'),
       )).to.equal(true);
     });
+
+    it('accepts only active real enforcing proof topology on Dogecoin mainnet', () => {
+      const mainnetProblems = (proofTopology?: DeploymentSpec['proofTopology']) => {
+        const spec = createMinimalSpec({proofCoordinator: {s3AuthMode: 'ambient'}, proofTopology});
+        spec.dogecoin.network = 'mainnet';
+        const result = validateDeploymentSpec(spec);
+        return {
+          errors: result.errors.filter(entry => entry.message.includes('Dogecoin mainnet')),
+          warnings: result.warnings.filter(entry => entry.message.includes('Dogecoin mainnet')),
+        };
+      };
+
+      for (const mode of ['disabled', 'mock'] as const) {
+        const {errors} = mainnetProblems(createProofTopology(mode));
+        expect(errors, mode).to.have.length(1);
+        expect(errors[0]).to.include({code: 'E014_INVALID_PROOF_SYSTEM_CONFIG', path: 'proofTopology'});
+        expect(errors[0].message).to.include('dogeos-core refuses observe enforcement and mock generation on mainnet');
+      }
+
+      expect(mainnetProblems(createProofTopology('production'))).to.deep.equal({errors: [], warnings: []});
+      expect(mainnetProblems()).to.satisfy(({errors, warnings}: {errors: unknown[]; warnings: unknown[]}) => errors.length === 0 && warnings.length === 1);
+
+      const testnet = createMinimalSpec({proofTopology: createProofTopology()});
+      expect(validateDeploymentSpec(testnet).errors.filter(error => error.message.includes('Dogecoin mainnet'))).to.have.length(0);
+    });
   });
 
   describe('generateConfigToml', () => {
@@ -1862,6 +1887,27 @@ describe('deployment-spec-generator', () => {
       expect(Object.keys(files).join(' ')).not.to.match(/gas-oracle-production|admin-system-(?:backend|cron)-production|rollup-explorer-backend-production/);
     });
 
+    it('reuses a cached service image unless the spec asks for a fresh pull', () => {
+      const names = ['frontends', 'l1-interface', 'tso-service', 'withdrawal-processor'];
+      const policies = (spec: DeploymentSpec) => {
+        const files = generateValuesFiles(spec);
+        return names.map(name => (yaml.load(files[`${name}-production.yaml`]) as any).image.pullPolicy);
+      };
+
+      expect(policies(createMinimalSpec())).to.deep.equal(names.map(() => 'IfNotPresent'));
+      expect(policies(createMinimalSpec({
+        images: {defaults: {pullPolicy: 'Always'}, services: {withdrawalProcessor: {tag: 'test-transitions'}}},
+      }))).to.deep.equal(names.map(() => 'Always'));
+    });
+
+    it('gives the DA submitter pod longer to stop than its own drain takes', () => {
+      const values = yaml.load(generateValuesFiles(createMinimalSpec())['eth-da-submitter-production.yaml']) as any;
+      const drainSeconds = Number(values.configMaps.env.data.DOGEOS_ETH_DA_SUBMITTER_SERVICE__SHUTDOWN_GRACE_PERIOD_SEC);
+
+      expect(drainSeconds).to.be.greaterThan(0);
+      expect(values.termination.gracePeriodSeconds).to.be.greaterThan(drainSeconds);
+    });
+
     it('keeps public Reth RPC separate from the internal witness endpoint', () => {
       const files = generateValuesFiles(createMinimalSpec());
       const internal = yaml.load(files['l2-reth-rpc-production.yaml']) as any;
@@ -2101,6 +2147,7 @@ describe('deployment-spec-generator', () => {
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__ETH_RPC_URL).to.equal(undefined);
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CHAIN_ID).to.equal(String(spec.network.l2ChainId));
       expect(feeOracleEnv.DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE).to.equal('live');
+      expect(feeOracleEnv.DOGEOS_FEE_ORACLE_L2__CONFIRMATIONS).to.equal('1');
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__GAS_ORACLE__FORMULA');
       expect(feeOracleEnv).not.to.have.property('DOGEOS_FEE_ORACLE_ETHEREUM_DA__UPDATE_POLICY__PRICE_UNAVAILABLE_FALLBACK');
       expect(feeOracleValues.envFrom).to.deep.equal([
@@ -2163,6 +2210,11 @@ describe('deployment-spec-generator', () => {
         tag: 'v1.2.3',
       });
       expect(values.service.main.enabled).to.equal(true);
+      expect(values.service.main.ports.prover.enabled).to.equal(true);
+      expect(values.serviceMonitor.main).to.deep.equal({
+        enabled: true,
+        endpoints: [{interval: '1m', path: '/metrics', port: 'prover', scheme: 'http', scrapeTimeout: '10s'}],
+      });
       expect(values.persistence['protocol-context']).to.include({
         mountPath: '/app/protocol_context.json',
         name: 'protocol-context-config',

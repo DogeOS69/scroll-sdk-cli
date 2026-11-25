@@ -163,6 +163,7 @@ export default class RpcExportNetwork extends Command {
     'kube-context': Flags.string({description: 'Kubernetes context for Service-owned bootnode discovery; defaults to the current context'}),
     namespace: Flags.string({char: 'n', default: 'default', description: 'Kubernetes namespace for bootnode discovery'}),
     spec: RpcExport.flags.spec,
+    'start-l1-block': RpcExport.flags['start-l1-block'],
     'values-dir': RpcExport.flags['values-dir'],
   }
 
@@ -193,7 +194,7 @@ export default class RpcExportNetwork extends Command {
 
     Object.assign(domains, discoverNetworkNlbDomains(values,
       flags.spec ? readExistingAlbSpec(process.cwd(), flags.spec) : undefined, new AwsCliRunner(flags['aws-profile'])))
-    const files = exporter.exportNetworkConfig(flags['values-dir'], dogeConfig, root, domains, flags.namespace)
+    const files = exporter.exportNetworkConfig(flags['values-dir'], dogeConfig, root, domains, flags.namespace, flags['start-l1-block'])
     for (const file of files) this.log(`Generated ${file}`)
     this.log(`Set DOGEOS_ETHEREUM_RPC_URL in ${dogeConfig.network}/.env before starting the package.`)
     this.log('Rollup node and L1 Interface images are copied from source values. Follow the network README for release validation and startup.')
@@ -204,7 +205,7 @@ export default class RpcExportNetwork extends Command {
 export class NetworkConfigExporter extends RpcExport {
   public exportNetworkConfig(
     valuesDir: string, dogeConfig: DogeConfig, root: string,
-    domains: Record<string, string | string[]>, namespace: string,
+    domains: Record<string, string | string[]>, namespace: string, startL1Block?: number,
   ): string[] {
     const {network} = dogeConfig
     const directory = this.validatePackage(root, network)
@@ -214,7 +215,7 @@ export class NetworkConfigExporter extends RpcExport {
     try {
       const reth = this.generateL2NodeEnvFiles(undefined, dogeConfig, scratch, domains, namespace, valuesDir)
       if (reth.hasUnresolvedExternalPeers) throw new Error('Unresolved external bootnode peers; provide the correct kube-context and independent NLB --spec before exporting')
-      const genesis = this.extractGenesisJson(valuesDir, scratch, network)
+      const genesis = this.extractGenesisJson(valuesDir, scratch, network, startL1Block)
       const protocol = this.extractProtocolContextJson(valuesDir, scratch, network)
       const context = JSON.parse(fs.readFileSync(protocol, 'utf8'))
       if (!context || typeof context !== 'object' || Array.isArray(context)) throw new Error('protocolContext must be a JSON object')
