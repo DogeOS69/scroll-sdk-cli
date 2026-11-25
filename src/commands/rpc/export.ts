@@ -16,7 +16,7 @@ import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
 import {discoverExistingNlb} from '../../utils/existing-nlb.js'
-import {dropRetiredL1DataFeeBufferCheck, normalizeNativeRethGenesis} from '../../utils/native-reth-genesis.js'
+import {dropRetiredL1DataFeeBufferCheck} from '../../utils/native-reth-genesis.js'
 import { buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import { deriveBootnodeRethEnodeUrl } from '../setup/l2-bootnode-reth.js'
 
@@ -772,7 +772,7 @@ export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1B
       l1Config.startL1Block,
       'config.scroll.l1Config.startL1Block',
     )
-    return normalizeNativeRethGenesis(normalized)
+    return normalized
   }
 
   const systemContract = requireGenesisObject(config.systemContract, 'config.systemContract')

@@ -1,6 +1,7 @@
 /**
- * Drop the retired buffer flag. Every DogeOS Reth release treats an absent flag
- * as disabled, and releases with a strict chainspec schema reject the field.
+ * Drop the retired buffer flag from `scroll`, in place. Every DogeOS Reth release
+ * treats an absent flag as disabled, and releases with a strict chainspec schema
+ * reject the field. Throws for any value other than `false` rather than discard it.
  */
 export function dropRetiredL1DataFeeBufferCheck(scroll: {l1DataFeeBufferCheck?: unknown}): void {
   const flag = scroll.l1DataFeeBufferCheck

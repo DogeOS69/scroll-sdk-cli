@@ -107,6 +107,7 @@ describe('rpc export env generation', () => {
             l1MessageQueueV2DeploymentBlock: 0,
             numL1MessagesPerBlock: '10',
           },
+          l1DataFeeBufferCheck: false,
         },
         systemContract: {
           system_contract_address: '0x2000369731833cBf00e97146999442ADf10a4E59',
@@ -173,7 +174,7 @@ describe('rpc export env generation', () => {
     expect(normalized.config.scroll.l1Config.startL1Block).to.equal(14_023_282)
     expect(normalizeGenesisForReth(normalized, 14_023_282)).to.deep.equal(normalized)
 
-    for (const flag of [true, 'false']) {
+    for (const flag of [true, 'false', null]) {
       expect(() => normalizeGenesisForReth({
         ...source,
         config: {...source.config, scroll: {...source.config.scroll, l1DataFeeBufferCheck: flag}},

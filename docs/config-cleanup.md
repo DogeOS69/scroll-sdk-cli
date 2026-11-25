@@ -23,8 +23,10 @@ same as rc.11.
 
 Release rc.10 removes the retired `config.scroll.l1DataFeeBufferCheck` field
 from the genesis template for native Reth compatibility. For a genesis from an
-older generator image that still carries the field, RPC package export drops it
-when it is `false` and refuses to export when it is anything else.
+older generator image that still carries the field, `setup genesis` drops it from
+a native genesis and leaves a legacy one unchanged. RPC package export drops it
+from either kind when it is `false` and refuses to export when it is anything
+else.
 
 `CONTRACTS_DOCKER_DEFAULT_TAG` supplies the common tag. Explicit image overrides
 and existing deployment values should be reviewed when upgrading. The original
