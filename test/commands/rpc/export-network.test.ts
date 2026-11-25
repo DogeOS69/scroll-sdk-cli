@@ -128,6 +128,23 @@ describe('rpc export-network', () => {
     expect(read('l2reth.env')).to.equal(before)
   })
 
+  it('takes the start block of a legacy genesis from the option and rejects a conflicting one', () => {
+    run()
+    const before = read('l2reth-genesis.json')
+    expect(() => exporter.exportNetworkConfig(values, doge, root, {}, 'default', 7)).to.throw('--start-l1-block conflicts')
+    expect(read('l2reth-genesis.json')).to.equal(before)
+
+    writeYaml(path.join(values, 'genesis.yaml'), {scrollConfig: JSON.stringify({config: {
+      chainId: 6_281_971,
+      scroll: {l1Config: {l1ChainId: 11_155_111, numL1MessagesPerBlock: 10}},
+      systemContract: {system_contract_address: '0x2000000000000000000000000000000000000001'},
+    }})})
+    expect(run).to.throw('pass --start-l1-block')
+    expect(read('l2reth-genesis.json')).to.equal(before)
+    exporter.exportNetworkConfig(values, doge, root, {}, 'default', 14_023_282)
+    expect(JSON.parse(read('l2reth-genesis.json')).config.scroll.l1Config.startL1Block).to.equal(14_023_282)
+  })
+
   it('pins image digests and preserves Compose comments, anchors, scripts and other services', () => {
     const composePath = path.join(root, 'testnet/docker-compose.yml')
     const original = [

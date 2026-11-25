@@ -225,6 +225,9 @@ describe('rpc export env generation', () => {
     expect(normalizeGenesisForReth(source, 0)).to.deep.equal(expected)
     expect(normalizeGenesisForReth(expected)).to.deep.equal(expected)
     expect(() => normalizeGenesisForReth(source, 62_638_951)).to.throw('--start-l1-block conflicts')
+    for (const invalid of [-1, 1.5, Number.NaN]) {
+      expect(() => normalizeGenesisForReth(source, invalid)).to.throw('--start-l1-block must be a non-negative integer')
+    }
     expect(() => normalizeGenesisForReth({...source, config: {...source.config, scroll: {...source.config.scroll, l1DataFeeBufferCheck: true}}})).to.throw('refusing to discard')
     expect(JSON.stringify(source)).to.equal(before)
 
