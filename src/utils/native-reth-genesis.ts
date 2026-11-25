@@ -4,7 +4,7 @@
  */
 export function dropRetiredL1DataFeeBufferCheck(scroll: {l1DataFeeBufferCheck?: unknown}): void {
   const flag = scroll.l1DataFeeBufferCheck
-  if (flag !== undefined && flag !== false) throw new Error('DogeOS Reth does not support config.scroll.l1DataFeeBufferCheck; refusing to discard an enabled or invalid setting')
+  if (flag !== undefined && flag !== false) throw new Error('config.scroll.l1DataFeeBufferCheck is retired in DogeOS Reth; refusing to discard an enabled or invalid setting')
   delete scroll.l1DataFeeBufferCheck
 }
 
