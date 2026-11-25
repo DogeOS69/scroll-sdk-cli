@@ -26,10 +26,10 @@ from the genesis template for native Reth compatibility. A genesis from an older
 generator image may still carry the field. The CLI drops it when it is `false`
 and refuses any other value: `setup genesis` does this for a native genesis and
 leaves a legacy one unchanged, and RPC package export does it for either kind.
-Earlier CLI versions wrote the field as `false` into every legacy export, so
-re-exporting a legacy genesis changes the bytes of `l2reth-genesis.json` even
-when the source does not carry the field. RPC package snapshot groups, which
-record that file's hash, must be republished with it.
+Earlier CLI versions always wrote the field into a legacy export, adding `false`
+when the source lacked it, so re-exporting a legacy genesis changes the bytes of
+`l2reth-genesis.json` even when the source does not carry the field. RPC package
+snapshot groups, which record that file's hash, must be republished with it.
 
 `CONTRACTS_DOCKER_DEFAULT_TAG` supplies the common tag. Explicit image overrides
 and existing deployment values should be reviewed when upgrading. The original
