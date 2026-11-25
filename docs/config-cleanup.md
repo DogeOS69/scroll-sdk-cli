@@ -22,8 +22,9 @@ tsuki-v0.13 and core refuse a genesis that sets `tsukiTime` without
 same as rc.11.
 
 Release rc.10 removes the retired `config.scroll.l1DataFeeBufferCheck` field
-from the genesis template for native Reth compatibility. The CLI keeps its
-normalization for explicitly selected older generator images.
+from the genesis template for native Reth compatibility. For a genesis from an
+older generator image that still carries the field, RPC package export drops it
+when it is `false` and refuses to export when it is anything else.
 
 `CONTRACTS_DOCKER_DEFAULT_TAG` supplies the common tag. Explicit image overrides
 and existing deployment values should be reviewed when upgrading. The original

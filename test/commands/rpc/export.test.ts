@@ -135,7 +135,7 @@ describe('rpc export env generation', () => {
     const output = JSON.parse(fs.readFileSync(outputPath, 'utf8'))
 
     expect(outputPath).to.equal(path.join(rpcPackageDir, 'configs', 'testnet', 'l2reth-genesis.json'))
-    expect(output.config.scroll.l1DataFeeBufferCheck).to.equal(false)
+    expect(output.config.scroll).not.to.have.property('l1DataFeeBufferCheck')
     expect(output.config.scroll.l1Config.l1ChainId).to.equal(111_111)
     expect(output.config.scroll.l1Config.numL1MessagesPerBlock).to.equal(10)
     expect(output.config.scroll.l1Config.l1MessageQueueV2DeploymentBlock).to.equal(0)
@@ -158,7 +158,7 @@ describe('rpc export env generation', () => {
             startL1Block: '14023282',
             systemContractAddress: '0x2000369731833cbf00e97146999442adf10a4e59',
           },
-          l1DataFeeBufferCheck: true,
+          l1DataFeeBufferCheck: false,
         },
         systemContract: {
           system_contract_address: '0x2000369731833cBf00e97146999442ADf10a4E59',
@@ -169,9 +169,16 @@ describe('rpc export env generation', () => {
     const normalized = normalizeGenesisForReth(source, '14023282')
 
     expect(source).to.deep.equal(sourceBefore)
-    expect(normalized.config.scroll.l1DataFeeBufferCheck).to.equal(true)
+    expect(normalized.config.scroll).not.to.have.property('l1DataFeeBufferCheck')
     expect(normalized.config.scroll.l1Config.startL1Block).to.equal(14_023_282)
     expect(normalizeGenesisForReth(normalized, 14_023_282)).to.deep.equal(normalized)
+
+    for (const flag of [true, 'false']) {
+      expect(() => normalizeGenesisForReth({
+        ...source,
+        config: {...source.config, scroll: {...source.config.scroll, l1DataFeeBufferCheck: flag}},
+      }, 14_023_282)).to.throw('refusing to discard')
+    }
 
     expect(() => normalizeGenesisForReth({
       config: {

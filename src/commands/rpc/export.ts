@@ -16,7 +16,7 @@ import {AwsCliRunner} from '../../utils/aws-cli.js'
 import { loadDogeConfigWithSelection } from '../../utils/doge-config.js'
 import {readAlbValues, readExistingAlbSpec} from '../../utils/existing-alb.js'
 import {discoverExistingNlb} from '../../utils/existing-nlb.js'
-import {normalizeNativeRethGenesis} from '../../utils/native-reth-genesis.js'
+import {dropRetiredL1DataFeeBufferCheck, normalizeNativeRethGenesis} from '../../utils/native-reth-genesis.js'
 import { buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import { deriveBootnodeRethEnodeUrl } from '../setup/l2-bootnode-reth.js'
 
@@ -737,7 +737,7 @@ function requireGenesisAddress(value: unknown, fieldPath: string): string {
 // values/genesis.yaml is canonical and must remain unchanged.
 // Adapt a deep copy at the RPC-package boundary to the stricter Scroll-Reth
 // chainspec schema. Keep this transformation deliberately narrow: normalize
-// integer representations, retain the legacy buffer flag only for legacy inputs, bind the system
+// integer representations, drop the retired buffer flag, bind the system
 // contract address already present in the legacy metadata, and bind the L1
 // deployment block supplied by l2-rpc-production.yaml.
 export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1Block?: unknown): Record<string, any> {
@@ -747,13 +747,7 @@ export function normalizeGenesisForReth(sourceGenesis: unknown, requiredStartL1B
   const scroll = requireGenesisObject(config.scroll, 'config.scroll')
   const l1Config = requireGenesisObject(scroll.l1Config, 'config.scroll.l1Config')
 
-  if (scroll.l1DataFeeBufferCheck === undefined) {
-    scroll.l1DataFeeBufferCheck = false
-  } else if (typeof scroll.l1DataFeeBufferCheck !== 'boolean') {
-    throw new TypeError(
-      `genesis field config.scroll.l1DataFeeBufferCheck must be a boolean, got: ${JSON.stringify(scroll.l1DataFeeBufferCheck)}`,
-    )
-  }
+  dropRetiredL1DataFeeBufferCheck(scroll)
 
   for (const field of ['l1ChainId', 'numL1MessagesPerBlock']) {
     l1Config[field] = normalizeGenesisInteger(l1Config[field], `config.scroll.l1Config.${field}`)
