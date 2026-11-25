@@ -1125,7 +1125,7 @@ Generate configuration files for dogeos-rpc-package to enable external RPC nodes
 ```
 USAGE
   $ scrollsdk rpc export -d <value> [--aws-profile <value>] [--config-path <value>] [--doge-config <value>] [-n
-    <value>] [--spec <value>] [--values-dir <value>]
+    <value>] [--spec <value>] [--start-l1-block <value>] [--values-dir <value>]
 
 FLAGS
   -d, --dogeos-rpc-package-dir=<value>  (required) Path to dogeos-rpc-package project directory (clone from
@@ -1136,6 +1136,9 @@ FLAGS
                                         configuration
       --doge-config=<value>             Path to Dogecoin config file
       --spec=<value>                    Deployment spec required when values reference independent bootnode NLBs
+      --start-l1-block=<value>          L1 block the Reth node starts scanning from, for a legacy genesis without
+                                        config.scroll.l1Config.startL1Block; must agree with the genesis value when
+                                        both exist
       --values-dir=<value>              [default: ./values] Directory containing Helm values files (must include
                                         genesis.yaml)
 
