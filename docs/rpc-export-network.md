@@ -36,7 +36,7 @@ starts scanning from is taken from `config.scroll.l1Config.startL1Block` in the
 genesis. A legacy genesis (one that still has `config.systemContract`) may lack
 that field; add it to the genesis, or pass `--start-l1-block`. When both are
 given they must agree. The l2geth values file `l2-rpc-production.yaml` is no
-longer read. Peer discovery reuses the existing exporter:
+longer used. Peer discovery reuses the existing exporter:
 Service-owned public endpoints come from Kubernetes, and independent NLBs come
 from AWS using `--spec` (and optional `--aws-profile`). Already-public peers can
 be exported without Kubernetes discovery. An unresolved or empty peer list is
