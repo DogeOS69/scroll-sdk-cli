@@ -524,7 +524,7 @@ function generateL1InterfaceValues(spec: DeploymentSpec): string {
   const l2StartBlockNumber = getEthereumDaL2StartBlockNumber(spec)
 
   const image = resolveImage(spec, 'l1Interface', {
-    pullPolicy: 'Always',
+    pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/l1-interface',
     tag: CORE_DOCKER_DEFAULT_TAG
   })
@@ -756,6 +756,11 @@ function generateEthDaSubmitterValues(spec: DeploymentSpec): string {
     resources: {
       limits: { cpu: '1000m', memory: '1Gi' },
       requests: { cpu: '200m', memory: '256Mi' }
+    },
+    // Must stay above SHUTDOWN_GRACE_PERIOD_SEC so the submitter can finish its
+    // own drain before Kubernetes kills the pod.
+    termination: {
+      gracePeriodSeconds: 60
     }
   }
 
@@ -854,7 +859,7 @@ function generateDogecoinValues(spec: DeploymentSpec): string {
  */
 function generateTsoServiceValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'tsoService', {
-    pullPolicy: 'Always',
+    pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/tso-service',
     tag: CORE_DOCKER_DEFAULT_TAG
   })
@@ -903,7 +908,7 @@ export function generateWithdrawalProcessorValues(spec: DeploymentSpec): string 
   const l2StartBlockNumber = getEthereumDaL2StartBlockNumber(spec)
 
   const image = resolveImage(spec, 'withdrawalProcessor', {
-    pullPolicy: 'Always',
+    pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/withdrawal-processor',
     tag: requireWithdrawalProcessorImageTag(spec)
   })
@@ -1323,6 +1328,15 @@ function generateProofCoordinatorValues(spec: DeploymentSpec): string {
     serviceAccount: {
       annotations: proofCoordinator.serviceAccount?.annotations || {},
       create: true,
+    },
+    // The chart keeps the monitor off by default. Without it the coordinator's
+    // metrics are never scraped and its alerts cannot fire. The coordinator
+    // serves /metrics on the prover port; the http port is disabled above.
+    serviceMonitor: {
+      main: {
+        enabled: true,
+        endpoints: [{ interval: '1m', path: '/metrics', port: 'prover', scheme: 'http', scrapeTimeout: '10s' }]
+      }
     }
   }
 
@@ -1373,7 +1387,9 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
           ...buildFeeOracleEthereumDaEnv(spec),
           DOGEOS_FEE_ORACLE_ETHEREUM_DA__CONTRACT_WRITE_MODE: spec.feeOracle?.contractWriteMode ?? 'live',
           DOGEOS_FEE_ORACLE_L2__CHAIN_ID: String(spec.network.l2ChainId),
-          DOGEOS_FEE_ORACLE_L2__CONFIRMATIONS: '3',
+          // One block is the smallest depth the live write mode accepts, and the
+          // depth the DA submitter and withdrawal processor use for L2.
+          DOGEOS_FEE_ORACLE_L2__CONFIRMATIONS: '1',
           DOGEOS_FEE_ORACLE_L2__GAS_ORACLE_CONTRACT: spec.contracts.overrides?.l1GasPriceOracle || '<TODO>',
           DOGEOS_FEE_ORACLE_L2__MAX_GAS_PRICE: '1000000000000',
           DOGEOS_FEE_ORACLE_L2__PRIORITY_FEE: '1000000000',
@@ -1416,7 +1432,7 @@ function generateFeeOracleValues(spec: DeploymentSpec): string {
  */
 function generateFrontendsValues(spec: DeploymentSpec): string {
   const image = resolveImage(spec, 'frontends', {
-    pullPolicy: 'Always',
+    pullPolicy: 'IfNotPresent',
     repository: 'dogeos69/scroll-sdk-frontends',
     tag: '0.3.0-test.20261011.4'
   })
