@@ -803,7 +803,7 @@ export function normalizeGenesisForReth(sourceGenesis: unknown, startL1BlockOpti
   const startL1Block = resolveStartL1Block(existingStartL1Block, startL1BlockOption)
   if (startL1Block === undefined) {
     throw new Error(
-      'legacy genesis has no config.scroll.l1Config.startL1Block; pass --start-l1-block',
+      'legacy genesis has no config.scroll.l1Config.startL1Block; add it to the genesis or pass --start-l1-block',
     )
   }
 
@@ -861,7 +861,7 @@ export default class SetupGenRpcPackage extends Command {
     }),
     spec: Flags.string({description: 'Deployment spec required when values reference independent bootnode NLBs'}),
     'start-l1-block': Flags.integer({
-      description: 'L1 block the Reth node starts scanning from; required for a legacy genesis without config.scroll.l1Config.startL1Block',
+      description: 'L1 block the Reth node starts scanning from, for a legacy genesis without config.scroll.l1Config.startL1Block; must agree with the genesis value when both exist',
       min: 0,
     }),
     'values-dir': Flags.string({
