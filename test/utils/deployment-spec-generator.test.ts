@@ -11,6 +11,7 @@ import sinon from 'sinon';
 import type { DeploymentSpec } from '../../src/types/deployment-spec.js';
 
 import {DEFAULT_WALLET_CONNECT_PROJECT_ID} from '../../src/config/constants.js';
+import {KEY_ROTATION_MIN_GRACE_BLOCKS} from '../../src/constants/deployment.js';
 import {CONTRACTS_DOCKER_DEFAULT_TAG, DOCKER_REPOSITORY} from '../../src/constants/docker.js';
 import {
   generateAllConfigs,
@@ -1762,7 +1763,7 @@ describe('deployment-spec-generator', () => {
           moat_address: '0x0000000000000000000000000000000000000003',
         },
         eth_chain_id: 11_155_111,
-        key_rotation_min_grace_wf_txs: 300,
+        key_rotation_min_grace_blocks: KEY_ROTATION_MIN_GRACE_BLOCKS,
         l2_chain_id: 412_346,
         min_deposit_sats: 100_000_000,
       });

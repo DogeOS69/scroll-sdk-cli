@@ -1,22 +1,37 @@
 import {address} from 'bitcoinjs-lib'
 import fs from 'node:fs'
 
+import {KEY_ROTATION_MAX_GRACE_BLOCKS} from '../constants/deployment.js'
 import {assertCompressedSecp256k1PublicKey} from './attestation-signer-descriptor.js'
 import {bridgeHash, parseBridgeScript} from './bridge-rotation.js'
 
 export const ROTATION_EXPORT_SCHEMA = 'dogeos/rotation-export/v1'
-export const MAX_ROTATION_GRACE = 260_000
+/** The largest stated grace, in Dogecoin blocks. */
+export const MAX_ROTATION_GRACE = KEY_ROTATION_MAX_GRACE_BLOCKS
 
 export interface RotationExportSigner {label: string; public_key: string; transport_pubkey: string}
-export interface RotateKeyRequest {grace_wf_txs: null | number; idempotency_key: string; new_bridge_redeem_script_hex: string; new_key_hash: string}
+export interface RotateKeyRequest {grace_blocks: null | number; idempotency_key: string; new_bridge_redeem_script_hex: string; new_key_hash: string}
 /** A Dogecoin outpoint as the WP takes it: `0x` and the txid in RPC (display) byte order. */
 export interface LivenessOutpoint {txid: string; vout: number}
-/** `dogeos/rotation-export/v1`, as the governance portal writes it. Unknown fields are ignored. */
+/**
+ * `dogeos/rotation-export/v1` with the deposit cutoff fields (`grace_blocks`, `deposit_cutoff_height`).
+ * Unknown fields are ignored, except the retired `grace_wf_txs`, which is refused.
+ */
 export interface RotationExport {
   allowlist_entry: string
   current: {key_hash: string; redeem_script_hex: string; signers: RotationExportSigner[]; threshold: number}
-  /** Null asks the WP for its minimum; only with a bare `allowlist_entry`. */
-  grace_wf_txs: null | number
+  /**
+   * The deposit cutoff height the portal recorded for the bound intent. It is required, and must
+   * match, only when `allowlist_entry` has a `:<H>` suffix. With a bare entry it is informational:
+   * signers ignore it and `send` does not compare it with the WP.
+   */
+  deposit_cutoff_height: null | number
+  /**
+   * The requested grace in Dogecoin blocks; null asks for the committed minimum. The WP derives the
+   * deposit cutoff height from it when the intent binds, counted from the live tip; see dogeos-core
+   * #1911 (`rotate_key_deposit_cutoff_for`) for the exact rule.
+   */
+  grace_blocks: null | number
   network: 'mainnet' | 'regtest' | 'testnet'
   proposal: string
   protocol_instance_id: string
@@ -30,8 +45,8 @@ export interface RotateKeyStatus {
   active_intent: {idempotency_key: string; status: string} | null
   current_attestation: {pubkeys: string[]; threshold: number}
   current_key_hash: string
-  deprecating: {deprecation_wf_tx_number: number; key_hash: string} | null
-  min_grace_wf_txs: number
+  deprecating: {deposit_cutoff_height: number; key_hash: string} | null
+  min_grace_blocks: number
   network: string
   next_wf_tx_number: number
   protocol_instance_id: string
@@ -52,9 +67,18 @@ function text(value: unknown, pattern: RegExp, label: string): string {
 const KEY_HASH = /^0x[\da-f]{40}$/
 const SCRIPT = /^(?:[\da-f]{2})+$/
 
+/** The WP's range for a stated grace, in Dogecoin blocks: 1..={@link MAX_ROTATION_GRACE}. */
 function grace(value: unknown, label: string): null | number {
   if (value === null) return null
-  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > MAX_ROTATION_GRACE) throw new Error(`Rotation export: ${label} must be null or an integer in 0..${MAX_ROTATION_GRACE}`)
+  if (value === undefined) throw new Error(`Rotation export: ${label} is missing; re-export the proposal with grace_blocks and deposit_cutoff_height`)
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > MAX_ROTATION_GRACE) throw new Error(`Rotation export: ${label} must be null or an integer in 1..${MAX_ROTATION_GRACE}`)
+  return value as number
+}
+
+/** A Dogecoin block height (u32). Absent and null both mean unset. */
+function cutoffHeight(value: unknown): null | number {
+  if (value === undefined || value === null) return null
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 0xFF_FF_FF_FF) throw new Error('Rotation export: deposit_cutoff_height must be null or a Dogecoin block height')
   return value as number
 }
 
@@ -119,6 +143,12 @@ export function assertRoleSeparation(currentScript: string, targetScript: string
 export function validateRotationExport(input: unknown): RotationExport {
   const source = object(input, 'export')
   if (source.schema !== ROTATION_EXPORT_SCHEMA) throw new Error(`Rotation export: schema must be ${ROTATION_EXPORT_SCHEMA}`)
+  // An export from before the deposit-cutoff change counts the grace in WF transactions, and its
+  // `:<n>` allowlist suffix is a grace, not a cutoff height. Say so instead of a range error.
+  if ('grace_wf_txs' in source || 'grace_wf_txs' in object(source.wp_rotate_key_request, 'wp_rotate_key_request')) {
+    throw new Error('Rotation export: grace_wf_txs is the retired WF-count grace; re-export the proposal with grace_blocks and deposit_cutoff_height')
+  }
+
   const proposal = text(source.proposal, /^DGP-\d{4,}-rev[1-9]\d*$/, 'proposal')
   if (source.network !== 'mainnet' && source.network !== 'testnet' && source.network !== 'regtest') throw new Error('Rotation export: network must be mainnet, testnet or regtest')
   const protocolInstanceId = text(source.protocol_instance_id, /^0x[\da-f]{64}$/, 'protocol_instance_id')
@@ -131,22 +161,34 @@ export function validateRotationExport(input: unknown): RotationExport {
   assertTransportKeys([...current.signers, ...target.signers])
   assertRoleSeparation(current.redeem_script_hex, target.redeem_script_hex)
 
-  const graceWfTxs = grace(source.grace_wf_txs, 'grace_wf_txs')
-  const entry = text(source.allowlist_entry, /^0x[\da-f]{40}(?::\d+)?$/, 'allowlist_entry')
-  const [entryHash, entryGrace] = entry.split(':')
+  const graceBlocks = grace(source.grace_blocks, 'grace_blocks')
+  const depositCutoffHeight = cutoffHeight(source.deposit_cutoff_height)
+  const entry = text(source.allowlist_entry, /^0x[\da-f]{40}(?::(?:0|[1-9]\d{0,9}))?$/, 'allowlist_entry')
+  const [entryHash, entryCutoff] = entry.split(':')
   if (entryHash !== target.key_hash) throw new Error('Rotation export: allowlist_entry is not the target key hash')
-  if (entryGrace !== undefined && (graceWfTxs === null || graceWfTxs < 1 || entryGrace !== String(graceWfTxs))) throw new Error('Rotation export: the allowlist_entry grace differs from grace_wf_txs (an exact-grace entry needs a grace of at least 1)')
+  // As attestation_signer inspect-rotation: an exact entry pins the bound intent's deposit cutoff height.
+  if (entryCutoff !== undefined && depositCutoffHeight === null) throw new Error(`Rotation export: allowlist_entry pins deposit cutoff ${entryCutoff} but deposit_cutoff_height is unset`)
+  if (entryCutoff !== undefined && entryCutoff !== String(depositCutoffHeight)) throw new Error(`Rotation export: allowlist_entry deposit cutoff ${entryCutoff} differs from deposit_cutoff_height ${depositCutoffHeight}`)
   const request = object(source.wp_rotate_key_request, 'wp_rotate_key_request')
   // The key is the bare protocol instance hex (no 0x), then the proposal.
   if (request.idempotency_key !== `${protocolInstanceId.slice(2)}-${proposal}`) throw new Error('Rotation export: wp_rotate_key_request.idempotency_key must be <protocol_instance_id hex>-<proposal>')
   if (request.new_key_hash !== target.key_hash) throw new Error('Rotation export: wp_rotate_key_request.new_key_hash differs from the target key hash')
   if (request.new_bridge_redeem_script_hex !== target.redeem_script_hex) throw new Error('Rotation export: wp_rotate_key_request script differs from the target script')
-  if (grace(request.grace_wf_txs, 'wp_rotate_key_request.grace_wf_txs') !== graceWfTxs) throw new Error('Rotation export: wp_rotate_key_request.grace_wf_txs differs from grace_wf_txs')
+  if (grace(request.grace_blocks, 'wp_rotate_key_request.grace_blocks') !== graceBlocks) throw new Error('Rotation export: wp_rotate_key_request.grace_blocks differs from grace_blocks')
   return {
-    allowlist_entry: entry, current, grace_wf_txs: graceWfTxs, network: source.network, proposal, protocol_instance_id: protocolInstanceId,
+    allowlist_entry: entry, current, deposit_cutoff_height: depositCutoffHeight, grace_blocks: graceBlocks, network: source.network, proposal, protocol_instance_id: protocolInstanceId,
     schema: ROTATION_EXPORT_SCHEMA, target,
-    wp_rotate_key_request: {grace_wf_txs: graceWfTxs, idempotency_key: request.idempotency_key, new_bridge_redeem_script_hex: target.redeem_script_hex, new_key_hash: target.key_hash},
+    wp_rotate_key_request: {grace_blocks: graceBlocks, idempotency_key: request.idempotency_key, new_bridge_redeem_script_hex: target.redeem_script_hex, new_key_hash: target.key_hash},
   }
+}
+
+/**
+ * The deposit cutoff height an exact `allowlist_entry` (`0x<hash>:<H>`) pins, or null for a bare
+ * entry. Only the suffix pins, as in the signer; a bare entry may still carry `deposit_cutoff_height`.
+ */
+export function pinnedCutoffHeight(rotation: RotationExport): null | number {
+  const suffix = rotation.allowlist_entry.split(':')[1]
+  return suffix === undefined ? null : Number(suffix)
 }
 
 /** A WP-reported outpoint: `{txid: "0x<64 hex>", vout: u32}`. */
