@@ -101,6 +101,16 @@ describe('managed helper funding', () => {
     expect((failure as Error).message).to.include('466698')
   })
 
+  it('rejects a timelock beyond the Core maximum recovery delay', async () => {
+    spec.bridge.recovery.timelock = 733_097
+    await checkHelperRecoveryTimelock(spec, async () => 207_496)
+    spec.bridge.recovery.timelock = 733_098
+    let failure: unknown
+    try {await checkHelperRecoveryTimelock(spec, async () => 207_496)} catch (error) {failure = error}
+    expect(failure).to.be.instanceOf(AwaitingInput)
+    expect((failure as Error).message).to.include('at most 733097')
+  })
+
   it('prepares external KMS identity and a deterministic fee wallet without deriving bridge roles', () => {
     prepareManagedHelper(root, spec)
     const config: any = toml.parse(fs.readFileSync(path.join(root, '.data/setup_defaults.toml'), 'utf8'))
@@ -196,9 +206,10 @@ describe('managed helper funding', () => {
       sequencer_utxo_vout: 0,
     })
     writeJson(path.join(root, '.data/bridge.json'), {p2sh_address: address, redeem_script_hex: redeem, script_pubkey_hex: script})
+    privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({genesis_sequencer_txid: txid, genesis_sequencer_vout: 0}))
     writeJson(path.join(root, '.data/production-ethereum-anchor.json'), {blockNumber: 42})
     privateWrite(path.join(root, '.data/doge-config.toml'), toml.stringify({defaults: {ethereumDaEmbeddedIndexerStartBlock: '999'}}))
-    const verify = verifyManagedHelperFunding(root, spec, async (method, params) => {
+    const rpc = async (method: string, params: unknown[]) => {
       const tx = params[0] === txid ? setup : funding
       switch (method) {
         case 'getblockchaininfo': {return {chain: 'regtest'}}
@@ -209,7 +220,9 @@ describe('managed helper funding', () => {
         case 'getblockheader': {return {confirmations: 6, height: 100}}
         default: {throw new Error(`Unexpected RPC ${method}`)}
       }
-    })
+    }
+
+    const verify = verifyManagedHelperFunding(root, spec, rpc)
     if (deployerWei) {
       let failure: unknown
       try {await verify} catch (error) {failure = error}
@@ -227,6 +240,19 @@ describe('managed helper funding', () => {
     const config: any = toml.parse(fs.readFileSync(path.join(root, '.data/doge-config.toml'), 'utf8'))
     expect(config.defaults.ethereumDaEmbeddedIndexerStartBlock).to.equal('42')
     expect(config.defaults.dogecoinIndexerStartHeight).to.equal('99')
+    // The helper's P2PKH seed moves to the sequencing 2-of-2 in the opening WF.
+    expect(config.defaults.migrateSequencerTwoOfTwo).to.equal(true)
+    // The verified marked output becomes the opening WF's custody.
+    const manifest: any = toml.parse(fs.readFileSync(path.join(root, '.data/output-withdrawal-processor.toml'), 'utf8'))
+    expect(manifest.opening_bridge_custody).to.deep.equal([{tx_hex: funding.toHex(), vout: 0}])
+    // Core's own record of the same output is accepted whatever its key order or hex case.
+    privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({...manifest, opening_bridge_custody: [Object.fromEntries([['vout', 0], ['tx_hex', funding.toHex().toUpperCase()]])]}))
+    await verifyManagedHelperFunding(root, spec, rpc)
+    expect((toml.parse(fs.readFileSync(path.join(root, '.data/output-withdrawal-processor.toml'), 'utf8')) as any).opening_bridge_custody).to.deep.equal([{tx_hex: funding.toHex(), vout: 0}])
+    privateWrite(path.join(root, '.data/output-withdrawal-processor.toml'), toml.stringify({...manifest, opening_bridge_custody: [{tx_hex: setup.toHex(), vout: 0}]}))
+    let conflict: unknown
+    try {await verifyManagedHelperFunding(root, spec, rpc)} catch (error) {conflict = error}
+    expect((conflict as Error).message).to.include('opening custody differs')
   })
 
   it('restores KMS after Core rewrites the construction manifest and refuses mismatched identities', () => {

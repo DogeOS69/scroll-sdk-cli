@@ -542,6 +542,29 @@ describe('setup prep-charts CubeSigner production config', () => {
       .to.equal('dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3')
   })
 
+  it('selects the sequencing-consent contract for a chain on the sequencing 2-of-2 and leaves unknown labels alone', () => {
+    const v3 = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3'
+    const v5 = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-sequencing-consent-v5'
+    const values = {env: [{name: 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', value: v3}]}
+
+    expect(migrateCubesignerRequestContract(values)).to.deep.equal([])
+    expect(migrateCubesignerRequestContract(values, true)).to.deep.equal([{
+      key: 'env.DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT', newValue: v5, oldValue: v3,
+    }])
+    expect(migrateCubesignerRequestContract(values, true)).to.deep.equal([])
+    // A chain that keeps its P2PKH sequencing output must not run the consent contract.
+    expect(migrateCubesignerRequestContract(values, false)).to.have.length(1)
+    expect(values.env[0].value).to.equal(v3)
+
+    values.env[0].value = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2'
+    expect(migrateCubesignerRequestContract(values, true)).to.have.length(1)
+    expect(values.env[0].value).to.equal(v5)
+
+    values.env[0].value = 'operator-reviewed-future-contract'
+    expect(migrateCubesignerRequestContract(values, true)).to.deep.equal([])
+    expect(values.env[0].value).to.equal('operator-reviewed-future-contract')
+  })
+
   it('migrates only the known pre-beta.2 CubeSigner SDK evidence', () => {
     const values: any = {
       env: [{

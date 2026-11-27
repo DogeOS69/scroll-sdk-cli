@@ -7,6 +7,7 @@ import {bridgeHash, parseBridgeScript} from './bridge-rotation.js'
 import {isCubesignerPolicyIdentifier} from './cubesigner-policy-name.js'
 import {normalizeSignerProofArtifactBaseUrl} from './proof-signer-policy-input.js'
 import {proofFileHash, proofRegularFile} from './proof-software-release.js'
+import {CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5, CUBESIGNER_REQUEST_CONTRACT_V3} from './sequencing-two-of-two.js'
 
 export type CubesignerPolicyMode = 'production_verifier_key_policy' | 'transport_only'
 export interface PolicyReceiptReference {path: string; sha256: string}
@@ -35,7 +36,7 @@ export interface CubesignerPolicySelection {
   productionPolicy?: CubesignerProductionPolicy
 }
 type ObjectValue = Record<string, unknown>
-const REQUEST_CONTRACT = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3'
+const REQUEST_CONTRACTS = new Set([CUBESIGNER_REQUEST_CONTRACT_V3, CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5])
 const SDK_VERSION = '0.4.281'
 export const LIVE_POLICY_EVIDENCE_PATH = '/app/proof-policy/live-evidence.json'
 
@@ -86,7 +87,7 @@ export function resolveCubesignerPolicy(input: {
   network: string
   scope?: 'activation' | 'preparation'
   selection?: CubesignerPolicySelection
-}): {liveEvidence?: string; mode: CubesignerPolicyMode; policy?: CubesignerProductionPolicy; warnings: string[]} {
+}): {liveEvidence?: string; mode: CubesignerPolicyMode; policy?: CubesignerProductionPolicy; requestContract?: string; warnings: string[]} {
   const {selection} = input
   const mode = selection?.mode
   if (!mode) {
@@ -135,7 +136,7 @@ export function resolveCubesignerPolicy(input: {
   string(r.coreRevision, 'policy core revision', /^[\da-f]{40}$/)
   const identifier = string(r.policyIdentifier, 'immutable policy identifier')
   if (!isCubesignerPolicyIdentifier(identifier)) throw new Error('Invalid immutable policy identifier: use a 3-30 character lowercase ASCII letter/digit/underscore name, starting with a letter or digit and excluding latest, and a concrete version')
-  if (r.sdkVersion !== SDK_VERSION || r.requestContract !== REQUEST_CONTRACT) throw new Error('Policy SDK/request contract mismatch')
+  if (r.sdkVersion !== SDK_VERSION || typeof r.requestContract !== 'string' || !REQUEST_CONTRACTS.has(r.requestContract)) throw new Error('Policy SDK/request contract mismatch')
   const authority = string(r.proofResolverAuthority, 'proof resolver authority')
   const url = new URL(authority)
   if (url.protocol !== 'https:' || url.origin !== authority || url.username || url.password) throw new Error('Policy resolver must be an HTTPS authority')
@@ -232,7 +233,7 @@ export function resolveCubesignerPolicy(input: {
       || published.policyArtifactDigest !== artifactDigest || published.environment !== refs.environment || published.organization !== refs.organization) throw new Error('Expected policy published version mismatch')
   }
 
-  return {liveEvidence, mode, policy, warnings: [
+  return {liveEvidence, mode, policy, requestContract: r.requestContract, warnings: [
     ...(prepared ? ['Configuration prepared; CubeSigner activation pending. Do not install cubesigner-signer until verify-activation passes.'] : []),
     ...(tests ? [] : ['Policy release records no test report (test evidence: not-provided); the policy Wasm, provenance and protocol context checks still apply.']),
   ]}

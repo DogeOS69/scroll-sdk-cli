@@ -52,6 +52,7 @@ import {isDogecoinMainnet} from '../../utils/mainnet-proof-posture.js'
 import { parseHelmUpgradeRecipes } from '../../utils/makefile-helm.js'
 import {reconcileMonitoringSlack} from '../../utils/monitoring-slack.js'
 import {reconcileMonitoringStatusPage} from '../../utils/monitoring-status-page.js'
+import {type OpeningBridgeCustodyEntry, ensureOpeningBridgeCustody} from '../../utils/opening-bridge-custody.js'
 import {readPreparedSequencerKms} from '../../utils/preparation-sequencer-kms.js'
 import {readOptionalProofAwsConfig} from '../../utils/proof-aws-config.js'
 import {resolveProofReceiptSelection} from '../../utils/proof-deployment-contract.js'
@@ -70,6 +71,7 @@ import {archiveRetiredGethValues} from '../../utils/retired-geth.js'
 import {archiveRetiredServiceFiles, stripRetiredServiceConfig} from '../../utils/retired-services.js'
 import { buildS3PublicBaseUrl, buildS3PublicPrefixUrl } from '../../utils/s3-archive.js'
 import {reconcileScrollMonitorAlerts, reconcileScrollMonitorAttestationSigner, reconcileScrollMonitorBalances, reconcileScrollMonitorCubesigner, reconcileScrollMonitorGrafana} from '../../utils/scroll-monitor-values.js'
+import {CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5, CUBESIGNER_REQUEST_CONTRACT_V3, cubesignerRequestContract, sequencerSeedKind, usesSequencingTwoOfTwo} from '../../utils/sequencing-two-of-two.js'
 import {validateServiceNetworkPolicy} from '../../utils/service-network-policy.js'
 import {
   getRequiredManagedSignerAddress,
@@ -89,6 +91,7 @@ import {
   isWithdrawalProofActivationEnv,
   mergeWithdrawalManagedDeploymentBlock,
   stripMigratedWithdrawalEnv,
+  withdrawalMigratesSequencerTwoOfTwo,
 } from '../../utils/withdrawal-config.js'
 import {reconcileWithdrawalSignerValues, withdrawalSequencerKms} from '../../utils/withdrawal-signers.js'
 import {
@@ -331,9 +334,11 @@ export function ensureCubesignerPolicyKeyBinding(productionYaml: any): PrepChart
   return [{key: `env.${name}`, newValue: JSON.stringify(valueFrom), oldValue}]
 }
 
-/** Replace retired CubeSigner request contracts without taking ownership
- * of other operator-reviewed production-policy evidence. */
-export function migrateCubesignerRequestContract(productionYaml: any): PrepChartChange[] {
+/** Select the CubeSigner request contract for where output 0 sits: v5 on the
+ * sequencing 2-of-2, v3 on a P2PKH sequencing output. Retired labels and the
+ * other production label are replaced; an unknown operator value is left
+ * untouched, as is other operator-reviewed production-policy evidence. */
+export function migrateCubesignerRequestContract(productionYaml: any, sequencingTwoOfTwo = false): PrepChartChange[] {
   const envVar = Array.isArray(productionYaml?.env)
     ? productionYaml.env.find((item: any) =>
         item?.name === 'DOGEOS_CUBESIGNER_SIGNER_PRODUCTION_POLICY_REQUEST_CONTRACT')
@@ -343,8 +348,9 @@ export function migrateCubesignerRequestContract(productionYaml: any): PrepChart
     'dogeos-cubesigner-psbt-no-metadata-sign-all-scripts-false-unprefixed-hex-v1',
     'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-v2',
   ])
-  const current = 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3'
-  if (!envVar || !retired.has(envVar.value)) return []
+  const current = cubesignerRequestContract(sequencingTwoOfTwo)
+  const replaceable = new Set([...retired, CUBESIGNER_REQUEST_CONTRACT_SEQUENCING_CONSENT_V5, CUBESIGNER_REQUEST_CONTRACT_V3])
+  if (!envVar || envVar.value === current || !replaceable.has(envVar.value)) return []
 
   const oldValue = envVar.value
   envVar.value = current
@@ -1350,11 +1356,15 @@ export default class SetupPrepCharts extends Command {
   private flags: any
   private jsonCtx!: JsonOutputContext
   private jsonMode: boolean = false
+  private migrateSequencerTwoOfTwo: boolean = false
   private nonInteractive: boolean = false
+  private openingBridgeCustody: OpeningBridgeCustodyEntry[] = []
   private outputTestData: Record<string, any> = {}
   // Resolve pinned governance inputs at the source: governance receipts remain excluded from staging.
   private policyInputRoot?: string
   private proofIntent?: ResolvedProofIntent
+  /** Output 0 pays the sequencing 2-of-2: a P2SH genesis seed, or a chain migrating off a P2PKH seed. */
+  private sequencingTwoOfTwo: boolean = false
   private skipL2ContractDeploymentBlock: boolean = false
   private withdrawalProcessorConfig: toml.JsonMap = {}
 
@@ -1858,6 +1868,21 @@ export default class SetupPrepCharts extends Command {
     this.jsonCtx.info(
       `Genesis sequencer transaction material: ${genesisTransaction.txid}:${genesisTransaction.vout} (validated)`,
     )
+    const seedKind = sequencerSeedKind(genesisTransaction.txHex, genesisTransaction.vout)
+    // The switch is sticky: a Withdrawal Processor configuration that already has it keeps the chain on the
+    // 2-of-2 even if doge-config.toml was regenerated from a spec without the declaration.
+    const nativeWithdrawalConfigPath = path.resolve(path.dirname(path.resolve(flags['values-dir'] ?? './values')), WITHDRAWAL_NATIVE_CONFIG_RELPATH)
+    this.migrateSequencerTwoOfTwo = this.dogeConfig.defaults?.migrateSequencerTwoOfTwo === true
+      || (fs.existsSync(nativeWithdrawalConfigPath) && withdrawalMigratesSequencerTwoOfTwo(fs.readFileSync(nativeWithdrawalConfigPath, 'utf8')))
+    this.sequencingTwoOfTwo = usesSequencingTwoOfTwo(seedKind, this.migrateSequencerTwoOfTwo)
+    if (this.sequencingTwoOfTwo) {
+      this.jsonCtx.info(`Sequencing output: 2-of-2 of the TEE and the proposer key (${seedKind === 'two-of-two' ? 'genesis seed' : 'migrating from the P2PKH genesis seed'})`)
+    } else {
+      this.jsonCtx.addWarning(
+        'The genesis sequencer seed does not pay the sequencing 2-of-2 and defaults.migrateSequencerTwoOfTwo is not set, so the Withdrawal Processor keeps a P2PKH sequencing output. '
+        + 'A CubeSigner policy that enforces the sequencing 2-of-2 refuses those transactions. A chain that has not built its opening WF yet can set the value in .data/doge-config.toml now; a live chain moves with the Core sequencing 2-of-2 runbook, which ends with that setting.',
+      )
+    }
 
     const withdrawalProcessorConfigContent = fs.readFileSync(withdrawalProcessorConfigPath, 'utf8');
     this.withdrawalProcessorConfig = toml.parse(withdrawalProcessorConfigContent);
@@ -1872,6 +1897,13 @@ export default class SetupPrepCharts extends Command {
     if (!this.bridgeConfig.redeem_script_hex) {
       this.error(`${bridgeConfigPath} missing redeem_script_hex. Run scrollsdk setup bridge-init --step 3-bridge-info first`);
     }
+
+    this.openingBridgeCustody = ensureOpeningBridgeCustody({
+      bridgeFundingReceiptPath: path.join(process.cwd(), '.data/production-bridge-funding.json'),
+      bridgeJsonPath: bridgeConfigPath,
+      withdrawalProcessorOutputPath: withdrawalProcessorConfigPath,
+    })
+    this.jsonCtx.info(`Opening Bridge custody: ${this.openingBridgeCustody.length} funding output(s) (validated)`)
 
     const outputTestDataPath = path.join(process.cwd(), ".data/output-test-data.json")
     if (!fs.existsSync(outputTestDataPath)) {
@@ -2963,7 +2995,9 @@ export default class SetupPrepCharts extends Command {
           l2MessageQueueAddress: this.getConfigValue('contractsFile.L2_MESSAGE_QUEUE_ADDR'),
           l2MessengerAddress: this.getConfigValue('contractsFile.L2_DOGEOS_MESSENGER_PROXY_ADDR'),
           l2RpcUrl: this.getConfigValue('general.L2_RPC_ENDPOINT'),
+          migrateSequencerTwoOfTwo: this.migrateSequencerTwoOfTwo,
           networkStr: this.withdrawalProcessorConfig.network_str,
+          openingBridgeCustody: this.openingBridgeCustody,
           productionVerifierKeyPolicy: this.dogeConfig.cubesigner?.mode === 'production_verifier_key_policy',
         })
 
@@ -3071,6 +3105,14 @@ export default class SetupPrepCharts extends Command {
 
         const policyResolution = resolveCubesignerPolicy({deploymentDir: this.policyInputRoot, keys: (this.dogeConfig.cubesigner?.roles ?? []).flatMap(role => role.keys.map(key => ({keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}))), network: this.dogeConfig.network, scope: 'preparation', selection: this.dogeConfig.cubesigner})
         for (const warning of policyResolution.warnings) this.jsonCtx.addWarning(warning)
+        // A v3 policy refuses the 2-of-2 consent fields and a v5 policy refuses a P2PKH output 0:
+        // either mismatch stops every WF at the signer, so stop here instead.
+        if (policyResolution.requestContract && policyResolution.requestContract !== cubesignerRequestContract(this.sequencingTwoOfTwo)) {
+          this.error(this.sequencingTwoOfTwo
+            ? 'The selected CubeSigner policy release uses the v3 request contract, but this chain pays output 0 to the sequencing 2-of-2. Build and attach a policy with the sequencing pins (CURRENT, OUTPUT0_TEE), and import its receipts with the sequencing-consent-v5 request contract.'
+            : 'The selected CubeSigner policy release uses the sequencing-consent-v5 request contract, but this chain still has a P2PKH sequencing output. Set defaults.migrateSequencerTwoOfTwo = true in .data/doge-config.toml (on a live chain, as the last step of the Core migration runbook), or select the v3 policy release.')
+        }
+
         const projection = cubesignerLiveEvidenceProjection(policyResolution)
         productionYaml.configMaps ||= {}
         productionYaml.persistence ||= {}
@@ -3093,7 +3135,7 @@ export default class SetupPrepCharts extends Command {
             buildCubesignerPrepEnv(this.dogeConfig, this.policyInputRoot),
           ),
           ...migrateCubesignerPolicySdkVersion(productionYaml),
-          ...migrateCubesignerRequestContract(productionYaml),
+          ...migrateCubesignerRequestContract(productionYaml, this.sequencingTwoOfTwo),
           ...ensureCubesignerPolicyKeyBinding(productionYaml),
           ...ensureConfigMapFileMount(
             productionYaml,

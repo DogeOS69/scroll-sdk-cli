@@ -215,6 +215,21 @@ function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }
 
+/**
+ * Whether a Withdrawal Processor TOML already carries
+ * `migrate_sequencer_two_of_two = true`. The switch is never removed once
+ * written, so the deployed configuration stays the authority even when
+ * doge-config.toml was regenerated without the declaration.
+ */
+export function withdrawalMigratesSequencerTwoOfTwo(source: string): boolean {
+  try {
+    return (toml.parse(source) as Record<string, unknown>).migrate_sequencer_two_of_two === true
+  } catch {
+    // An unparseable file is reported where it is merged.
+    return false
+  }
+}
+
 export interface WithdrawalDeploymentFactsInput {
   dogecoinIndexerStartHeight: number
   dogecoinRpcUrl: unknown
@@ -236,7 +251,11 @@ export interface WithdrawalDeploymentFactsInput {
   l2MessageQueueAddress: unknown
   l2MessengerAddress: unknown
   l2RpcUrl: unknown
+  /** The chain moves off a P2PKH genesis sequencer seed to the sequencing 2-of-2. */
+  migrateSequencerTwoOfTwo?: boolean
   networkStr: unknown
+  /** The opening WF's custody: validated `{tx_hex, vout}` Bridge funding outputs. */
+  openingBridgeCustody: Array<{tx_hex: string; vout: number}>
   productionVerifierKeyPolicy?: boolean
   tsoUrl?: unknown
 }
@@ -301,7 +320,12 @@ export function buildWithdrawalDeploymentFacts(input: WithdrawalDeploymentFactsI
       input.l2BootstrapNextStartingBlockHeight,
       'defaults.l2BootstrapNextStartingBlockHeight'
     ),
+    // Only ever set: once a chain is on the 2-of-2 the TEE policy refuses a P2PKH output 0.
+    ...(input.migrateSequencerTwoOfTwo ? {migrate_sequencer_two_of_two: true} : {}),
     network_str: nonEmpty(input.networkStr),
+    // Required with genesis_sequencer_tx_hex: the Withdrawal Processor refuses a genesis
+    // deployment whose opening WF has no funded custody.
+    opening_bridge_custody: input.openingBridgeCustody.map(entry => ({tx_hex: entry.tx_hex, vout: entry.vout})),
     tso_url: nonEmpty(input.tsoUrl) || 'http://tso-service:3000',
   } as unknown as toml.JsonMap
 

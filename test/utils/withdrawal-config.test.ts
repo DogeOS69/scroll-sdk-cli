@@ -8,6 +8,7 @@ import {
   ensureWithdrawalProofActivationSwitch,
   mergeWithdrawalManagedDeploymentBlock,
   stripMigratedWithdrawalEnv,
+  withdrawalMigratesSequencerTwoOfTwo,
 } from '../../src/utils/withdrawal-config.js'
 
 const FACTS_INPUT = {
@@ -31,6 +32,7 @@ const FACTS_INPUT = {
   l2MessengerAddress: '0xmessenger',
   l2RpcUrl: 'http://l2-rpc:8545',
   networkStr: 'testnet',
+  openingBridgeCustody: [{tx_hex: '0100', vout: 1}],
 }
 
 describe('withdrawal-config deployment block', () => {
@@ -41,6 +43,35 @@ describe('withdrawal-config deployment block', () => {
     expect(toml.parse(merged).proof_system).to.deep.equal({correctness_policy_transport: 'bridge_proof_ref_v1', mode: 'disabled'})
     expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).to.equal(merged)
     expect(buildWithdrawalDeploymentFacts(FACTS_INPUT).facts).not.to.have.property('proof_system')
+  })
+
+  it('renders the opening custody list at document root and keeps the merge stable', () => {
+    const source = 'network_str = "regtest"\n\n[transitions]\nadvance_l1 = true\n'
+    const {facts} = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    const merged = mergeWithdrawalManagedDeploymentBlock(source, facts)
+    const parsed: any = toml.parse(merged)
+    expect(parsed.opening_bridge_custody).to.deep.equal([{tx_hex: '0100', vout: 1}])
+    expect(parsed.transitions).to.deep.equal({advance_l1: true})
+    expect(mergeWithdrawalManagedDeploymentBlock(merged, facts)).to.equal(merged)
+    const replaced = buildWithdrawalDeploymentFacts({...FACTS_INPUT, openingBridgeCustody: [{tx_hex: '0200', vout: 0}]}).facts
+    expect((toml.parse(mergeWithdrawalManagedDeploymentBlock(merged, replaced)) as any).opening_bridge_custody).to.deep.equal([{tx_hex: '0200', vout: 0}])
+  })
+
+  it('sets the sequencing 2-of-2 migration switch only when declared and never removes it', () => {
+    expect(buildWithdrawalDeploymentFacts(FACTS_INPUT).facts).not.to.have.property('migrate_sequencer_two_of_two')
+    const {deletePaths, facts} = buildWithdrawalDeploymentFacts({...FACTS_INPUT, migrateSequencerTwoOfTwo: true})
+    expect(facts.migrate_sequencer_two_of_two).to.equal(true)
+    const merged = mergeWithdrawalManagedDeploymentBlock('', facts, {deletePaths})
+    expect((toml.parse(merged) as any).migrate_sequencer_two_of_two).to.equal(true)
+    // An operator who set the switch by hand keeps it across later runs.
+    const plain = buildWithdrawalDeploymentFacts(FACTS_INPUT)
+    const kept = mergeWithdrawalManagedDeploymentBlock(merged, plain.facts, {deletePaths: plain.deletePaths})
+    expect((toml.parse(kept) as any).migrate_sequencer_two_of_two).to.equal(true)
+    // The deployed configuration is read back, so the chain stays on the 2-of-2 without the doge-config declaration.
+    expect(withdrawalMigratesSequencerTwoOfTwo(kept)).to.equal(true)
+    expect(withdrawalMigratesSequencerTwoOfTwo(mergeWithdrawalManagedDeploymentBlock('', plain.facts))).to.equal(false)
+    expect(withdrawalMigratesSequencerTwoOfTwo('migrate_sequencer_two_of_two = "true"\n')).to.equal(false)
+    expect(withdrawalMigratesSequencerTwoOfTwo('not = [toml')).to.equal(false)
   })
 
   it('adopts proof settings outside an existing deployment block when enabling production policy', () => {

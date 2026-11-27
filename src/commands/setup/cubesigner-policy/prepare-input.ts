@@ -12,6 +12,8 @@ import {writeJson} from '../../../utils/preparation-io.js'
 import {readProofMaterials} from '../../../utils/proof-materials.js'
 import {normalizeSignerProofArtifactBaseUrl} from '../../../utils/proof-signer-policy-input.js'
 import {proofFileHash, proofRegularFile} from '../../../utils/proof-software-release.js'
+import {cubesignerRequestContract, sequencerSeedKind, usesSequencingTwoOfTwo} from '../../../utils/sequencing-two-of-two.js'
+import {WITHDRAWAL_NATIVE_CONFIG_RELPATH, withdrawalMigratesSequencerTwoOfTwo} from '../../../utils/withdrawal-config.js'
 
 export default class PrepareInput extends Command {
   static description = 'Derive the expected-policy input from actual artifacts; external reviewed identity digests and real test evidence are required, never synthesized'
@@ -56,6 +58,14 @@ export default class PrepareInput extends Command {
       const base = normalizeSignerProofArtifactBaseUrl(flags['resolver-base-url'])
       requirePolicy(new URL(base).protocol === 'https:', 'Production resolver must be HTTPS')
       const build = read(flags['build-receipt'])
+      // The policy and the gateway must use the contract of where output 0 sits: the sequencing 2-of-2 needs v5.
+      const manifest = toml.parse(fs.readFileSync(path.join(root, '.data/output-withdrawal-processor.toml'), 'utf8')) as any
+      const nativeWithdrawalConfig = path.join(root, WITHDRAWAL_NATIVE_CONFIG_RELPATH)
+      const requestContract = cubesignerRequestContract(usesSequencingTwoOfTwo(
+        sequencerSeedKind(String(manifest.genesis_sequencer_tx_hex), Number(manifest.genesis_sequencer_vout)),
+        config.defaults?.migrateSequencerTwoOfTwo === true
+          || (fs.existsSync(nativeWithdrawalConfig) && withdrawalMigratesSequencerTwoOfTwo(fs.readFileSync(nativeWithdrawalConfig, 'utf8'))),
+      ))
       const input = {aggregateVerifyingKey: ref(materials.software.artifacts.aggregateVerifyingKey.path), bridgeProgram: ref(materials.bridge.artifacts.appExe.path),
         buildReceipt: ref(flags['build-receipt']), environment: flags.environment,
         key: {keyId: key.key_id, materialId: key.material_id, roleId: role.role_id}, materials: ref(flags.materials),
@@ -63,7 +73,7 @@ export default class PrepareInput extends Command {
         release: {bindings: {aggregateVkIdentity: materials.bridge.identity.verificationKeyHash, bridgeKeyHash: bridgeHash(bridge.redeem_script_hex), bridgeProgramCommitment: materials.bridge.identity.programCommitmentHash, namespaceId: parsed.namespace,
             proofArtifactBaseUrl: base, teePublicKey: parsed.tee}, coreRevision: build.coreRevision, policyIdentifier: flags.policy, programIdentityDigest: flags['program-identity-digest'],
           proofResolverAuthority: new URL(base).origin, protocolContextSha256: ref('.data/protocol_context.json').sha256,
-          requestContract: 'dogeos-cubesigner-compact-psbt-bridge-proof-ref-v1-sign-all-scripts-false-unprefixed-hex-explain-v3', requiresLiveEvidence: flags['requires-live-evidence'],
+          requestContract, requiresLiveEvidence: flags['requires-live-evidence'],
           sdkVersion: '0.4.281', ...(flags.tests ? {tests: {...ref(flags.tests), result: read(flags.tests).result}} : {}),
           verifierIdentityDigest: flags['verifier-identity-digest'],
           verifierProvenance: {aggregateVerifyingKeySha256: ref(materials.software.artifacts.aggregateVerifyingKey.path).sha256, bridgeProgramSha256: ref(materials.bridge.artifacts.appExe.path).sha256},
